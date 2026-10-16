@@ -1,0 +1,253 @@
+package webui
+
+import (
+	"errors"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+
+	"podsync"
+)
+
+func intField(r *http.Request, name string, dst *int, errs *[]error) {
+	n, err := strconv.Atoi(strings.TrimSpace(r.FormValue(name)))
+	if err != nil {
+		*errs = append(*errs, errors.New(name+" must be a whole number"))
+		return
+	}
+	*dst = n
+}
+
+// applySettingsForm copies the settings form into s. Parse problems are
+// returned; value validation happens in the sync service.
+func applySettingsForm(s *podsync.Settings, r *http.Request) error {
+	var errs []error
+	_ = r.ParseForm()
+	s.Server.ListenAddr = r.FormValue("listen_addr")
+	s.Server.BaseURL = r.FormValue("base_url")
+	s.Server.DataDir = r.FormValue("data_dir")
+	s.Download.YtDlpPath = r.FormValue("yt_dlp_path")
+	s.Download.CookiesFile = r.FormValue("cookies_file")
+	s.Download.SelfUpdate = r.FormValue("self_update") == "on"
+	intField(r, "concurrency", &s.Download.Concurrency, &errs)
+	d, err := time.ParseDuration(strings.TrimSpace(r.FormValue("update_interval")))
+	if err != nil {
+		errs = append(errs, errors.New("update_interval must look like 30m or 2h"))
+	} else {
+		s.Download.UpdateInterval = podsync.Duration(d)
+	}
+	s.Defaults.Format = r.FormValue("format")
+	s.Defaults.ExcludeShorts = r.FormValue("exclude_shorts") == "on"
+	s.Defaults.TitleInclude = r.FormValue("title_include")
+	s.Defaults.TitleExclude = r.FormValue("title_exclude")
+	intField(r, "max_resolution", &s.Defaults.MaxResolution, &errs)
+	intField(r, "cleanup_after_days", &s.Defaults.CleanupAfterDays, &errs)
+	intField(r, "cleanup_keep_last", &s.Defaults.CleanupKeepLast, &errs)
+	intField(r, "page_size", &s.Defaults.PageSize, &errs)
+	return errors.Join(errs...)
+}
+
+func (s *Server) renderSettings(w http.ResponseWriter, r *http.Request, cur podsync.Settings, flash, errText string) {
+	s.render(w, r, "settings", map[string]any{"Title": "Settings", "Cfg": cur, "ConfigPath": cur.ConfigPath, "Flash": flash, "Err": errText})
+}
+
+func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
+	cur, err := s.api.Settings(r.Context())
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	s.renderSettings(w, r, cur, "", "")
+}
+
+func (s *Server) handleSettingsSave(w http.ResponseWriter, r *http.Request) {
+	cur, err := s.api.Settings(r.Context())
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	attempt := cur
+	parseErr := applySettingsForm(&attempt, r)
+	if parseErr != nil {
+		s.renderSettings(w, r, attempt, "", parseErr.Error())
+		return
+	}
+	res, err := s.api.UpdateSettings(r.Context(), attempt)
+	if err != nil {
+		if r.Context().Err() != nil {
+			return
+		}
+		s.renderSettings(w, r, attempt, "", err.Error())
+		return
+	}
+	flash := "Saved. Changes are applied."
+	if res.RestartRequired {
+		flash = "Saved. The listen address and data directory only take effect after a restart."
+	}
+	s.renderSettings(w, r, res.Settings, flash, "")
+}
+
+// ---- per-feed overrides ----
+
+type feedSettingsView struct {
+	ID, Name, Kind   string
+	Format           string
+	MaxResolution    string
+	ExcludeShorts    string // "", "yes", "no"
+	TitleInclude     string
+	TitleExclude     string
+	CleanupAfterDays string
+	CleanupKeepLast  string
+	PageSize         string
+	Defaults         podsync.Options
+}
+
+func itoa(p *int) string {
+	if p == nil {
+		return ""
+	}
+	return strconv.Itoa(*p)
+}
+
+func sval(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
+}
+
+func feedSettingsFrom(id, kind string, fs podsync.FeedSettings, d podsync.Options) feedSettingsView {
+	v := feedSettingsView{
+		ID: id, Name: fs.Name, Kind: kind, Format: sval(fs.Format), MaxResolution: itoa(fs.MaxResolution),
+		TitleInclude: sval(fs.TitleInclude), TitleExclude: sval(fs.TitleExclude),
+		CleanupAfterDays: itoa(fs.CleanupAfterDays), CleanupKeepLast: itoa(fs.CleanupKeepLast), PageSize: itoa(fs.PageSize),
+		Defaults: d,
+	}
+	if fs.ExcludeShorts != nil {
+		v.ExcludeShorts = "no"
+		if *fs.ExcludeShorts {
+			v.ExcludeShorts = "yes"
+		}
+	}
+	return v
+}
+
+func settingsFromFeed(f podsync.Feed) podsync.FeedSettings {
+	return podsync.FeedSettings{
+		Name: f.Name, Format: f.Format, MaxResolution: f.MaxResolution, ExcludeShorts: f.ExcludeShorts,
+		TitleInclude: f.TitleInclude, TitleExclude: f.TitleExclude, CleanupAfterDays: f.CleanupAfterDays,
+		CleanupKeepLast: f.CleanupKeepLast, PageSize: f.PageSize,
+	}
+}
+
+func optString(r *http.Request, name string) *string {
+	v := strings.TrimSpace(r.FormValue(name))
+	if v == "" {
+		return nil
+	}
+	return &v
+}
+
+func optInt(r *http.Request, name string, errs *[]error) *int {
+	v := strings.TrimSpace(r.FormValue(name))
+	if v == "" {
+		return nil
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		*errs = append(*errs, errors.New(name+" must be a whole number"))
+		return nil
+	}
+	return &n
+}
+
+func feedSettingsFromForm(r *http.Request, current string) (podsync.FeedSettings, error) {
+	var errs []error
+	_ = r.ParseForm()
+	fs := podsync.FeedSettings{Name: current}
+	if n := strings.TrimSpace(r.FormValue("name")); n != "" {
+		fs.Name = n
+	}
+	fs.Format = optString(r, "format")
+	fs.MaxResolution = optInt(r, "max_resolution", &errs)
+	switch r.FormValue("exclude_shorts") {
+	case "yes":
+		t := true
+		fs.ExcludeShorts = &t
+	case "no":
+		f := false
+		fs.ExcludeShorts = &f
+	}
+	fs.TitleInclude = optString(r, "title_include")
+	fs.TitleExclude = optString(r, "title_exclude")
+	fs.CleanupAfterDays = optInt(r, "cleanup_after_days", &errs)
+	fs.CleanupKeepLast = optInt(r, "cleanup_keep_last", &errs)
+	fs.PageSize = optInt(r, "page_size", &errs)
+	return fs, errors.Join(errs...)
+}
+
+func (s *Server) renderFeedSettings(w http.ResponseWriter, r *http.Request, d podsync.FeedDetail, fs podsync.FeedSettings, flash, errText string) {
+	s.render(w, r, "feed_settings", map[string]any{
+		"Title": d.Name + " settings", "F": feedSettingsFrom(d.ID, d.Kind, fs, d.Defaults), "Flash": flash, "Err": errText,
+	})
+}
+
+func (s *Server) handleFeedSettings(w http.ResponseWriter, r *http.Request) {
+	d, err := s.api.Feed(r.Context(), r.PathValue("id"))
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	s.renderFeedSettings(w, r, d, settingsFromFeed(d.Overrides), "", "")
+}
+
+func (s *Server) handleFeedSettingsSave(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	d, err := s.api.Feed(r.Context(), id)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	fs, parseErr := feedSettingsFromForm(r, d.Name)
+	if parseErr != nil {
+		s.renderFeedSettings(w, r, d, fs, "", parseErr.Error())
+		return
+	}
+	updated, err := s.api.UpdateFeed(r.Context(), id, fs)
+	if err != nil {
+		if r.Context().Err() != nil {
+			return
+		}
+		s.renderFeedSettings(w, r, d, fs, "", err.Error())
+		return
+	}
+	s.renderFeedSettings(w, r, updated, settingsFromFeed(updated.Overrides), "Saved. Changes apply to the next update.", "")
+}
+
+// ---- deleting ----
+
+func (s *Server) handleDeleteConfirm(w http.ResponseWriter, r *http.Request) {
+	d, err := s.api.Feed(r.Context(), r.PathValue("id"))
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	s.render(w, r, "delete", map[string]any{"Title": "Delete " + d.Name, "Card": d.FeedSummary})
+}
+
+func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
+	if err := s.api.DeleteFeed(r.Context(), r.PathValue("id"), r.FormValue("delete_files") == "on"); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	redirect(w, r, "/")
+}
+
+func (s *Server) handleOrphanDelete(w http.ResponseWriter, r *http.Request) {
+	if err := s.api.DeleteOrphan(r.Context(), r.PathValue("id")); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	redirect(w, r, "/")
+}

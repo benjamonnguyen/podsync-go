@@ -1,4 +1,4 @@
-module podsync-go
+module podsync
 
 go 1.27.0
 
