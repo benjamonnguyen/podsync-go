@@ -5,11 +5,11 @@
 <form method="post" action="/settings" class="settings">
   <fieldset>
     <legend>Server</legend>
-    <label>Public address of this server
+    <label>Public address of the sync service
       <input type="text" name="base_url" value="{{.Cfg.Server.BaseURL}}" required>
-      <small>Used in podcast feed links; this is the address of this web interface, and podcast apps must be able to reach it (e.g. http://192.168.1.10:8080).</small></label>
-    <p class="muted">Sync service listen address: <code>{{.Cfg.Server.ListenAddr}}</code> · data directory: <code>{{.Cfg.Server.DataDir}}</code><br>
-      Both programs (sync service and web UI) share these, so they are changed in <code>config.toml</code> followed by a restart of both.</p>
+      <small>Where podcast apps fetch your feeds and media (the sync service's public port), used in the feed links shown here, e.g. http://192.168.1.10:8080. This web interface is for managing the library and is not meant to be published.</small></label>
+    <p class="muted">The sync service publishes feeds and media on <code>{{.Cfg.Server.ListenAddr}}</code> and keeps its control API private on <code>{{.Cfg.Server.APIAddr}}</code>; its data directory is <code>{{.Cfg.Server.DataDir}}</code>.<br>
+      Both programs depend on these, so they are changed in <code>config.toml</code> followed by a restart of both.</p>
   </fieldset>
   <fieldset>
     <legend>Downloading</legend>

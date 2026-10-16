@@ -1,9 +1,4 @@
-// Package webui serves the htmx-driven web interface and the public podcast
-// feeds and media files. It shares the config file and data directory with the
-// sync service (cmd/syncr): it reads and writes those directly and talks to the
-// sync service, through podsync.Syncer, only for what needs the running
-// service (applying changes, pulls, live status, source lookups).
-package webui
+package main
 
 import (
 	"embed"
@@ -12,6 +7,7 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -23,8 +19,8 @@ import (
 //go:embed templates/*.html static/*
 var assets embed.FS
 
-// Options are the web UI's dependencies, wired together by cmd/webui.
-type Options struct {
+// options are the web UI's dependencies, wired together in main.
+type options struct {
 	Config  podsync.ConfigStore // the config file shared with the sync service
 	Library podsync.Library     // the data directory shared with the sync service
 	Syncer  podsync.Syncer      // client of the sync service's control API
@@ -54,7 +50,7 @@ const previewTTL = 15 * time.Minute
 
 var pageNames = []string{"library", "feed", "add", "settings", "feed_settings", "delete"}
 
-func New(o Options) (*Server, error) {
+func newServer(o options) (*Server, error) {
 	s := &Server{
 		cfg: o.Config, lib: o.Library, sync: o.Syncer, now: time.Now,
 		previews: map[string]preview{}, dismissed: map[string]time.Time{},
@@ -118,10 +114,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /status", s.handleStatus)
 	mux.HandleFunc("POST /status/dismiss", s.handleDismiss)
 
-	mux.HandleFunc("GET /feeds/{file}", s.handleRSS)
-	mux.HandleFunc("GET /media/{id}/{file}", s.handleMedia)
-
-	return secure(s.refresh(mux))
+	return s.secure(s.refresh(mux))
 }
 
 // refresh picks up what the sync service (and hand edits) changed in the
@@ -142,17 +135,33 @@ func (s *Server) refresh(next http.Handler) http.Handler {
 	})
 }
 
-// secure adds security headers and the cross-site write guard.
-func secure(next http.Handler) http.Handler {
+// secure adds security headers and the cross-site write guard. Thumbnails and
+// media are loaded from syncr's public address (server.base_url), so that
+// origin is allowed for images and media.
+func (s *Server) secure(next http.Handler) http.Handler {
 	guarded := rest.CrossSiteGuard(next)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("X-Frame-Options", "DENY")
 		h.Set("Referrer-Policy", "same-origin")
-		h.Set("Content-Security-Policy", "default-src 'self'; img-src 'self' https: data:; media-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
+		origin := s.mediaOrigin()
+		h.Set("Content-Security-Policy", "default-src 'self'; img-src 'self' https: data: "+origin+"; media-src 'self' "+origin+"; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
 		guarded.ServeHTTP(w, r)
 	})
+}
+
+// mediaBase is the public address of syncr, where feeds, media and
+// thumbnails are served.
+func (s *Server) mediaBase() string { return s.cfg.Get().Server.BaseURL }
+
+// mediaOrigin is mediaBase reduced to scheme://host[:port] for the CSP.
+func (s *Server) mediaOrigin() string {
+	u, err := url.Parse(s.mediaBase())
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return ""
+	}
+	return u.Scheme + "://" + u.Host
 }
 
 func cacheFor(next http.Handler, d time.Duration) http.Handler {

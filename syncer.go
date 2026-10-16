@@ -40,7 +40,7 @@ type ApplyResult struct {
 	// Changed is true when the configuration on disk differed from what was running.
 	Changed bool `json:"changed"`
 	// RestartRequired is true when a changed value only takes effect after a
-	// restart of the sync service (its listen address or data directory).
+	// restart of the sync service (its listen/API address or data directory).
 	RestartRequired bool `json:"restart_required"`
 }
 

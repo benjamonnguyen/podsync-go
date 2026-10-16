@@ -37,9 +37,14 @@ func (d *Duration) UnmarshalText(b []byte) error {
 	return nil
 }
 
+// Server holds the sync service's addresses. ListenAddr is the public side:
+// the podcast feeds and media files podcast apps fetch. APIAddr is the private
+// control API used by the web UI. They are separate listeners on purpose, so
+// publishing the feeds never exposes the (unauthenticated) control API.
 type Server struct {
 	ListenAddr string `toml:"listen_addr" json:"listen_addr"`
-	BaseURL    string `toml:"base_url" json:"base_url"`
+	APIAddr    string `toml:"api_addr" json:"api_addr"`
+	BaseURL    string `toml:"base_url" json:"base_url"` // public address of ListenAddr, as podcast apps and browsers reach it
 	DataDir    string `toml:"data_dir" json:"data_dir"`
 }
 
@@ -102,7 +107,7 @@ var idPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 // Default returns the configuration used when no file exists.
 func Default() Config {
 	return Config{
-		Server: Server{ListenAddr: ":8081", BaseURL: "http://localhost:8080", DataDir: "./data"},
+		Server: Server{ListenAddr: ":8080", APIAddr: "127.0.0.1:8081", BaseURL: "http://localhost:8080", DataDir: "./data"},
 		Download: Download{
 			YtDlpPath:      "yt-dlp",
 			Concurrency:    2,
@@ -193,6 +198,7 @@ func (o Options) validate(where string) error {
 // Normalize fills derived defaults and trims whitespace. It runs before Validate.
 func (c *Config) Normalize() {
 	c.Server.ListenAddr = strings.TrimSpace(c.Server.ListenAddr)
+	c.Server.APIAddr = strings.TrimSpace(c.Server.APIAddr)
 	c.Server.BaseURL = strings.TrimRight(strings.TrimSpace(c.Server.BaseURL), "/")
 	c.Server.DataDir = strings.TrimSpace(c.Server.DataDir)
 	c.Download.YtDlpPath = strings.TrimSpace(c.Download.YtDlpPath)
@@ -217,6 +223,11 @@ func (c Config) Validate() error {
 	var errs []error
 	if c.Server.ListenAddr == "" {
 		errs = append(errs, errors.New("server.listen_addr is required"))
+	}
+	if c.Server.APIAddr == "" {
+		errs = append(errs, errors.New("server.api_addr is required"))
+	} else if c.Server.APIAddr == c.Server.ListenAddr {
+		errs = append(errs, errors.New("server.api_addr must differ from server.listen_addr: the control API must not share the public port"))
 	}
 	if u, err := url.Parse(c.Server.BaseURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		errs = append(errs, errors.New("server.base_url must be an absolute http(s) URL, e.g. http://192.168.1.10:8080"))

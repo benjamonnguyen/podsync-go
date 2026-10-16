@@ -1,4 +1,4 @@
-package webui_test
+package main
 
 import (
 	"context"
@@ -21,7 +21,6 @@ import (
 	"podsync/status"
 	"podsync/syncer"
 	"podsync/toml"
-	"podsync/webui"
 )
 
 // harness models the real deployment: the sync service and the web UI are
@@ -94,7 +93,7 @@ func newHarness(t *testing.T) *harness {
 	api := httptest.NewServer(rest.NewServer(svc).Handler())
 	t.Cleanup(api.Close)
 	client := rest.NewClient(api.URL, nil)
-	ui, err := webui.New(webui.Options{Config: cfg, Library: lib, Syncer: client})
+	ui, err := newServer(options{Config: cfg, Library: lib, Syncer: client})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +186,7 @@ func TestCrossSiteWritesAreBlocked(t *testing.T) {
 	h.mustContain(h.do("POST", "/status/dismiss", url.Values{"key": {"x"}}, "Origin", "http://example.com", "Sec-Fetch-Site", "same-origin"), 200)
 }
 
-func TestPullFeedThenBrowseEpisodesRSSAndMedia(t *testing.T) {
+func TestPullFeedThenBrowseEpisodes(t *testing.T) {
 	h := newHarness(t)
 	h.mustContain(h.do("POST", "/feed/UCone/pull", nil), 200)
 	h.waitIdle()
@@ -202,36 +201,21 @@ func TestPullFeedThenBrowseEpisodesRSSAndMedia(t *testing.T) {
 		t.Fatalf("empty filter: %s", body)
 	}
 
-	rss := h.get("/feeds/UCone.xml")
-	h.mustContain(rss, 200, "<enclosure url=\"http://pod.example:8080/media/UCone/vid0000000.mp4\"", `type="video/mp4"`)
-	if ct := rss.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/rss+xml") {
-		t.Fatalf("content type %q", ct)
-	}
-	media := h.get("/media/UCone/vid0000000.mp4")
-	h.mustContain(media, 200, "0123456789")
-	rng := h.do("GET", "/media/UCone/vid0000000.mp4", nil, "Range", "bytes=2-4")
-	h.mustContain(rng, 206, "234")
-
-	for _, bad := range []string{"/media/UCone/_meta.json", "/media/UCone/vid0000000.json", "/media/UCone/..%2F..%2Fetc%2Fpasswd", "/media/UCnope/vid0000000.mp4", "/feeds/UCnope.xml", "/feeds/UCone"} {
-		if rec := h.get(bad); rec.Code != 404 {
-			t.Errorf("%s -> %d, want 404", bad, rec.Code)
-		}
-	}
+	// Media and thumbnails live on syncr's public address; the UI links to them there.
+	h.mustContain(rec, 200, `href="http://pod.example:8080/media/UCone/vid0000000.mp4"`, `src="http://pod.example:8080/media/UCone/vid0000000.jpg"`)
 
 	h.mustContain(h.get("/search?q=0000002"), 200, "Title vid0000002", "Episodes matching")
 	h.mustContain(h.get("/search?q=channel+one"), 200, "Channel One")
 	h.mustContain(h.get("/search?q="), 200, "Channel One")
 }
 
-func TestThumbnailsAndMetadataInUIAndMedia(t *testing.T) {
+func TestThumbnailsAndMetadataInUI(t *testing.T) {
 	h := newHarness(t)
 	h.svc.PullFeed("UCone")
 	page := h.get("/feed/UCone")
 	h.mustContain(page, 200,
-		`<img class="thumb" src="/media/UCone/vid0000000.jpg"`, "1.2M views", "480p", "<summary>Details</summary>",
+		`<img class="thumb" src="http://pod.example:8080/media/UCone/vid0000000.jpg"`, "1.2M views", "480p", "<summary>Details</summary>",
 		"Line one\nLine &lt;two&gt;", `href="https://youtu.be/vid0000000"`)
-	h.mustContain(h.get("/media/UCone/vid0000000.jpg"), 200, "JPEGDATA")
-	h.mustContain(h.get("/feeds/UCone.xml"), 200, `<itunes:image href="http://pod.example:8080/media/UCone/vid0000000.jpg">`)
 
 	// Thumbnails survive cleanup; the media does not.
 	h.cfg.Update(func(c *podsync.Config) error { c.Defaults.CleanupKeepLast = 1; return nil })
@@ -239,15 +223,10 @@ func TestThumbnailsAndMetadataInUIAndMedia(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.svc.Cleanup("UCone")
-	h.mustContain(h.get("/media/UCone/vid0000002.jpg"), 200, "JPEGDATA")
-	h.mustContain(h.get("/media/UCone/vid0000002.mp4"), 404)
 	cleaned := h.get("/feed/UCone").Body.String()
-	if !strings.Contains(cleaned, `src="/media/UCone/vid0000002.jpg"`) || !strings.Contains(cleaned, "removed by cleanup") {
+	if !strings.Contains(cleaned, `src="http://pod.example:8080/media/UCone/vid0000002.jpg"`) || !strings.Contains(cleaned, "removed by cleanup") {
 		t.Fatalf("cleaned row should keep its thumbnail:\n%s", cleaned)
 	}
-	// Only known thumbnails are served.
-	h.mustContain(h.get("/media/UCone/unknown.jpg"), 404)
-
 	// Load More rows show the remote thumbnail, views and channel metadata; downloading keeps the hint.
 	older := h.get("/feed/UCone/older?offset=3")
 	h.mustContain(older, 200, `src="https://i.ytimg.com/vi/vid0000003/hq.jpg"`, "2.5K views")
@@ -285,7 +264,7 @@ func TestLoadMoreShowsFadedRowsAndDownloadWorks(t *testing.T) {
 	h.mustContain(dl, 200, "Video 4", "faded", "downloading")
 	h.releaseDownloads(gate)
 	row := h.get("/feed/UCone/episodes/vid0000004/row?title=Video+4")
-	h.mustContain(row, 200, "Title vid0000004", `href="/media/UCone/vid0000004.mp4"`, "kept")
+	h.mustContain(row, 200, "Title vid0000004", `href="http://pod.example:8080/media/UCone/vid0000004.mp4"`, "kept")
 	if strings.Contains(row.Body.String(), "faded") {
 		t.Fatal("downloaded row should not be faded")
 	}
@@ -417,7 +396,7 @@ func TestSettingsSaveValidationAndRestartNotice(t *testing.T) {
 	}
 	// The listen address and data directory are shown but not editable.
 	page := h.get("/settings").Body.String()
-	if !strings.Contains(page, "<code>:8081</code>") || strings.Contains(page, `name="listen_addr"`) || strings.Contains(page, `name="data_dir"`) {
+	if !strings.Contains(page, "<code>:8080</code>") || !strings.Contains(page, "<code>127.0.0.1:8081</code>") || strings.Contains(page, `name="listen_addr"`) || strings.Contains(page, `name="data_dir"`) {
 		t.Fatalf("listen address and data directory must be read-only:\n%s", page)
 	}
 }
@@ -425,7 +404,7 @@ func TestSettingsSaveValidationAndRestartNotice(t *testing.T) {
 func TestSettingsSavedEvenWhenSyncServiceIsDown(t *testing.T) {
 	h := newHarness(t)
 	dead := rest.NewClient("http://127.0.0.1:1", nil)
-	ui, err := webui.New(webui.Options{Config: h.cfg, Library: h.lib, Syncer: dead})
+	ui, err := newServer(options{Config: h.cfg, Library: h.lib, Syncer: dead})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -465,9 +444,6 @@ func TestDeleteFeedKeepsOrDeletesFiles(t *testing.T) {
 	if _, ok := h.cfg.Get().Feed("UCone"); ok {
 		t.Fatal("feed still configured")
 	}
-	if h.get("/feeds/UCone.xml").Code != 404 {
-		t.Fatal("rss should be gone")
-	}
 	// Files remain and show as orphaned.
 	h.mustContain(h.get("/"), 200, "Not in config", "Delete files")
 	dir, _ := h.syncrLib.FeedDir("UCone")
@@ -502,7 +478,7 @@ func TestSyncServiceOutageIsVisibleButBrowsingStillWorks(t *testing.T) {
 	h := newHarness(t)
 	h.svc.PullFeed("UCone")
 	dead := rest.NewClient("http://127.0.0.1:1", nil)
-	ui, err := webui.New(webui.Options{Config: h.cfg, Library: h.lib, Syncer: dead})
+	ui, err := newServer(options{Config: h.cfg, Library: h.lib, Syncer: dead})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -510,8 +486,6 @@ func TestSyncServiceOutageIsVisibleButBrowsingStillWorks(t *testing.T) {
 	// The library and feeds come from the shared files, so they keep working...
 	d.mustContain(d.get("/"), 200, "Channel One", "Cannot reach the sync service")
 	d.mustContain(d.get("/feed/UCone"), 200, "Title vid0000000")
-	d.mustContain(d.get("/feeds/UCone.xml"), 200, "<enclosure")
-	d.mustContain(d.get("/media/UCone/vid0000000.mp4"), 200, "0123456789")
 	// ...the banner explains why nothing new arrives, and cannot be dismissed...
 	rec := d.get("/status")
 	d.mustContain(rec, 200, `class="banner error"`, "Cannot reach the sync service")
@@ -524,20 +498,33 @@ func TestSyncServiceOutageIsVisibleButBrowsingStillWorks(t *testing.T) {
 	d.mustContain(d.do("POST", "/add/preview", url.Values{"ref": {"@x"}}), 200, "unreachable")
 }
 
-func TestPublicFeedAndMediaAreServedByTheWebUIItself(t *testing.T) {
+// The web UI is for managing the library; syncr publishes the feeds and media.
+func TestWebUIDoesNotPublishFeedsOrMedia(t *testing.T) {
 	h := newHarness(t)
 	h.svc.PullFeed("UCone")
-	rec := h.get("/feeds/UCone.xml")
-	h.mustContain(rec, 200, "<enclosure", "Channel One", `<itunes:image href="http://pod.example:8080/media/UCone/vid0000000.jpg">`)
-	if !strings.HasPrefix(rec.Header().Get("Content-Type"), "application/rss+xml") {
-		t.Fatalf("%v", rec.Header())
-	}
-	h.mustContain(h.do("GET", "/media/UCone/vid0000000.mp4", nil, "Range", "bytes=2-4"), 206, "234")
-	// The sync service's API is not part of the web UI.
-	for _, p := range []string{"/api/v1/status", "/api/v1/apply"} {
-		if h.get(p).Code != 404 {
-			t.Errorf("%s must not be reachable through the web UI", p)
+	for _, p := range []string{"/feeds/UCone.xml", "/media/UCone/vid0000000.mp4", "/media/UCone/vid0000000.jpg", "/api/v1/status", "/api/v1/apply"} {
+		if rec := h.get(p); rec.Code != 404 {
+			t.Errorf("%s must not be served by the web UI, got %d", p, rec.Code)
 		}
+	}
+	// What it shows points at syncr's public address (server.base_url), and the CSP allows loading from there.
+	rec := h.get("/feed/UCone")
+	h.mustContain(rec, 200, `value="http://pod.example:8080/feeds/UCone.xml"`)
+	csp := rec.Header().Get("Content-Security-Policy")
+	if !strings.Contains(csp, "img-src 'self' https: data: http://pod.example:8080") || !strings.Contains(csp, "media-src 'self' http://pod.example:8080") {
+		t.Fatalf("CSP must allow images and media from syncr's public address: %s", csp)
+	}
+	// Changing the public address in Settings moves the links and the CSP with it.
+	c := h.cfg.Get()
+	rec2 := h.do("POST", "/settings", url.Values{
+		"base_url": {"http://towhee:8080"}, "yt_dlp_path": {c.Download.YtDlpPath}, "concurrency": {"2"}, "update_interval": {"30m"},
+		"format": {"video"}, "max_resolution": {"1080"}, "exclude_shorts": {"on"}, "page_size": {"3"}, "cleanup_keep_last": {"0"}, "cleanup_after_days": {"0"},
+	})
+	h.mustContain(rec2, 200, "Saved")
+	page := h.get("/feed/UCone")
+	h.mustContain(page, 200, `src="http://towhee:8080/media/UCone/vid0000000.jpg"`, `value="http://towhee:8080/feeds/UCone.xml"`)
+	if !strings.Contains(page.Header().Get("Content-Security-Policy"), "http://towhee:8080") {
+		t.Fatal("CSP should follow the public address")
 	}
 }
 

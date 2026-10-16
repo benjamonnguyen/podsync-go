@@ -1,4 +1,4 @@
-package webui
+package main
 
 import (
 	"context"
@@ -16,23 +16,29 @@ func isKind(err error, target error) bool { return errors.Is(err, target) }
 // context the template needs.
 type rowView struct {
 	EpisodeView
+	base             string // syncr's public address, where media and thumbnails live
 	FeedID, FeedName string
 	ShowFeed         bool // show the feed name (cross-feed search results)
 	ShowChannel      bool // show the uploader (playlists mix channels)
 }
 
-// Thumb is the local thumbnail when the episode has one, else the remote URL.
+// Thumb is the local thumbnail (served by syncr) when the episode has one,
+// else the remote URL.
 func (r rowView) Thumb() string {
 	if r.ThumbFile != "" {
-		return "/media/" + r.FeedID + "/" + r.ThumbFile
+		return r.base + "/media/" + r.FeedID + "/" + r.ThumbFile
 	}
 	return r.Thumbnail
 }
 
-func makeRows(feedID, feedName string, playlist bool, views []EpisodeView) []rowView {
+// MediaURL is where the downloaded media file is served (by syncr).
+func (r rowView) MediaURL() string { return r.base + "/media/" + r.FeedID + "/" + r.File }
+
+func (s *Server) makeRows(feedID, feedName string, playlist bool, views []EpisodeView) []rowView {
+	base := s.mediaBase()
 	rows := make([]rowView, 0, len(views))
 	for _, v := range views {
-		rows = append(rows, rowView{EpisodeView: v, FeedID: feedID, FeedName: feedName, ShowChannel: playlist})
+		rows = append(rows, rowView{EpisodeView: v, base: base, FeedID: feedID, FeedName: feedName, ShowChannel: playlist})
 	}
 	return rows
 }
@@ -74,7 +80,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	hits := s.SearchLibrary(r.Context(), q)
 	rows := make([]rowView, 0, len(hits.Episodes))
 	for _, h := range hits.Episodes {
-		rows = append(rows, rowView{EpisodeView: h.EpisodeView, FeedID: h.FeedID, FeedName: h.FeedName, ShowFeed: true})
+		rows = append(rows, rowView{EpisodeView: h.EpisodeView, base: s.mediaBase(), FeedID: h.FeedID, FeedName: h.FeedName, ShowFeed: true})
 	}
 	s.fragment(w, "search_results", map[string]any{"Q": q, "Feeds": hits.Feeds, "Rows": rows, "Truncated": hits.Truncated})
 }
@@ -95,7 +101,7 @@ func (s *Server) handleFeed(w http.ResponseWriter, r *http.Request) {
 	}
 	s.render(w, r, "feed", map[string]any{
 		"Title": detail.Name, "Card": detail.FeedSummary, "Stats": map[string]any{"Card": detail.FeedSummary, "Format": detail.Effective.Format},
-		"Rows":     makeRows(id, detail.Name, detail.Kind == podsync.FeedPlaylist, views),
+		"Rows":     s.makeRows(id, detail.Name, detail.Kind == podsync.FeedPlaylist, views),
 		"PageSize": detail.Effective.PageSize, "Offset": detail.Effective.PageSize, "Format": detail.Effective.Format, "FeedID": id, "Q": "",
 	})
 }
@@ -122,7 +128,7 @@ func (s *Server) handleEpisodes(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	s.fragment(w, "episode_list", map[string]any{"FeedID": id, "Rows": makeRows(id, detail.Name, detail.Kind == podsync.FeedPlaylist, views), "Q": q})
+	s.fragment(w, "episode_list", map[string]any{"FeedID": id, "Rows": s.makeRows(id, detail.Name, detail.Kind == podsync.FeedPlaylist, views), "Q": q})
 }
 
 func (s *Server) handleOlder(w http.ResponseWriter, r *http.Request) {
@@ -144,7 +150,7 @@ func (s *Server) handleOlder(w http.ResponseWriter, r *http.Request) {
 		s.fragment(w, "older", map[string]any{"FeedID": id, "Err": err.Error(), "More": true, "NextOffset": offset})
 		return
 	}
-	rows := makeRows(id, detail.Name, detail.Kind == podsync.FeedPlaylist, page.Episodes)
+	rows := s.makeRows(id, detail.Name, detail.Kind == podsync.FeedPlaylist, page.Episodes)
 	s.fragment(w, "older", map[string]any{
 		"FeedID": id, "Rows": rows, "More": page.More, "NextOffset": page.NextOffset, "Empty": len(rows) == 0 && !page.More,
 	})
@@ -180,7 +186,7 @@ func (s *Server) renderRow(w http.ResponseWriter, r *http.Request, detail FeedDe
 		s.fail(w, r, err)
 		return
 	}
-	s.fragment(w, "episode_row", rowView{EpisodeView: v, FeedID: detail.ID, FeedName: detail.Name, ShowChannel: detail.Kind == podsync.FeedPlaylist})
+	s.fragment(w, "episode_row", rowView{EpisodeView: v, base: s.mediaBase(), FeedID: detail.ID, FeedName: detail.Name, ShowChannel: detail.Kind == podsync.FeedPlaylist})
 }
 
 // ---- pulling & status ----

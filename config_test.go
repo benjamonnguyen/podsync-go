@@ -41,6 +41,8 @@ func TestValidateRejectsBadValues(t *testing.T) {
 		"feed bad kind": func(c *Config) { c.Feeds[0].Kind = "user" },
 		"feed override": func(c *Config) { c.Feeds[0].PageSize = ptr(9999) },
 		"concurrency":   func(c *Config) { c.Download.Concurrency = 99 },
+		"no api addr":   func(c *Config) { c.Server.APIAddr = "" },
+		"shared port":   func(c *Config) { c.Server.APIAddr = c.Server.ListenAddr },
 	}
 	if err := validConfig().Validate(); err != nil {
 		t.Fatalf("valid config rejected: %v", err)

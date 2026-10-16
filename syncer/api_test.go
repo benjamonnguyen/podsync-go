@@ -217,7 +217,7 @@ func TestApplyPicksUpConfigAndLibraryChangesMadeByAnotherProcess(t *testing.T) {
 	}
 
 	// Restart-only settings are flagged.
-	web.Update(func(x *podsync.Config) error { x.Server.ListenAddr = ":9999"; return nil })
+	web.Update(func(x *podsync.Config) error { x.Server.APIAddr = "127.0.0.1:9999"; return nil })
 	if res, err := svc.Apply(bg); err != nil || !res.RestartRequired {
 		t.Fatalf("%v %+v", err, res)
 	}
@@ -250,7 +250,7 @@ func TestApplyPicksUpConfigAndLibraryChangesMadeByAnotherProcess(t *testing.T) {
 	if err := svc.PullAll(); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := syncrCfg.Get().Feed("UC3"); !ok || syncrCfg.Get().Server.ListenAddr != ":9999" {
+	if _, ok := syncrCfg.Get().Feed("UC3"); !ok || syncrCfg.Get().Server.APIAddr != "127.0.0.1:9999" {
 		t.Fatalf("the scheduled pull must re-read the config file: %+v", syncrCfg.Get().Feeds)
 	}
 	for _, is := range svc.st.Active() {

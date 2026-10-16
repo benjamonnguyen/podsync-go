@@ -50,7 +50,7 @@
   {{if .Thumb}}<img class="thumb" src="{{.Thumb}}" alt="" loading="lazy" referrerpolicy="no-referrer">{{else}}<div class="thumb placeholder"></div>{{end}}
   <div class="row-main">
     {{if .ShowFeed}}<a class="feedname" href="/feed/{{.FeedID}}">{{.FeedName}}</a>{{end}}
-    {{if eq .State "downloaded"}}<a class="title" href="/media/{{.FeedID}}/{{.File}}" target="_blank" rel="noopener">{{.Title}}</a>{{else}}<span class="title">{{.Title}}</span>{{end}}
+    {{if eq .State "downloaded"}}<a class="title" href="{{.MediaURL}}" target="_blank" rel="noopener">{{.Title}}</a>{{else}}<span class="title">{{.Title}}</span>{{end}}
     <div class="meta">
       {{if .ShowChannel}}{{with .Channel}}<span>{{.}}</span>{{end}}{{end}}
       {{with date .Published}}<span>{{.}}</span>{{end}}

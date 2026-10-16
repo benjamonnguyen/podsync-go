@@ -1,7 +1,10 @@
 // Command syncr is the sync service: it fetches episodes from feed sources
-// (YouTube via yt-dlp) into the library on disk. The web UI (cmd/webui) shares
-// the config file and data directory with it and talks to it over a small REST
-// API to apply changes, trigger pulls, read live status and look up sources.
+// (YouTube via yt-dlp) into the library on disk and publishes the podcast
+// feeds and media files. It listens on two separate addresses: a public one
+// for the feeds and media (server.listen_addr), and a private control API
+// (server.api_addr) that the web UI (cmd/webui) uses to apply changes, trigger
+// pulls, read live status and look up sources. The web UI shares the config
+// file and data directory with syncr.
 package main
 
 import (
@@ -14,11 +17,13 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
 	"podsync"
 	"podsync/fs"
+	"podsync/publish"
 	"podsync/rest"
 	"podsync/status"
 	"podsync/syncer"
@@ -27,6 +32,16 @@ import (
 )
 
 var version = "dev"
+
+// apiAddr is where the control API listens. SYNCR_API_ADDR overrides the config
+// file so a container can bind it to all interfaces (the web UI lives in another
+// container) while the file keeps the safe loopback default.
+func apiAddr(c podsync.Config) string {
+	if v := os.Getenv("SYNCR_API_ADDR"); v != "" {
+		return v
+	}
+	return c.Server.APIAddr
+}
 
 func main() {
 	defPath := "config.toml"
@@ -52,26 +67,39 @@ func main() {
 	}
 }
 
-// probe checks the service named in the config file answers /healthz.
+// probe checks that both listeners named in the config answer /healthz.
 func probe(cfgPath string) error {
 	cfg, err := toml.Open(cfgPath)
 	if err != nil {
 		return err
 	}
-	_, port, err := net.SplitHostPort(cfg.Get().Server.ListenAddr)
-	if err != nil {
-		return err
-	}
+	c := cfg.Get()
 	client := http.Client{Timeout: 4 * time.Second}
-	resp, err := client.Get("http://127.0.0.1:" + port + "/healthz")
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("status %s", resp.Status)
+	for _, addr := range []string{c.Server.ListenAddr, apiAddr(c)} {
+		_, port, err := net.SplitHostPort(addr)
+		if err != nil {
+			return err
+		}
+		resp, err := client.Get("http://127.0.0.1:" + port + "/healthz")
+		if err != nil {
+			return err
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("%s: status %s", addr, resp.Status)
+		}
 	}
 	return nil
+}
+
+func newHTTPServer(addr string, h http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           h,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       2 * time.Minute,
+		// No write timeout: media downloads to slow podcast clients can take long.
+	}
 }
 
 func run(cfgPath string) error {
@@ -100,26 +128,35 @@ func run(cfgPath string) error {
 	cfg.OnChange(svc.ConfigChanged)
 	go svc.Run()
 
-	srv := &http.Server{
-		Addr:              c.Server.ListenAddr,
-		Handler:           rest.NewServer(svc).Handler(),
-		ReadHeaderTimeout: 10 * time.Second,
-		IdleTimeout:       2 * time.Minute,
+	public := newHTTPServer(c.Server.ListenAddr, publish.NewServer(cfg, lib).Handler())
+	api := newHTTPServer(apiAddr(c), rest.NewServer(svc).Handler())
+	servers := []*http.Server{public, api}
+	errc := make(chan error, len(servers))
+	for _, s := range servers {
+		go func() { errc <- s.ListenAndServe() }()
 	}
-	errc := make(chan error, 1)
-	go func() { errc <- srv.ListenAndServe() }()
-	log.Printf("syncr %s listening on %s (config %s, data %s, %d feeds)", version, c.Server.ListenAddr, cfgPath, c.Server.DataDir, len(c.Feeds))
+	log.Printf("syncr %s: feeds and media on %s, control API on %s (config %s, data %s, %d feeds)",
+		version, public.Addr, api.Addr, cfgPath, c.Server.DataDir, len(c.Feeds))
 
+	shutdown := func() {
+		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		var wg sync.WaitGroup
+		for _, s := range servers {
+			wg.Add(1)
+			go func() { defer wg.Done(); _ = s.Shutdown(shutCtx) }()
+		}
+		wg.Wait()
+	}
 	select {
 	case err := <-errc:
+		shutdown()
 		if !errors.Is(err, http.ErrServerClosed) {
 			return err
 		}
 	case <-ctx.Done():
 		log.Print("shutting down…")
-		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		return srv.Shutdown(shutCtx)
+		shutdown()
 	}
 	return nil
 }

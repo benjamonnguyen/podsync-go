@@ -1,8 +1,8 @@
-// Command webui is the htmx web interface. It shares the config file and the
-// data directory with the sync service (cmd/syncr): it reads and writes those
-// directly, serves the podcast feeds and media from them, and calls the sync
-// service's small REST API only to apply changes, trigger pulls, read live
-// status and look up sources.
+// Command webui is the htmx web interface for managing the library. It is for
+// internal use: it does not publish the podcast feeds (syncr does). It shares
+// the config file and the data directory with the sync service (cmd/syncr),
+// reading and writing those directly, and calls syncr's small control API only
+// to apply changes, trigger pulls, read live status and look up sources.
 package main
 
 import (
@@ -22,7 +22,6 @@ import (
 	"podsync/fs"
 	"podsync/rest"
 	"podsync/toml"
-	"podsync/webui"
 )
 
 var version = "dev"
@@ -36,7 +35,7 @@ func envOr(key, def string) string {
 
 func main() {
 	cfgPath := flag.String("config", envOr("PODSYNC_CONFIG", "config.toml"), "path to the config file shared with syncr (env PODSYNC_CONFIG)")
-	listen := flag.String("listen", envOr("WEBUI_LISTEN", ":8080"), "address to serve the web UI on (env WEBUI_LISTEN)")
+	listen := flag.String("listen", envOr("WEBUI_LISTEN", ":8090"), "address to serve the web UI on (env WEBUI_LISTEN)")
 	syncr := flag.String("syncr", envOr("SYNCR_URL", "http://127.0.0.1:8081"), "base URL of the syncr API (env SYNCR_URL)")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	healthcheck := flag.Bool("healthcheck", false, "probe the running web UI (for container health checks) and exit 0 if healthy")
@@ -87,7 +86,7 @@ func run(cfgPath, listen, syncr string) error {
 	if err := lib.Load(); err != nil {
 		return fmt.Errorf("load library from %s: %w", dataDir, err)
 	}
-	ui, err := webui.New(webui.Options{Config: cfg, Library: lib, Syncer: rest.NewClient(syncr, nil)})
+	ui, err := newServer(options{Config: cfg, Library: lib, Syncer: rest.NewClient(syncr, nil)})
 	if err != nil {
 		return err
 	}

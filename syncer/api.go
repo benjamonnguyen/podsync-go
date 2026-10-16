@@ -36,7 +36,7 @@ func (s *Service) Apply(ctx context.Context) (podsync.ApplyResult, error) {
 	cur := s.cfg.Get().Server
 	return podsync.ApplyResult{
 		Changed:         changed,
-		RestartRequired: cur.ListenAddr != s.started.ListenAddr || cur.DataDir != s.started.DataDir,
+		RestartRequired: cur.ListenAddr != s.started.ListenAddr || cur.APIAddr != s.started.APIAddr || cur.DataDir != s.started.DataDir,
 	}, nil
 }
 

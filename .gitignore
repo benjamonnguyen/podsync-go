@@ -5,3 +5,5 @@
 *.test
 .DS_Store
 /dev/data/
+/syncr
+/webui
