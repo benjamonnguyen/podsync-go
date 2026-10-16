@@ -190,10 +190,16 @@ type jobStates map[string]string // "feedID/episodeID" -> queued | downloading
 
 func jobKey(feedID, epID string) string { return feedID + "/" + epID }
 
+// syncTimeout bounds the status calls made on every page and poll, so a hung
+// sync service cannot hang the web UI.
+const syncTimeout = 3 * time.Second
+
 // jobs asks the sync service which downloads are in flight. If it cannot be
 // reached the banner says so; rows simply show their stored state.
 func (s *Server) jobs(ctx context.Context) jobStates {
 	out := jobStates{}
+	ctx, cancel := context.WithTimeout(ctx, syncTimeout)
+	defer cancel()
 	if st, err := s.sync.Status(ctx); err == nil {
 		for _, j := range st.Jobs {
 			out[jobKey(j.FeedID, j.EpisodeID)] = j.State

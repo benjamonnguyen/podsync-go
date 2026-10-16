@@ -1,6 +1,7 @@
 package webui
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strconv"
@@ -205,7 +206,9 @@ type statusView struct {
 func (s *Server) statusView(r *http.Request, notice string) statusView {
 	v := statusView{Notice: notice, Version: s.lib.Version()}
 	now := s.now()
-	st, err := s.sync.Status(r.Context())
+	ctx, cancel := context.WithTimeout(r.Context(), syncTimeout)
+	defer cancel()
+	st, err := s.sync.Status(ctx)
 	if err != nil {
 		v.Issues = append(v.Issues, issueView{Issue: podsync.Issue{
 			Key: "syncr", Level: podsync.LevelError, Message: "Cannot reach the sync service, so nothing is being downloaded: " + err.Error(), Since: now, Last: now, Count: 1,

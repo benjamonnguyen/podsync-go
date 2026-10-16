@@ -47,47 +47,61 @@ manual refresh, settings, issue banner) instead of config-file-only operation.
 
 ## 4. Architecture
 
-Two programs, deliberately separate, that only talk over HTTP:
+Two programs that share the config file and the data directory:
 
 ```
- podcast apps ──► webui (:8080) ──proxy /feeds, /media──┐
- browsers  ─────► webui           ──REST /api/v1────────┤
-                  (htmx views,                           ▼
-                   stateless)                     syncr (:8081)
-                                                  ├─ REST API + RSS + media
-                                                  ├─ syncer.Service (scheduler, download queue, cleanup)
-                                                  ├─ toml.Store   (config.toml)
-                                                  ├─ fs.Library   (media + JSON sidecars, in-memory index)
-                                                  └─ youtube.YouTube ──► yt-dlp, ffmpeg, deno
+                      config.toml          data/ (media + JSON sidecars)
+                       ▲   ▲                    ▲   ▲
+                 writes│   │reads         reads/│   │writes
+                       │   │            deletes │   │
+ browsers, podcast ──► webui ── REST: apply, pull, status, ──► syncr ──► yt-dlp, ffmpeg, deno
+ apps (:8080)          (views, RSS,     resolve, search,       (:8081)
+                        media, edits)   listing                 scheduler, queue, cleanup
 ```
 
-- **syncr** (`cmd/syncr`) fetches from feed sources, owns the config file and the data directory (single writer),
-  and exposes the REST API, the RSS feeds and the media files.
-- **webui** (`cmd/webui`) is the htmx server. It has no state or config file: it renders pages from the REST
-  API and reverse-proxies `/feeds/` and `/media/` from syncr, so podcast apps and browsers use one address.
+- **webui** (`cmd/webui`) is the htmx server. It reads and edits the config file, reads the library (and deletes
+  feed folders), renders pages, and serves the RSS feeds and media files itself. It has no yt-dlp.
+- **syncr** (`cmd/syncr`) runs yt-dlp: it lists feeds, downloads episodes, applies cleanup and writes the library.
+  It only *reads* the config file. Its REST API is deliberately tiny (below).
+- Each program has its own in-memory view of the shared files and refreshes it: webui re-reads the config file and
+  rescans changed feed folders on every request (cheap when nothing changed); syncr does so on `apply` and at the
+  start of every pull.
+- The config file has one writer (webui); the library has one writer (syncr), with two small exceptions in webui:
+  deleting feed folders and writing a new feed's `_meta.json`.
 
-### 4.0 Package layout
+### 4.0 syncr's REST API
+
+Only what needs the running service (it holds the queue and yt-dlp):
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /api/v1/apply` | re-read config + rescan library after webui changed them |
+| `POST /api/v1/pull` | pull all feeds / one feed / download one episode now |
+| `GET /api/v1/status` | activity, issues, in-flight jobs, tool versions |
+| `GET /api/v1/resolve`, `GET /api/v1/search`, `GET /api/v1/feeds/{id}/listing` | source lookups (need yt-dlp) |
+
+### 4.0.1 Package layout
 
 The root package `podsync` is the domain: types and interfaces only, no dependencies beyond the standard
 library. Subpackages are grouped by what they depend on, and the `main` packages wire them together.
 
 | Package | Depends on | Role |
 |---|---|---|
-| `podsync` (root) | stdlib | `Feed`/`Config`, `Episode`, `Source`, `Library`, `ConfigStore`, `StatusTracker`, the `Syncer` service contract and its DTOs, error kinds, `EpisodeFilter`, `Registry` |
+| `podsync` (root) | stdlib | `Feed`/`Config`, `Episode`, `Source`, `Library`, `ConfigStore`, `StatusTracker`, the small `Syncer` contract, error kinds, `EpisodeFilter`, `Registry` |
 | `youtube` | yt-dlp | implements `podsync.Source` |
-| `fs` | filesystem | implements `podsync.Library` (+ atomic file writes) |
-| `toml` | BurntSushi/toml | implements `podsync.ConfigStore` |
+| `fs` | filesystem | implements `podsync.Library` (+ atomic file writes, `Refresh` for multi-process use) |
+| `toml` | BurntSushi/toml | implements `podsync.ConfigStore` (+ `Reload`) |
 | `status` | — | implements `podsync.StatusTracker` in memory |
-| `syncer` | root interfaces only | implements `podsync.Syncer`: the update loop, queue, cleanup, all application logic |
-| `rest` | net/http | `Server` (JSON API + RSS + media) and `Client` (implements `podsync.Syncer` over HTTP) |
-| `webui` | net/http, html/template | the htmx interface, written against `podsync.Syncer` |
+| `syncer` | root interfaces only | implements `podsync.Syncer`: the update loop, queue, cleanup (linked into syncr only) |
+| `rest` | net/http | `Server` (syncr's API) and `Client` (implements `podsync.Syncer` over HTTP; used by webui) |
+| `webui` | net/http, html/template | the htmx interface, feeds and media, plus its model over config + library |
 | `rss` | encoding/xml | podcast feed rendering |
 | `mock` | — | test doubles |
 | `cmd/syncr`, `cmd/webui` | everything above | wiring only |
 
-`podsync.Syncer` is the one contract everything is built around: `syncer.Service` implements it, `rest.Server`
-exposes it, `rest.Client` implements it again for the web UI. Errors of kind not-found / invalid / busy survive the
-HTTP boundary (`podsync.ErrNotFound`, `ErrInvalid`, `ErrBusy`).
+`podsync.Syncer` is the contract between the two programs: `syncer.Service` implements it inside syncr, and
+`rest.Client` implements it for webui. The webui binary does not link `syncer` or `youtube`. Errors of kind
+not-found / invalid / busy survive the HTTP boundary (`podsync.ErrNotFound`, `ErrInvalid`, `ErrBusy`).
 
 ### 4.1 Source adapter pattern
 
@@ -425,9 +439,9 @@ video results. The playlist filter is `sp=EgIQAw%253D%253D`.
 - **Multi-arch (amd64 + arm64)**: `docker buildx build --platform linux/amd64,linux/arm64 --target <syncr|webui> .`
 - **Health checks** use the programs' own `-healthcheck` flag (no curl in the web UI image), so they follow
   whatever port is configured.
-- **`compose.example.yaml`**: two services. `syncr` gets the bind-mounted `./config` directory (not the single file:
-  the app rewrites config.toml and a single-file bind mount can't be replaced atomically) and `./data`, runs as the
-  user's uid, and publishes nothing; `webui` publishes `8080` and reaches syncr at `http://syncr:8081`.
+- **`compose.example.yaml`**: two services mounting the same `./config` directory (not the single file: the app
+  rewrites config.toml and a single-file bind mount can't be replaced atomically) and `./data`, both running as
+  the user's uid. `syncr` publishes nothing; `webui` publishes `8080` and reaches syncr at `http://syncr:8081`.
 
 ## 11. Open Questions
 

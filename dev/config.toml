@@ -3,7 +3,7 @@
 
 [server]
 listen_addr = ":8081"
-base_url = "http://localhost:8080"
+base_url = "http://towhee:8080"
 data_dir = "./dev/data"
 
 [download]

@@ -263,6 +263,7 @@ func (s *Service) PullFeed(id string) error {
 }
 
 func (s *Service) pullAllLocked() {
+	s.reloadFromDisk()
 	var ids []string
 	for _, f := range s.cfg.Get().Feeds {
 		ids = append(ids, f.ID)
@@ -298,6 +299,17 @@ func (s *Service) pullFeedsLocked(ids []string) {
 	for _, id := range ids {
 		s.Cleanup(id)
 	}
+}
+
+// reloadFromDisk picks up what the web UI (or a hand edit) changed since the
+// last Apply, so a missed Apply is corrected by the next pull at the latest.
+func (s *Service) reloadFromDisk() {
+	if _, err := s.cfg.Reload(); err != nil {
+		s.st.Report("config", podsync.LevelError, "The configuration file could not be applied (the previous settings stay in effect): "+err.Error())
+	} else {
+		s.st.Clear("config")
+	}
+	_, _ = s.lib.Refresh() // the web UI may have added or deleted feeds
 }
 
 // listAndEnqueue lists a feed's newest page_size episodes and enqueues the

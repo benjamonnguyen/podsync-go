@@ -237,4 +237,28 @@ func TestApplyPicksUpConfigAndLibraryChangesMadeByAnotherProcess(t *testing.T) {
 	if !found {
 		t.Fatal("a broken config file must be reported in the banner")
 	}
+
+	// A missed Apply is corrected by the next pull: the web UI saves valid settings again and a
+	// scheduled pull (nobody calls Apply) re-reads the file and clears the banner.
+	err = web.Update(func(x *podsync.Config) error {
+		x.Feeds = append(x.Feeds, podsync.Feed{ID: "UC3", Name: "Three", Kind: "channel", Source: "youtube"})
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.PullAll(); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := syncrCfg.Get().Feed("UC3"); !ok || syncrCfg.Get().Server.ListenAddr != ":9999" {
+		t.Fatalf("the scheduled pull must re-read the config file: %+v", syncrCfg.Get().Feeds)
+	}
+	for _, is := range svc.st.Active() {
+		if is.Key == "config" {
+			t.Fatal("the config banner should clear once the file applies again")
+		}
+	}
+	if n := len(lib.Episodes("UC3")); n != 3 {
+		t.Fatalf("the feed added by the file edit should be pulled in the same run, got %d episodes", n)
+	}
 }

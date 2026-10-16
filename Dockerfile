@@ -39,10 +39,14 @@ RUN set -eux; \
     chmod 0755 /out/yt-dlp/yt-dlp /out/deno
 
 # ---- Web UI image: a static binary, nothing else ----
+# It shares /config and /data with the syncr container and calls syncr's API at SYNCR_URL.
 FROM gcr.io/distroless/static-debian12:nonroot AS webui
 COPY --from=build /out/webui /usr/local/bin/webui
-ENV WEBUI_LISTEN=:8080 \
+ENV PODSYNC_CONFIG=/config/config.toml \
+    WEBUI_LISTEN=:8080 \
     SYNCR_URL=http://syncr:8081
+# Relative paths in the shared config (data_dir = "./data") must resolve like they do in the syncr image.
+WORKDIR /
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s CMD ["/usr/local/bin/webui", "-healthcheck"]
 ENTRYPOINT ["/usr/local/bin/webui"]
