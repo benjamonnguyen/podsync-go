@@ -1,0 +1,24 @@
+{{define "layout"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="htmx-config" content='{"allowEval":false,"includeIndicatorStyles":false}'>
+<title>{{if .Title}}{{.Title}} · {{end}}podsync-go</title>
+<link rel="stylesheet" href="/static/style.css">
+<script src="/static/htmx.min.js" defer></script>
+<script src="/static/app.js" defer></script>
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="/">podsync-go</a>
+  <nav>
+    <a href="/"{{if eq .Page "library"}} class="active"{{end}}>Library</a>
+    <a href="/add"{{if eq .Page "add"}} class="active"{{end}}>Add feed</a>
+    <a href="/settings"{{if eq .Page "settings"}} class="active"{{end}}>Settings</a>
+  </nav>
+</header>
+{{template "status" .Status}}
+<main>{{template "content" .}}</main>
+</body>
+</html>{{end}}

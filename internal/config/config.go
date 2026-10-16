@@ -22,7 +22,7 @@ type Duration time.Duration
 
 func (d Duration) Std() time.Duration { return time.Duration(d) }
 
-func (d Duration) MarshalText() ([]byte, error) { return []byte(time.Duration(d).String()), nil }
+func (d Duration) MarshalText() ([]byte, error) { return []byte(d.String()), nil }
 
 func (d *Duration) UnmarshalText(b []byte) error {
 	v, err := time.ParseDuration(strings.TrimSpace(string(b)))
@@ -383,4 +383,16 @@ func (s *Store) Update(fn func(*Config) error) error {
 		fn(clone(old), clone(next))
 	}
 	return nil
+}
+
+// String prints "30m" rather than Go's "30m0s".
+func (d Duration) String() string {
+	s := time.Duration(d).String()
+	if strings.HasSuffix(s, "m0s") {
+		s = s[:len(s)-2]
+	}
+	if strings.HasSuffix(s, "h0m") {
+		s = s[:len(s)-2]
+	}
+	return s
 }

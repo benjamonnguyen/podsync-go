@@ -1,0 +1,12 @@
+{{define "content"}}
+<p><a href="/feed/{{.Card.ID}}">← {{.Card.Name}}</a></p>
+<h1>Delete “{{.Card.Name}}”?</h1>
+<section class="panel">
+  <p>This removes the feed from your configuration, so its podcast URL stops working and no new episodes are fetched.</p>
+  <form method="post" action="/feed/{{.Card.ID}}/delete">
+    <label class="check"><input type="checkbox" name="delete_files"> Also delete the {{count .Card.Episodes "downloaded episode" "downloaded episodes"}}{{if .Card.Bytes}} ({{size .Card.Bytes}}){{end}} from disk</label>
+    <p class="muted">If left unchecked the files stay in the data directory and show up under “Not in config” on the library page.</p>
+    <div class="actions"><button class="btn danger" type="submit">Delete feed</button> <a class="btn" href="/feed/{{.Card.ID}}">Cancel</a></div>
+  </form>
+</section>
+{{end}}

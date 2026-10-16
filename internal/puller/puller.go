@@ -206,6 +206,7 @@ func (s *Service) TriggerAll() error {
 	if !s.pullMu.TryLock() {
 		return ErrBusy
 	}
+	s.setPulling(true) // visible immediately, not only once the goroutine is scheduled
 	go func() {
 		defer s.pullMu.Unlock()
 		s.pullAllLocked()
@@ -221,6 +222,7 @@ func (s *Service) TriggerFeed(id string) error {
 	if !s.pullMu.TryLock() {
 		return ErrBusy
 	}
+	s.setPulling(true)
 	go func() {
 		defer s.pullMu.Unlock()
 		s.pullFeedsLocked([]string{id})

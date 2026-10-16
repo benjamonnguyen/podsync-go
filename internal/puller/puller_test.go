@@ -228,7 +228,9 @@ func TestFailureRetryBannerAndManualReset(t *testing.T) {
 	if err := e.svc.RequestDownload("UC1", source.EpisodeInfo{ID: "ep00"}); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, func() bool { return e.svc.JobState("UC1", "ep00") == "" && e.lib.Episodes("UC1")[0].Status == library.StatusDownloaded })
+	waitFor(t, func() bool {
+		return e.svc.JobState("UC1", "ep00") == "" && e.lib.Episodes("UC1")[0].Status == library.StatusDownloaded
+	})
 	ep, _ = e.lib.Episode("UC1", "ep00")
 	if !ep.Manual || ep.Attempts != 0 {
 		t.Fatalf("manual retry result: %+v", ep)

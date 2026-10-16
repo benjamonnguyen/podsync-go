@@ -1,0 +1,31 @@
+{{define "content"}}
+<p><a href="/feed/{{.F.ID}}">← {{.F.Name}}</a></p>
+<h1>Feed settings</h1>
+{{if .Flash}}<div class="notice ok">{{.Flash}}</div>{{end}}
+{{if .Err}}<div class="notice err"><strong>Not saved.</strong><pre>{{.Err}}</pre></div>{{end}}
+<form method="post" action="/feed/{{.F.ID}}/settings" class="settings">
+  <p class="muted">Leave a field empty to use the default from Settings (shown as the placeholder).</p>
+  <fieldset>
+    <label>Name <input type="text" name="name" value="{{.F.Name}}" required></label>
+    <label>Format
+      <select name="format">
+        <option value="">Default ({{.F.Defaults.Format}})</option>
+        <option value="video"{{if eq .F.Format "video"}} selected{{end}}>Video (mp4)</option>
+        <option value="audio"{{if eq .F.Format "audio"}} selected{{end}}>Audio only (m4a)</option>
+      </select></label>
+    <label>Maximum resolution (0 = no limit) <input type="number" name="max_resolution" min="0" value="{{.F.MaxResolution}}" placeholder="{{.F.Defaults.MaxResolution}}"></label>
+    <label>Skip Shorts
+      <select name="exclude_shorts">
+        <option value="">Default ({{if .F.Defaults.ExcludeShorts}}yes{{else}}no{{end}})</option>
+        <option value="yes"{{if eq .F.ExcludeShorts "yes"}} selected{{end}}>Yes</option>
+        <option value="no"{{if eq .F.ExcludeShorts "no"}} selected{{end}}>No</option>
+      </select></label>
+    <label>Only download titles matching (regex) <input type="text" name="title_include" value="{{.F.TitleInclude}}" placeholder="{{.F.Defaults.TitleInclude}}"></label>
+    <label>Skip titles matching (regex) <input type="text" name="title_exclude" value="{{.F.TitleExclude}}" placeholder="{{.F.Defaults.TitleExclude}}"></label>
+    <label>Episodes checked per update <input type="number" name="page_size" min="1" max="500" value="{{.F.PageSize}}" placeholder="{{.F.Defaults.PageSize}}"></label>
+    <label>Keep only the newest N downloaded episodes (0 = keep all) <input type="number" name="cleanup_keep_last" min="0" value="{{.F.CleanupKeepLast}}" placeholder="{{.F.Defaults.CleanupKeepLast}}"></label>
+    <label>Delete episodes published more than N days ago (0 = never) <input type="number" name="cleanup_after_days" min="0" value="{{.F.CleanupAfterDays}}" placeholder="{{.F.Defaults.CleanupAfterDays}}"></label>
+  </fieldset>
+  <div class="actions"><button class="btn primary" type="submit">Save</button></div>
+</form>
+{{end}}

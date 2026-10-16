@@ -1,0 +1,21 @@
+{{define "content"}}
+<h1>Add a feed</h1>
+<section class="panel">
+  <h2>Paste a link, @handle or ID</h2>
+  <form hx-post="/add/preview" hx-target="#preview" hx-disabled-elt="find button" hx-indicator="this" class="inline-form">
+    <input type="text" name="ref" placeholder="@LinusTechTips, https://youtube.com/channel/…, or a playlist URL" required autocomplete="off">
+    <button class="btn primary" type="submit">Look up <span class="indicator spinner"></span></button>
+  </form>
+</section>
+<section class="panel">
+  <h2>…or search by name</h2>
+  <form hx-post="/add/search" hx-target="#results" hx-trigger="input delay:700ms, submit" hx-indicator="this" class="inline-form">
+    <input type="search" name="q" placeholder="Channel or playlist name" autocomplete="off">
+    <label class="radio"><input type="radio" name="kind" value="channel" checked> Channels</label>
+    <label class="radio"><input type="radio" name="kind" value="playlist"> Playlists</label>
+    <span class="indicator spinner"></span>
+  </form>
+  <div id="results"></div>
+</section>
+<div id="preview"></div>
+{{end}}

@@ -377,3 +377,18 @@ func (l *Library) Search(query string) []Hit {
 	})
 	return out
 }
+
+// EpisodeByFile finds the downloaded episode that owns a media file name.
+// Used to make sure only real media (not sidecars) is ever served.
+func (l *Library) EpisodeByFile(feedID, file string) (Episode, bool) {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	if fs, ok := l.feed[feedID]; ok {
+		for _, ep := range fs.episodes {
+			if ep.Status == StatusDownloaded && ep.File == file {
+				return *ep, true
+			}
+		}
+	}
+	return Episode{}, false
+}
