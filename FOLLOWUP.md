@@ -73,3 +73,10 @@ Tested three ways: Go `httptest` for every route, a headless-Chromium run (puppe
 - Items are downloaded episodes only; `guid` is `<feedID>:<videoID>` (isPermaLink false); enclosure `length` is the real file size; `itunes:duration`, per-episode and channel images included.
 - Not included: `itunes:category`, author, language. Fine for private use with podcast apps; Apple's public directory would want them.
 - ⚠ `base_url` defaults to `http://localhost:8080`, which is useless to a phone. The README leads with this; the Settings page labels it clearly, but there is no auto-detection.
+
+## Testing
+- `go test -race ./...` — unit tests per package plus `httptest` coverage of every web route (cross-site blocking, add flow, Load More, settings validation, RSS, Range requests, path traversal, delete/orphans).
+- Fake `yt-dlp` (helper-process pattern) covers the adapter's listing windows, flags, search cache/backoff, download success/failure and partial-file cleanup.
+- `PODSYNC_LIVE=1 go test ./internal/source/youtube -run Live -v` runs the real thing against YouTube (resolve @handle, window listing, channel/playlist search, video→channel, real video + audio download). Passing as of this writing; it's skipped by default because it needs network and yt-dlp.
+- `e2e/run.sh` (Node + puppeteer-core + a Chromium binary): 32 browser checks against a fake yt-dlp. Optional dev tooling; nothing in the Go build depends on it.
+- Not covered by automation: arm64 *runtime* behavior (see Docker), `self_update` against a real yt-dlp install, cookies-file flow, and anything on a real phone/podcast app. I did not test with an actual podcast client.
