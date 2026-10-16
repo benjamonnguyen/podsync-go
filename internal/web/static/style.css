@@ -68,6 +68,7 @@ input[type=text], input[type=search], input[type=number], select { width: 100%; 
 .row { display: flex; gap: 1rem; align-items: center; justify-content: space-between; padding: .6rem .8rem; border-bottom: 1px solid var(--border); }
 .row:last-child { border-bottom: 0; }
 .rows > p.empty { margin: 0; }
+.rows:empty { display: none; }
 .row.faded { opacity: .55; }
 .row.faded:hover { opacity: .9; }
 .row-main { min-width: 0; flex: 1; }

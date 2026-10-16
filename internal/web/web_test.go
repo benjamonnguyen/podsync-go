@@ -157,7 +157,7 @@ func (h *harness) waitIdle() {
 func TestLibraryPageAndSecurityHeaders(t *testing.T) {
 	h := newHarness(t)
 	rec := h.get("/")
-	h.mustContain(rec, 200, "Channel One", `href="/feed/UCone"`, "Check all feeds now", `hx-get="/status"`)
+	h.mustContain(rec, 200, "Channel One", `href="/feed/UCone"`, "Check all feeds now", `hx-get="/status?v=`)
 	if !strings.Contains(rec.Header().Get("Content-Security-Policy"), "default-src 'self'") || rec.Header().Get("X-Frame-Options") != "DENY" {
 		t.Fatalf("missing security headers: %v", rec.Header())
 	}
@@ -265,6 +265,25 @@ func TestStatusBannerDismissAndBusy(t *testing.T) {
 		t.Fatal("dismissed issue still shown")
 	}
 	h.mustContain(h.get("/"), 200, "Self-update failed")
+}
+
+func TestStatusTriggersRefreshOnlyWhenLibraryChanged(t *testing.T) {
+	h := newHarness(t)
+	cur := h.lib.Version()
+	rec := h.get(fmt.Sprintf("/status?v=%d", cur))
+	if rec.Header().Get("HX-Trigger") != "" {
+		t.Fatal("unchanged library must not trigger a refresh")
+	}
+	if !strings.Contains(rec.Body.String(), fmt.Sprintf(`hx-get="/status?v=%d"`, cur)) {
+		t.Fatalf("poll URL must carry the current version: %s", rec.Body.String())
+	}
+	h.svc.PullFeed("UCone")
+	if rec := h.get(fmt.Sprintf("/status?v=%d", cur)); rec.Header().Get("HX-Trigger") != "episodes-changed" {
+		t.Fatalf("stale version should trigger a refresh, headers: %v", rec.Header())
+	}
+	if rec := h.get("/status"); rec.Header().Get("HX-Trigger") != "" {
+		t.Fatal("no version param means no trigger")
+	}
 }
 
 func TestAddFlow(t *testing.T) {

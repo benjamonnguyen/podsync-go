@@ -48,3 +48,28 @@ All of this was exercised against real YouTube (`PODSYNC_LIVE=1 go test ./intern
 - Cleanup never touches manually downloaded episodes (`manual = true`), and keep-last counts only non-manual ones.
 - Bug found by my own test while writing this: concurrent downloads in one feed shared a staging directory, so one finishing job could delete another's in-flight file. Staging is now per-episode (`.tmp/<feed>/<episode>`); empty per-feed folders under `.tmp` are left until the next startup wipe.
 - Self-update: runs `yt-dlp -U` at startup then every 24 h when `download.self_update = true`; a failure is a warning in the banner (it will always fail for package-manager installs, which is expected and the message says so).
+
+## Web UI
+Tested three ways: Go `httptest` for every route, a headless-Chromium run (puppeteer, fake yt-dlp, in `e2e/`) that clicks through search → add → pull → Load More → download → failure → banner → settings → delete, and a manual run against real YouTube. The browser run found three real bugs the Go tests could not (details below).
+- htmx 2.0.4 is vendored in `internal/web/static` (no CDN: the app must work offline on a LAN and under a strict CSP). **No Alpine.js**: htmx's debounced triggers covered everything, so PROJECT.md's "touch of Alpine" was dropped.
+- Polling: the banner polls every 3 s on every page; an in-flight episode row polls every 2 s. Cheap for one user on a LAN, wasteful if you leave many tabs open.
+- **Bug found by the browser run #1**: the episode list refreshed only if a status poll happened to catch work "in progress", so a short download that started and finished between two polls was never shown. Refresh is now driven by a library version counter each page compares against (`/status?v=N`), so it can't be missed.
+- **Bug #2**: an episode downloaded via Load More showed up twice (loaded area + main list). Loaded rows now live in their own container and a tiny script in `app.js` drops the duplicate.
+- **Bug #3**: header stats ("N episodes · checked X") never updated after a pull; they now refresh with the list.
+- Load More offsets count *raw source positions before filtering*, starting at `page_size`. So an episode inside the newest window that your filters skip is never shown anywhere (no "filtered" badge) — this is the open question left in PROJECT.md §11, currently "hide".
+- ⚠ Feed-level settings: a blank field means "inherit the default". There is therefore no way to override a non-empty default with an *empty* regex for one feed (e.g. default `title_exclude` set, but this feed wants none). Fixable with an explicit "clear" control; I didn't build one.
+- Adding a feed requires a prior preview (cached server-side 15 min) so a forged POST can't add arbitrary IDs; the stored name/avatar come from that preview, not from the form.
+- Deleting a feed removes it from config but **keeps the files by default** (checkbox to delete). Kept folders show under "Not in config" with an explicit Delete button, matching the "never silently delete media" rule in PROJECT.md §4.3.
+- Settings: `listen_addr` and `data_dir` save but need a restart (the page says so). Changing `data_dir` does not move existing files.
+
+## Security (no auth, as agreed — but a few cheap guards)
+- ⚠ **There is no login.** Anyone who can reach the port can browse, delete feeds, change settings and download all media. README says to keep it on a trusted LAN or behind an authenticating reverse proxy. If this should ever be exposed, basic auth is the first thing to add.
+- State-changing requests are rejected when `Sec-Fetch-Site` is cross-site or `Origin` doesn't match `Host` (otherwise any web page you visit could silently POST to `http://192.168.x.x:8080/feed/.../delete`). Plain `curl` (no such headers) still works.
+- Strict CSP (`default-src 'self'`, images allowed from https so YouTube avatars load), `X-Frame-Options: DENY`, `nosniff`. Hence no inline scripts/styles anywhere.
+- Media is served only for files an episode sidecar claims (`.json` sidecars and path tricks 404), with Range support for podcast apps.
+- Feed URLs are `/feeds/<channel-id>.xml`; channel IDs are public, so feed URLs are guessable. No "private feed" tokens.
+
+## RSS
+- Items are downloaded episodes only; `guid` is `<feedID>:<videoID>` (isPermaLink false); enclosure `length` is the real file size; `itunes:duration`, per-episode and channel images included.
+- Not included: `itunes:category`, author, language. Fine for private use with podcast apps; Apple's public directory would want them.
+- ⚠ `base_url` defaults to `http://localhost:8080`, which is useless to a phone. The README leads with this; the Settings page labels it clearly, but there is no auto-detection.

@@ -17,3 +17,15 @@ document.addEventListener("click", function (e) {
     try { if (document.execCommand("copy")) done(); } catch (err) {}
   }
 });
+
+// An episode downloaded through "Load more" later appears in the main list
+// too (the list refreshes while work is running). Keep the main-list copy.
+document.addEventListener("htmx:afterSettle", function () {
+  var main = document.getElementById("episodes");
+  if (!main) return;
+  var seen = {};
+  main.querySelectorAll(".row[id]").forEach(function (r) { seen[r.id] = true; });
+  document.querySelectorAll(".row[id]").forEach(function (r) {
+    if (!main.contains(r) && seen[r.id]) r.remove();
+  });
+});

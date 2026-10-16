@@ -178,9 +178,17 @@ func (s *Server) handleFeed(w http.ResponseWriter, r *http.Request) {
 	card := s.card(cfg, f)
 	eff := f.Effective(cfg.Defaults)
 	s.render(w, "feed", map[string]any{
-		"Title": card.Name, "Card": card, "Rows": s.episodeRows(f.ID, card.Name, ""),
+		"Title": card.Name, "Card": card, "Stats": map[string]any{"Card": card, "Format": eff.Format}, "Rows": s.episodeRows(f.ID, card.Name, ""),
 		"PageSize": eff.PageSize, "Offset": eff.PageSize, "Format": eff.Format, "FeedID": f.ID, "Q": "",
 	})
+}
+
+func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
+	cfg, f, ok := s.feedOr404(w, r)
+	if !ok {
+		return
+	}
+	s.fragment(w, "feed_stats", map[string]any{"Card": s.card(cfg, f), "Format": f.Effective(cfg.Defaults).Format})
 }
 
 func (s *Server) handleEpisodes(w http.ResponseWriter, r *http.Request) {
@@ -259,13 +267,14 @@ type statusView struct {
 	Downloading int
 	Queued      int
 	Busy        bool
+	Version     uint64
 	Issues      []issueView
 	Notice      string
 }
 
 func (s *Server) statusView(notice string) statusView {
 	act := s.st.Activity()
-	v := statusView{Pulling: act.Pulling, Downloading: act.Downloading, Queued: act.Queued, Notice: notice}
+	v := statusView{Pulling: act.Pulling, Downloading: act.Downloading, Queued: act.Queued, Notice: notice, Version: s.lib.Version()}
 	v.Busy = act.Pulling || act.Downloading > 0 || act.Queued > 0
 	for _, is := range s.st.Active() {
 		v.Issues = append(v.Issues, issueView{Key: is.Key, Level: string(is.Level), Message: is.Message, Count: is.Count, Since: is.Since})
@@ -273,13 +282,12 @@ func (s *Server) statusView(notice string) statusView {
 	return v
 }
 
+// handleStatus serves the banner. It also tells the page to refresh its
+// episode list/stats when the library changed since the version the client
+// last saw (sent as ?v=), so short downloads between polls are never missed.
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	v := s.statusView("")
-	s.mu.Lock()
-	changed := v.Busy || s.wasBusy
-	s.wasBusy = v.Busy
-	s.mu.Unlock()
-	if changed {
+	if seen, err := strconv.ParseUint(r.URL.Query().Get("v"), 10, 64); err == nil && seen != v.Version {
 		w.Header().Set("HX-Trigger", "episodes-changed")
 	}
 	s.fragment(w, "status", v)

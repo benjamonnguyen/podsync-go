@@ -1,4 +1,4 @@
-{{define "status"}}<div id="status" hx-get="/status" hx-trigger="every 3s" hx-swap="outerHTML" aria-live="polite">
+{{define "status"}}<div id="status" hx-get="/status?v={{.Version}}" hx-trigger="every 3s" hx-swap="outerHTML" aria-live="polite">
 {{- with .Notice}}<div class="banner info">{{.}}</div>{{end}}
 {{- if .Busy}}<div class="banner info"><span class="spinner" aria-hidden="true"></span>
   {{if .Pulling}}Checking feeds… {{end}}{{if .Downloading}}{{.Downloading}} downloading{{end}}{{if .Queued}}{{if .Downloading}}, {{end}}{{.Queued}} queued{{end}}</div>{{end}}
@@ -72,13 +72,15 @@
 </div>{{end}}
 
 {{define "older"}}
-{{- range .Rows}}{{template "episode_row" .}}{{end}}
+{{- if .Rows}}<div id="loaded" hx-swap-oob="beforeend">{{range .Rows}}{{template "episode_row" .}}{{end}}</div>{{end}}
 {{- if .Err}}<p class="error center">Could not load more: {{.Err}}</p>{{end}}
 {{- if and (not .Rows) .More (not .Err)}}<p class="muted center">Nothing new in that batch (already downloaded or filtered out).</p>{{end}}
 {{- if .Empty}}<p class="muted center" id="more">No more episodes.</p>
 {{- else if .More}}<div id="more" class="center"><button class="btn" hx-get="/feed/{{.FeedID}}/older?offset={{.NextOffset}}" hx-target="#more" hx-swap="outerHTML" hx-disabled-elt="this">{{if .Err}}Try again{{else}}Load more{{end}}</button></div>
 {{- else}}<p class="muted center" id="more">That's the end of the feed.</p>{{end}}
 {{end}}
+
+{{define "feed_stats"}}<p id="feed-stats" class="muted" hx-get="/feed/{{.Card.ID}}/stats" hx-trigger="episodes-changed from:body" hx-swap="outerHTML">{{.Card.Kind}} · {{count .Card.Episodes "episode" "episodes"}} downloaded{{if .Card.Bytes}} · {{size .Card.Bytes}}{{end}} · checked {{ago .Card.LastPull}} · downloads as {{.Format}}{{if .Card.HasOverrides}} · custom settings{{end}}</p>{{end}}
 
 {{define "add_results"}}
 {{- if .Hint}}<p class="muted">{{.Hint}}</p>{{end}}

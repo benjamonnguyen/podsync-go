@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"podsync-go/internal/fsutil"
@@ -70,10 +71,15 @@ type feedState struct {
 }
 
 type Library struct {
-	root string
-	mu   sync.RWMutex
-	feed map[string]*feedState
+	root    string
+	mu      sync.RWMutex
+	feed    map[string]*feedState
+	version atomic.Uint64
 }
+
+// Version increases whenever anything in the library changes, so UI clients
+// can cheaply tell whether to refresh.
+func (l *Library) Version() uint64 { return l.version.Load() }
 
 func New(root string) *Library {
 	return &Library{root: root, feed: map[string]*feedState{}}
@@ -176,6 +182,7 @@ func (l *Library) EnsureFeed(source, id string) error {
 	defer l.mu.Unlock()
 	if _, ok := l.feed[id]; !ok {
 		l.feed[id] = &feedState{source: source, episodes: map[string]*Episode{}}
+		l.version.Add(1)
 	}
 	return nil
 }
@@ -230,6 +237,7 @@ func (l *Library) UpdateMeta(id string, fn func(*FeedMeta)) error {
 		return err
 	}
 	fs.meta = next
+	l.version.Add(1)
 	return nil
 }
 
@@ -289,6 +297,7 @@ func (l *Library) PutEpisode(feedID string, ep Episode) error {
 	}
 	cp := ep
 	fs.episodes[ep.ID] = &cp
+	l.version.Add(1)
 	return nil
 }
 
@@ -319,6 +328,7 @@ func (l *Library) DeleteFeed(id string) error {
 		return err
 	}
 	delete(l.feed, id)
+	l.version.Add(1)
 	return nil
 }
 

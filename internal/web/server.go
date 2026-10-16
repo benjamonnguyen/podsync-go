@@ -36,7 +36,6 @@ type Server struct {
 
 	mu       sync.Mutex
 	previews map[string]preview
-	wasBusy  bool
 }
 
 type preview struct {
@@ -86,6 +85,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /pull", s.handlePullAll)
 
 	mux.HandleFunc("GET /feed/{id}", s.handleFeed)
+	mux.HandleFunc("GET /feed/{id}/stats", s.handleStats)
 	mux.HandleFunc("GET /feed/{id}/episodes", s.handleEpisodes)
 	mux.HandleFunc("GET /feed/{id}/older", s.handleOlder)
 	mux.HandleFunc("POST /feed/{id}/pull", s.handlePullFeed)
