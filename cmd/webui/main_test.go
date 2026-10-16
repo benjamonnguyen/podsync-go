@@ -77,12 +77,26 @@ func newHarness(t *testing.T) *harness {
 			Thumbnail: fmt.Sprintf("https://i.ytimg.com/vi/vid%07d/hq.jpg", i), ViewCount: 2500, Channel: "Remote Chan",
 		})
 	}
-	src.SearchResults = []podsync.SearchResult{{Kind: "channel", ID: "UCnew", Name: "Found One", Handle: "@found", Subscribers: 1500000}}
-	src.ResolveFn = func(ref string) (podsync.FeedInfo, error) {
-		if ref == "nope" {
-			return podsync.FeedInfo{}, errors.New("not a recognized channel")
+	newInfo := podsync.FeedInfo{Source: "youtube", Kind: "channel", ID: "UCnew", Name: "New <Channel>", Description: "about", ImageURL: "https://img/x.jpg", Handle: "@new", Subscribers: 1500000}
+	src.FindFn = func(q string) ([]podsync.FeedInfo, error) { // stands in for the adapter's hints
+		switch q {
+		case "":
+			return nil, podsync.Invalid("type a channel name, an @handle or a YouTube link")
+		case "nope":
+			return nil, podsync.Invalid("not a recognized channel URL")
+		case "boom":
+			return nil, errors.New("boom")
+		case "@new", "UCnew":
+			return []podsync.FeedInfo{newInfo}, nil
+		case "found":
+			return []podsync.FeedInfo{
+				{Source: "youtube", Kind: "channel", ID: "UCnew", Name: "Found One", Handle: "@found", Subscribers: 1500000},
+				{Source: "youtube", Kind: "channel", ID: "UCtwo", Name: "Found Two", Handle: "@two", Subscribers: 2000},
+			}, nil
+		case "lonely":
+			return []podsync.FeedInfo{newInfo}, nil
 		}
-		return podsync.FeedInfo{Source: "youtube", Kind: "channel", ID: "UCnew", Name: "New <Channel>", Description: "about", ImageURL: "https://img/x.jpg"}, nil
+		return []podsync.FeedInfo{}, nil
 	}
 	st := status.New()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -315,22 +329,35 @@ func TestStatusTriggersRefreshOnlyWhenLibraryChanged(t *testing.T) {
 
 func TestAddFlow(t *testing.T) {
 	h := newHarness(t)
-	h.mustContain(h.get("/add"), 200, "Paste a link", "search by name")
-
-	h.mustContain(h.do("POST", "/add/search", url.Values{"q": {"fo"}}), 200, "at least 3")
-	h.mustContain(h.do("POST", "/add/search", url.Values{"q": {"found"}, "kind": {"channel"}}), 200, "Found One", "@found", "1.5M subscribers")
-	h.src.With(func(m *mock.Source) { m.SearchErr = errors.New("boom") })
-	h.mustContain(h.do("POST", "/add/search", url.Values{"q": {"found"}}), 200, "Search failed: boom")
-	h.mustContain(h.get("/status"), 200, "Channel search failed")
-	h.src.With(func(m *mock.Source) { m.SearchErr = nil })
-	h.do("POST", "/add/search", url.Values{"q": {"found"}})
-	if strings.Contains(h.get("/status").Body.String(), "Channel search failed") {
-		t.Fatal("search issue should clear after a success")
+	h.mustContain(h.get("/add"), 200, `name="q"`, "Playlists need their link")
+	if page := h.get("/add").Body.String(); strings.Contains(page, `name="kind"`) || strings.Contains(page, "/add/search") || strings.Contains(page, "/add/preview") {
+		t.Fatalf("there is one lookup box now:\n%s", page)
 	}
 
-	h.mustContain(h.do("POST", "/add/preview", url.Values{"ref": {"nope"}}), 200, "not a recognized channel")
-	prev := h.do("POST", "/add/preview", url.Values{"ref": {"@new"}})
-	h.mustContain(prev, 200, "New &lt;Channel&gt;", `name="id" value="UCnew"`, "Add feed")
+	// Several matches are listed; Select looks the chosen one up again by its ID.
+	list := h.do("POST", "/add/find", url.Values{"q": {"found"}})
+	h.mustContain(list, 200, "Found One", "Found Two", "@found", "1.5M subscribers", `hx-post="/add/find"`, `name="q" value="UCnew"`)
+	if strings.Contains(list.Body.String(), `name="id" value=`) {
+		t.Fatal("a list is not a preview")
+	}
+	// One match goes straight to the preview, whether it came from a reference or a name search.
+	for _, q := range []string{"@new", "UCnew", "lonely"} {
+		h.mustContain(h.do("POST", "/add/find", url.Values{"q": {q}}), 200, "New &lt;Channel&gt;", "@new · 1.5M subscribers", `name="id" value="UCnew"`, "Add feed")
+	}
+	h.mustContain(h.do("POST", "/add/find", url.Values{"q": {"zero"}}), 200, "No channels found for “zero”")
+
+	// Mistyped references are shown inline; service problems also reach the banner and clear on success.
+	h.mustContain(h.do("POST", "/add/find", url.Values{"q": {"nope"}}), 200, "not a recognized channel URL")
+	h.mustContain(h.do("POST", "/add/find", url.Values{"q": {""}}), 200, "type a channel name")
+	if strings.Contains(h.get("/status").Body.String(), "Looking up feeds failed") {
+		t.Fatal("a mistyped link must not raise a banner")
+	}
+	h.mustContain(h.do("POST", "/add/find", url.Values{"q": {"boom"}}), 200, "boom")
+	h.mustContain(h.get("/status"), 200, "Looking up feeds failed")
+	h.do("POST", "/add/find", url.Values{"q": {"found"}})
+	if strings.Contains(h.get("/status").Body.String(), "Looking up feeds failed") {
+		t.Fatal("the issue should clear after a success")
+	}
 
 	// A forged id with no preview is refused.
 	h.mustContain(h.do("POST", "/add", url.Values{"id": {"UCforged"}}), 200, "preview expired")
@@ -355,49 +382,90 @@ func TestAddFlow(t *testing.T) {
 	if sum.Meta.ImageURL != "https://img/x.jpg" || sum.Meta.Description != "about" {
 		t.Fatalf("meta: %+v", sum.Meta)
 	}
-	h.mustContain(h.do("POST", "/add/preview", url.Values{"ref": {"@new"}}), 200, "Already in your library")
+	h.mustContain(h.do("POST", "/add/find", url.Values{"q": {"@new"}}), 200, "Already in your library")
 	h.mustContain(h.do("POST", "/add", url.Values{"id": {"UCnew"}}), 200, "already in your library")
 }
 
-func TestSettingsSaveValidationAndRestartNotice(t *testing.T) {
+func TestSettingsSaveValidationAndApply(t *testing.T) {
 	h := newHarness(t)
-	h.mustContain(h.get("/settings"), 200, `name="base_url" value="http://pod.example:8080"`, `name="update_interval" value="30m"`)
+	h.mustContain(h.get("/settings"), 200, `name="update_interval" value="30m"`, `name="min_duration" value="60s"`, `name="max_resolution" min="0" value="720"`)
 
 	form := func() url.Values {
-		c := h.cfg.Get()
 		return url.Values{
-			"base_url":    {c.Server.BaseURL},
-			"yt_dlp_path": {"yt-dlp"}, "concurrency": {"3"}, "update_interval": {"15m"}, "cookies_file": {""},
-			"format": {"audio"}, "max_resolution": {"720"}, "exclude_shorts": {"on"}, "title_include": {""}, "title_exclude": {"(?i)sponsor"},
+			"concurrency": {"3"}, "update_interval": {"15m"},
+			"format": {"audio"}, "max_resolution": {"480"}, "min_duration": {"90s"}, "title_include": {""}, "title_exclude": {"(?i)sponsor"},
 			"page_size": {"4"}, "cleanup_keep_last": {"20"}, "cleanup_after_days": {"0"},
 		}
 	}
-	f := form()
-	rec := h.do("POST", "/settings", f)
+	rec := h.do("POST", "/settings", form())
 	h.mustContain(rec, 200, "Saved. Changes are applied.")
 	got := h.cfg.Get()
-	if got.Download.Concurrency != 3 || got.Download.UpdateInterval.Std() != 15*time.Minute || got.Defaults.Format != "audio" || got.Defaults.PageSize != 4 || got.Download.SelfUpdate {
+	if got.Download.Concurrency != 3 || got.Download.UpdateInterval.Std() != 15*time.Minute || got.Defaults.Format != "audio" || got.Defaults.PageSize != 4 ||
+		got.Defaults.MaxResolution != 480 || got.Defaults.MinDuration.Std() != 90*time.Second || got.Download.SelfUpdate {
 		t.Fatalf("not applied: %+v %+v", got.Download, got.Defaults)
+	}
+	h.mustContain(h.get("/settings"), 200, `name="min_duration" value="90s"`)
+
+	// Durations may be bare seconds; 0 means no minimum.
+	f := form()
+	f.Set("min_duration", "45")
+	h.mustContain(h.do("POST", "/settings", f), 200, "Saved")
+	if h.cfg.Get().Defaults.MinDuration.Std() != 45*time.Second {
+		t.Fatalf("%v", h.cfg.Get().Defaults.MinDuration)
+	}
+	f.Set("min_duration", "0")
+	h.mustContain(h.do("POST", "/settings", f), 200, "Saved")
+	if h.cfg.Get().Defaults.MinDuration != 0 {
+		t.Fatal("0 = no minimum")
 	}
 
 	f = form()
 	f.Set("title_exclude", "(")
 	f.Set("page_size", "0")
 	f.Set("update_interval", "soon")
+	f.Set("min_duration", "short")
 	rec = h.do("POST", "/settings", f)
-	h.mustContain(rec, 200, "Not saved", "title_exclude", "page_size", "update_interval", `name="title_exclude" value="("`)
+	h.mustContain(rec, 200, "Not saved", "title_exclude", "page_size", "update_interval", "min_duration", `name="title_exclude" value="("`)
 	if h.cfg.Get().Defaults.TitleExclude != "(?i)sponsor" {
 		t.Fatal("invalid save must not change config")
 	}
+	f = form()
+	f.Del("min_duration")
+	h.mustContain(h.do("POST", "/settings", f), 200, "Not saved", "min_duration is required")
 
 	// The sync service picked the new values up through Apply.
 	if sc := h.syncrCfg.Get(); sc.Download.Concurrency != 3 || sc.Defaults.PageSize != 4 || sc.Defaults.TitleExclude != "(?i)sponsor" {
 		t.Fatalf("the sync service must have applied the web UI's settings: %+v", sc.Download)
 	}
-	// The listen address and data directory are shown but not editable.
+}
+
+// What belongs to whoever runs the service is shown, never editable: not by form, not by a forged post.
+func TestSettingsPageDoesNotEditOperatorSettings(t *testing.T) {
+	h := newHarness(t)
+	h.cfg.Update(func(c *podsync.Config) error { c.Download.CookiesFile = "/config/cookies.txt"; return nil })
 	page := h.get("/settings").Body.String()
-	if !strings.Contains(page, "<code>:8080</code>") || !strings.Contains(page, "<code>127.0.0.1:8081</code>") || strings.Contains(page, `name="listen_addr"`) || strings.Contains(page, `name="data_dir"`) {
-		t.Fatalf("listen address and data directory must be read-only:\n%s", page)
+	for _, field := range []string{"base_url", "yt_dlp_path", "cookies_file", "listen_addr", "api_addr", "data_dir"} {
+		if strings.Contains(page, `name="`+field+`"`) {
+			t.Errorf("%s must not be an editable field", field)
+		}
+	}
+	for _, shown := range []string{"<code>:8080</code>", "<code>127.0.0.1:8081</code>", "<code>http://pod.example:8080</code>", "<code>yt-dlp</code>", "<code>/config/cookies.txt</code>"} {
+		if !strings.Contains(page, shown) {
+			t.Errorf("settings page should show %s read-only:\n%s", shown, page)
+		}
+	}
+
+	before := h.cfg.Get()
+	forged := url.Values{
+		"base_url": {"http://evil.example"}, "yt_dlp_path": {"/bin/sh"}, "cookies_file": {"/etc/passwd"},
+		"listen_addr": {":1"}, "api_addr": {":2"}, "data_dir": {"/tmp/elsewhere"},
+		"concurrency": {"2"}, "update_interval": {"30m"}, "format": {"video"}, "max_resolution": {"720"}, "min_duration": {"60s"},
+		"page_size": {"3"}, "cleanup_keep_last": {"0"}, "cleanup_after_days": {"0"},
+	}
+	h.mustContain(h.do("POST", "/settings", forged), 200, "Saved")
+	after := h.cfg.Get()
+	if after.Server != before.Server || after.Download.YtDlpPath != before.Download.YtDlpPath || after.Download.CookiesFile != before.Download.CookiesFile {
+		t.Fatalf("a forged post changed operator settings: %+v -> %+v", before.Server, after.Server)
 	}
 }
 
@@ -409,28 +477,40 @@ func TestSettingsSavedEvenWhenSyncServiceIsDown(t *testing.T) {
 		t.Fatal(err)
 	}
 	h = &harness{t: t, h: ui.Handler(), cfg: h.cfg, lib: h.lib}
-	c := h.cfg.Get()
 	rec := h.do("POST", "/settings", url.Values{
-		"base_url": {"http://changed.example:8080"}, "yt_dlp_path": {c.Download.YtDlpPath}, "concurrency": {"2"}, "update_interval": {"30m"},
-		"format": {"video"}, "max_resolution": {"1080"}, "exclude_shorts": {"on"}, "page_size": {"3"}, "cleanup_keep_last": {"0"}, "cleanup_after_days": {"0"},
+		"concurrency": {"5"}, "update_interval": {"30m"},
+		"format": {"video"}, "max_resolution": {"720"}, "min_duration": {"60s"}, "page_size": {"3"}, "cleanup_keep_last": {"0"}, "cleanup_after_days": {"0"},
 	})
 	h.mustContain(rec, 200, "Saved, but the sync service could not be reached")
-	if h.cfg.Get().Server.BaseURL != "http://changed.example:8080" {
+	if h.cfg.Get().Download.Concurrency != 5 {
 		t.Fatal("the change must be saved even though the sync service could not be told")
 	}
 }
 
 func TestFeedSettingsOverridesAndInherit(t *testing.T) {
 	h := newHarness(t)
-	h.mustContain(h.get("/feed/UCone/settings"), 200, "Default (video)", `placeholder="3"`)
-	form := url.Values{"name": {"Renamed"}, "format": {"audio"}, "max_resolution": {""}, "exclude_shorts": {"no"}, "title_include": {""}, "title_exclude": {"live"},
+	h.mustContain(h.get("/feed/UCone/settings"), 200, "Default (video)", `placeholder="3"`, `name="min_duration" value="" placeholder="60s"`)
+	form := url.Values{"name": {"Renamed"}, "format": {"audio"}, "max_resolution": {""}, "min_duration": {"0"}, "title_include": {""}, "title_exclude": {"live"},
 		"page_size": {"7"}, "cleanup_keep_last": {""}, "cleanup_after_days": {"30"}}
-	h.mustContain(h.do("POST", "/feed/UCone/settings", form), 200, "Saved")
+	h.mustContain(h.do("POST", "/feed/UCone/settings", form), 200, "Saved", `name="min_duration" value="0s"`)
 	f, _ := h.cfg.Get().Feed("UCone")
 	eff := f.Effective(h.cfg.Get().Defaults)
-	if f.Name != "Renamed" || eff.Format != "audio" || eff.ExcludeShorts || eff.PageSize != 7 || eff.CleanupAfterDays != 30 || eff.MaxResolution != 1080 || f.MaxResolution != nil {
+	if f.Name != "Renamed" || eff.Format != "audio" || f.MinDuration == nil || eff.MinDuration != 0 || eff.PageSize != 7 || eff.CleanupAfterDays != 30 || eff.MaxResolution != 720 || f.MaxResolution != nil {
 		t.Fatalf("%+v / %+v", f, eff)
 	}
+	// Blank inherits the default again; bare numbers are seconds.
+	form.Set("min_duration", "")
+	h.mustContain(h.do("POST", "/feed/UCone/settings", form), 200, "Saved")
+	if f, _ := h.cfg.Get().Feed("UCone"); f.MinDuration != nil {
+		t.Fatalf("blank must inherit: %+v", f.MinDuration)
+	}
+	form.Set("min_duration", "45")
+	h.mustContain(h.do("POST", "/feed/UCone/settings", form), 200, "Saved")
+	if f, _ := h.cfg.Get().Feed("UCone"); f.MinDuration == nil || f.MinDuration.Std() != 45*time.Second {
+		t.Fatalf("%+v", f.MinDuration)
+	}
+	form.Set("min_duration", "x")
+	h.mustContain(h.do("POST", "/feed/UCone/settings", form), 200, "Not saved", "min_duration")
 	bad := url.Values{"name": {"X"}, "title_include": {"("}}
 	h.mustContain(h.do("POST", "/feed/UCone/settings", bad), 200, "Not saved", "regular expression")
 	h.mustContain(h.get("/feed/UCnone/settings"), 404)
@@ -495,7 +575,7 @@ func TestSyncServiceOutageIsVisibleButBrowsingStillWorks(t *testing.T) {
 	// ...and actions that need the service say so instead of failing silently.
 	d.mustContain(d.do("POST", "/pull", nil), 200, "unreachable")
 	d.mustContain(d.get("/feed/UCone/older?offset=3"), 200, "Could not load more", "unreachable")
-	d.mustContain(d.do("POST", "/add/preview", url.Values{"ref": {"@x"}}), 200, "unreachable")
+	d.mustContain(d.do("POST", "/add/find", url.Values{"q": {"@x"}}), 200, "unreachable")
 }
 
 // The web UI is for managing the library; syncr publishes the feeds and media.
@@ -514,13 +594,10 @@ func TestWebUIDoesNotPublishFeedsOrMedia(t *testing.T) {
 	if !strings.Contains(csp, "img-src 'self' https: data: http://pod.example:8080") || !strings.Contains(csp, "media-src 'self' http://pod.example:8080") {
 		t.Fatalf("CSP must allow images and media from syncr's public address: %s", csp)
 	}
-	// Changing the public address in Settings moves the links and the CSP with it.
-	c := h.cfg.Get()
-	rec2 := h.do("POST", "/settings", url.Values{
-		"base_url": {"http://towhee:8080"}, "yt_dlp_path": {c.Download.YtDlpPath}, "concurrency": {"2"}, "update_interval": {"30m"},
-		"format": {"video"}, "max_resolution": {"1080"}, "exclude_shorts": {"on"}, "page_size": {"3"}, "cleanup_keep_last": {"0"}, "cleanup_after_days": {"0"},
-	})
-	h.mustContain(rec2, 200, "Saved")
+	// Changing the public address (by editing config.toml; Settings doesn't) moves the links and the CSP with it.
+	if err := h.cfg.Update(func(c *podsync.Config) error { c.Server.BaseURL = "http://towhee:8080"; return nil }); err != nil {
+		t.Fatal(err)
+	}
 	page := h.get("/feed/UCone")
 	h.mustContain(page, 200, `src="http://towhee:8080/media/UCone/vid0000000.jpg"`, `value="http://towhee:8080/feeds/UCone.xml"`)
 	if !strings.Contains(page.Header().Get("Content-Security-Policy"), "http://towhee:8080") {

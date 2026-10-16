@@ -44,7 +44,7 @@ type YouTube struct {
 
 type cachedSearch struct {
 	at      time.Time
-	results []podsync.SearchResult
+	results []podsync.FeedInfo
 }
 
 func New(settings func() Settings) *YouTube {
@@ -54,7 +54,6 @@ func New(settings func() Settings) *YouTube {
 func (y *YouTube) Kind() string { return Kind }
 
 const (
-	shortMaxSeconds = 60
 	listTimeout     = 3 * time.Minute
 	resolveTimeout  = 2 * time.Minute
 	downloadTimeout = 4 * time.Hour
@@ -182,10 +181,9 @@ func parseRef(ref string) (string, refKind, error) {
 		return "", 0, podsync.Invalid("enter a channel URL, @handle, or ID")
 	}
 	if strings.ContainsAny(ref, " \t\r\n") {
-		return "", 0, podsync.Invalid("that looks like a search term, not a URL or @handle; use the search box")
+		return "", 0, podsync.Invalid("a URL, @handle or ID cannot contain spaces")
 	}
-	lower := strings.ToLower(ref)
-	if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") || strings.HasPrefix(lower, "youtube.com") || strings.HasPrefix(lower, "www.youtube.com") || strings.HasPrefix(lower, "youtu.be") {
+	if looksLikeURL(ref) {
 		if !strings.Contains(ref, "://") {
 			ref = "https://" + ref
 		}
@@ -237,10 +235,30 @@ func parseRef(ref string) (string, refKind, error) {
 		return playlistURL(ref), refPlaylist, nil
 	case handleRe.MatchString(ref):
 		return "https://www.youtube.com/" + ref + "/videos", refChannel, nil
-	case handleRe.MatchString("@" + ref):
-		return "https://www.youtube.com/@" + ref + "/videos", refChannel, nil
 	}
 	return "", 0, podsync.Invalid("not a recognized channel URL, @handle, channel ID or playlist ID")
+}
+
+// looksLikeURL is the "this is a link" hint: a scheme, or a bare YouTube host.
+func looksLikeURL(s string) bool {
+	l := strings.ToLower(s)
+	if strings.HasPrefix(l, "http://") || strings.HasPrefix(l, "https://") {
+		return true
+	}
+	for h := range youtubeHosts {
+		if strings.HasPrefix(l, h) {
+			return true
+		}
+	}
+	return false
+}
+
+// isDirectReference is the hint that a query names one specific feed rather
+// than describing it: a URL, an @handle, or a channel ID. Anything else is a
+// channel name to search for. (A bare playlist ID is deliberately not a hint:
+// playlists are added by URL.)
+func isDirectReference(q string) bool {
+	return looksLikeURL(q) || strings.HasPrefix(q, "@") || channelIDRe.MatchString(q)
 }
 
 func channelURL(id string) string  { return "https://www.youtube.com/channel/" + id + "/videos" }
@@ -320,27 +338,26 @@ func (t thumbs) avatar() string {
 }
 
 type ytEntry struct {
-	ID            string    `json:"id"`
-	Title         string    `json:"title"`
-	URL           string    `json:"url"`
-	Description   string    `json:"description"`
-	Duration      float64   `json:"duration"`
-	ViewCount     float64   `json:"view_count"`
-	Height        float64   `json:"height"`
-	LiveStatus    string    `json:"live_status"`
-	Timestamp     float64   `json:"timestamp"`
-	UploadDate    string    `json:"upload_date"`
-	Channel       string    `json:"channel"`
-	ChannelID     string    `json:"channel_id"`
-	Uploader      string    `json:"uploader"`
-	UploaderID    string    `json:"uploader_id"`
-	Followers     float64   `json:"channel_follower_count"`
-	PlaylistCount float64   `json:"playlist_count"`
-	Thumbnail     string    `json:"thumbnail"`
-	Thumbnails    thumbs    `json:"thumbnails"`
-	WebpageURL    string    `json:"webpage_url"`
-	Type          string    `json:"_type"`
-	Entries       []ytEntry `json:"entries"`
+	ID          string    `json:"id"`
+	Title       string    `json:"title"`
+	URL         string    `json:"url"`
+	Description string    `json:"description"`
+	Duration    float64   `json:"duration"`
+	ViewCount   float64   `json:"view_count"`
+	Height      float64   `json:"height"`
+	LiveStatus  string    `json:"live_status"`
+	Timestamp   float64   `json:"timestamp"`
+	UploadDate  string    `json:"upload_date"`
+	Channel     string    `json:"channel"`
+	ChannelID   string    `json:"channel_id"`
+	Uploader    string    `json:"uploader"`
+	UploaderID  string    `json:"uploader_id"`
+	Followers   float64   `json:"channel_follower_count"`
+	Thumbnail   string    `json:"thumbnail"`
+	Thumbnails  thumbs    `json:"thumbnails"`
+	WebpageURL  string    `json:"webpage_url"`
+	Type        string    `json:"_type"`
+	Entries     []ytEntry `json:"entries"`
 }
 
 func parseJSON(out []byte, v any) error {
@@ -396,10 +413,14 @@ func (y *YouTube) Resolve(ctx context.Context, ref string) (podsync.FeedInfo, er
 	}
 	info := podsync.FeedInfo{Source: Kind, ID: p.ID, Description: strings.TrimSpace(p.Description), ImageURL: p.Thumbnails.avatar()}
 	if channelIDRe.MatchString(p.ID) {
-		info.Kind = "channel"
+		info.Kind = podsync.FeedChannel
+		info.Subscribers = int64(p.Followers)
+		if strings.HasPrefix(p.UploaderID, "@") {
+			info.Handle = p.UploaderID
+		}
 		info.Name = firstNonEmpty(p.Channel, p.Uploader, strings.TrimSuffix(p.Title, " - Videos"), p.ID)
 	} else {
-		info.Kind = "playlist"
+		info.Kind = podsync.FeedPlaylist
 		info.Name = firstNonEmpty(p.Title, p.ID)
 	}
 	return info, nil
@@ -448,7 +469,6 @@ func (y *YouTube) ListEpisodes(ctx context.Context, feed podsync.FeedInfo, offse
 			Channel:     firstNonEmpty(e.Channel, e.Uploader),
 			ViewCount:   int64(e.ViewCount),
 			IsLive:      e.LiveStatus == "is_live" || e.LiveStatus == "is_upcoming" || e.LiveStatus == "post_live",
-			IsShort:     strings.Contains(e.URL, "/shorts/") || (e.Duration > 0 && e.Duration <= shortMaxSeconds),
 			Unavailable: e.Title == "[Private video]" || e.Title == "[Deleted video]",
 		}
 		if n := len(e.Thumbnails); n > 0 {
@@ -459,26 +479,36 @@ func (y *YouTube) ListEpisodes(ctx context.Context, feed podsync.FeedInfo, offse
 	return eps, nil
 }
 
-// ---- Search ----
+// ---- Find and search ----
 
-const (
-	spChannel  = "EgIQAg%253D%253D"
-	spPlaylist = "EgIQAw%253D%253D"
-)
-
-func (y *YouTube) Search(ctx context.Context, query string, kind podsync.SearchKind) ([]podsync.SearchResult, error) {
+// Find answers what the user typed when adding a feed. A URL, @handle or
+// channel ID resolves to exactly that feed (a failure is the user's input not
+// resolving, so it is reported as ErrInvalid); everything else is a channel
+// name search. Playlists are found by URL only.
+func (y *YouTube) Find(ctx context.Context, query string) ([]podsync.FeedInfo, error) {
 	query = strings.TrimSpace(query)
 	if query == "" {
-		return nil, nil
+		return nil, podsync.Invalid("type a channel name, an @handle or a YouTube link")
 	}
+	if isDirectReference(query) {
+		info, err := y.Resolve(ctx, query)
+		if err != nil {
+			return nil, podsync.InvalidErr(err)
+		}
+		return []podsync.FeedInfo{info}, nil
+	}
+	return y.searchChannels(ctx, query)
+}
+
+// sp=EgIQAg%253D%253D is YouTube's own "type: channel" search filter. It is an
+// undocumented URL parameter; if it stops working, search fails and the banner says so.
+const spChannel = "EgIQAg%253D%253D"
+
+func (y *YouTube) searchChannels(ctx context.Context, query string) ([]podsync.FeedInfo, error) {
 	if len(query) > 200 {
 		query = query[:200]
 	}
-	sp := spChannel
-	if kind == podsync.SearchPlaylist {
-		sp = spPlaylist
-	}
-	key := string(kind) + "\x00" + strings.ToLower(query)
+	key := strings.ToLower(query)
 
 	y.mu.Lock()
 	if c, ok := y.cache[key]; ok && y.now().Sub(c.at) < searchCacheTTL {
@@ -491,12 +521,12 @@ func (y *YouTube) Search(ctx context.Context, query string, kind podsync.SearchK
 	}
 	y.mu.Unlock()
 
-	u := "https://www.youtube.com/results?search_query=" + url.QueryEscape(query) + "&sp=" + sp
+	u := "https://www.youtube.com/results?search_query=" + url.QueryEscape(query) + "&sp=" + spChannel
 	out, err := y.run(ctx, resolveTimeout, append(y.baseArgs(), "-J", "--flat-playlist", "--playlist-end", "12", "--", u)...)
 	if err == nil {
 		var p ytEntry
 		if err = parseJSON(out, &p); err == nil {
-			results := parseSearch(p.Entries, kind)
+			results := parseSearch(p.Entries)
 			y.mu.Lock()
 			y.cache[key] = cachedSearch{at: y.now(), results: results}
 			if len(y.cache) > 64 {
@@ -527,32 +557,25 @@ func (y *YouTube) pruneLocked() {
 	}
 }
 
-func parseSearch(entries []ytEntry, kind podsync.SearchKind) []podsync.SearchResult {
-	var out []podsync.SearchResult
+func parseSearch(entries []ytEntry) []podsync.FeedInfo {
+	out := []podsync.FeedInfo{}
 	seen := map[string]bool{}
 	for _, e := range entries {
-		isChannel := channelIDRe.MatchString(e.ID)
-		if (kind == podsync.SearchChannel) != isChannel || seen[e.ID] {
-			continue
-		}
-		if kind == podsync.SearchPlaylist && !playlistIDRe.MatchString(e.ID) {
+		if !channelIDRe.MatchString(e.ID) || seen[e.ID] {
 			continue
 		}
 		seen[e.ID] = true
-		r := podsync.SearchResult{
-			Kind:        string(kind),
+		r := podsync.FeedInfo{
+			Source:      Kind,
+			Kind:        podsync.FeedChannel,
 			ID:          e.ID,
 			Name:        firstNonEmpty(e.Title, e.Channel, e.Uploader, e.ID),
 			Description: strings.TrimSpace(e.Description),
 			ImageURL:    e.Thumbnails.avatar(),
 			Subscribers: int64(e.Followers),
-			Items:       int(e.PlaylistCount),
 		}
 		if strings.HasPrefix(e.UploaderID, "@") {
 			r.Handle = e.UploaderID
-		}
-		if kind == podsync.SearchPlaylist {
-			r.Handle = firstNonEmpty(e.Channel, e.Uploader)
 		}
 		out = append(out, r)
 	}

@@ -93,13 +93,8 @@ func (c *Client) Status(ctx context.Context) (out podsync.SyncStatus, err error)
 	return
 }
 
-func (c *Client) Resolve(ctx context.Context, ref string) (out podsync.FeedInfo, err error) {
-	err = c.do(ctx, "GET", "/resolve", url.Values{"ref": {ref}}, nil, &out)
-	return
-}
-
-func (c *Client) Search(ctx context.Context, query string, kind podsync.SearchKind) (out []podsync.SearchResult, err error) {
-	err = c.do(ctx, "GET", "/search", url.Values{"q": {query}, "kind": {string(kind)}}, nil, &out)
+func (c *Client) Find(ctx context.Context, query string) (out []podsync.FeedInfo, err error) {
+	err = c.do(ctx, "GET", "/find", url.Values{"q": {query}}, nil, &out)
 	return
 }
 

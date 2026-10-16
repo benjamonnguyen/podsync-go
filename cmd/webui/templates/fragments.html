@@ -92,8 +92,8 @@
 {{define "feed_stats"}}<p id="feed-stats" class="muted" hx-get="/feed/{{.Card.ID}}/stats" hx-trigger="episodes-changed from:body" hx-swap="outerHTML">{{.Card.Kind}} · {{count .Card.Episodes "episode" "episodes"}} downloaded{{if .Card.Bytes}} · {{size .Card.Bytes}}{{end}} · checked {{ago .Card.LastPull}} · downloads as {{.Format}}{{if .Card.HasOverrides}} · custom settings{{end}}</p>{{end}}
 
 {{define "add_results"}}
-{{- if .Hint}}<p class="muted">{{.Hint}}</p>{{end}}
-{{- if .Err}}<p class="error">Search failed: {{.Err}}</p>{{end}}
+{{- if .Err}}<p class="error">{{.Err}}</p>{{end}}
+{{- if .Empty}}<p class="muted">No channels found for “{{.Q}}”. Try the @handle, or paste the channel link.</p>{{end}}
 {{- if .Results}}<ul class="results">
 {{- range .Results}}
   <li>
@@ -101,13 +101,12 @@
     <div class="grow"><strong>{{.Name}}</strong>
       <div class="muted">{{if .Handle}}{{.Handle}}{{end}}{{if .Subscribers}} · {{compact .Subscribers}} subscribers{{end}}</div>
       {{with .Description}}<div class="muted clip">{{.}}</div>{{end}}</div>
-    <form hx-post="/add/preview" hx-target="#preview"><input type="hidden" name="ref" value="{{.ID}}"><button class="btn" type="submit">Select</button></form>
+    <form hx-post="/add/find" hx-target="#found"><input type="hidden" name="q" value="{{.ID}}"><button class="btn" type="submit">Select</button></form>
   </li>
 {{- end}}
 </ul>
-{{- else if and .Q (not .Err) (not .Hint)}}<p class="muted">No results.</p>{{end}}
+{{- end}}
 {{end}}
-
 {{define "add_preview"}}
 {{- if .Err}}<p class="error">{{.Err}}</p>{{end}}
 {{- with .Info}}
@@ -115,12 +114,12 @@
   {{if .ImageURL}}<img class="avatar" src="{{.ImageURL}}" alt="" referrerpolicy="no-referrer">{{else}}<div class="avatar placeholder"></div>{{end}}
   <div class="card-body">
     <h3>{{.Name}}</h3>
-    <p class="muted">{{.Kind}} · {{.ID}}</p>
+    <p class="muted">{{.Kind}}{{if .Handle}} · {{.Handle}}{{end}}{{if .Subscribers}} · {{compact .Subscribers}} subscribers{{end}} · {{.ID}}</p>
     {{with .Description}}<p class="clip">{{.}}</p>{{end}}
     {{if $.Exists}}
       <p class="muted">Already in your library.</p><a class="btn" href="/feed/{{.ID}}">Open</a>
     {{else}}
-      <form hx-post="/add" hx-disabled-elt="find button" class="inline-form">
+      <form hx-post="/add" hx-target="#found" hx-disabled-elt="find button" class="inline-form">
         <input type="hidden" name="id" value="{{.ID}}">
         <label>Episodes per update <input type="number" name="page_size" min="1" max="500" placeholder="{{$.DefaultPageSize}}"></label>
         <button class="btn primary" type="submit">Add feed</button>

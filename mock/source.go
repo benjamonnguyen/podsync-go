@@ -20,16 +20,17 @@ var _ podsync.SourceUpdater = (*Source)(nil)
 type Source struct {
 	Mu sync.Mutex
 
-	Episodes      []podsync.EpisodeInfo // newest first
-	ListErr       error
-	SearchErr     error
-	SearchResults []podsync.SearchResult
-	ResolveFn     func(ref string) (podsync.FeedInfo, error)
-	DownloadErr   map[string]error
-	Gate          chan struct{} // when non-nil, Download blocks until it is closed
-	HealthResult  podsync.Health
-	UpdateErr     error
-	Published     time.Time // base publish date for downloaded episodes (newest = Published)
+	Episodes     []podsync.EpisodeInfo // newest first
+	ListErr      error
+	FindErr      error
+	FindResults  []podsync.FeedInfo // returned by Find when FindFn is nil
+	FindFn       func(query string) ([]podsync.FeedInfo, error)
+	ResolveFn    func(ref string) (podsync.FeedInfo, error)
+	DownloadErr  map[string]error
+	Gate         chan struct{} // when non-nil, Download blocks until it is closed
+	HealthResult podsync.Health
+	UpdateErr    error
+	Published    time.Time // base publish date for downloaded episodes (newest = Published)
 
 	Downloads  map[string]int
 	Active     int
@@ -72,10 +73,14 @@ func (s *Source) Resolve(_ context.Context, ref string) (podsync.FeedInfo, error
 	return podsync.FeedInfo{Source: "youtube", Kind: "channel", ID: ref, Name: "Fake", ImageURL: "http://img/x.jpg"}, nil
 }
 
-func (s *Source) Search(context.Context, string, podsync.SearchKind) ([]podsync.SearchResult, error) {
+func (s *Source) Find(_ context.Context, query string) ([]podsync.FeedInfo, error) {
 	s.Mu.Lock()
-	defer s.Mu.Unlock()
-	return s.SearchResults, s.SearchErr
+	fn, res, err := s.FindFn, s.FindResults, s.FindErr
+	s.Mu.Unlock()
+	if fn != nil {
+		return fn(query)
+	}
+	return res, err
 }
 
 func (s *Source) ListEpisodes(_ context.Context, _ podsync.FeedInfo, offset, limit int) ([]podsync.EpisodeInfo, error) {

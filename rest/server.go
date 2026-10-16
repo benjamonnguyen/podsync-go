@@ -43,8 +43,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST "+v1+"/apply", s.apply)
 	mux.HandleFunc("POST "+v1+"/pull", s.pull)
 	mux.HandleFunc("GET "+v1+"/status", s.status)
-	mux.HandleFunc("GET "+v1+"/resolve", s.resolve)
-	mux.HandleFunc("GET "+v1+"/search", s.search)
+	mux.HandleFunc("GET "+v1+"/find", s.find)
 	mux.HandleFunc("GET "+v1+"/feeds/{id}/listing", s.listing)
 	return CrossSiteGuard(requireJSON(mux))
 }
@@ -139,17 +138,8 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	reply(w, http.StatusOK, out, err)
 }
 
-func (s *Server) resolve(w http.ResponseWriter, r *http.Request) {
-	out, err := s.svc.Resolve(r.Context(), r.URL.Query().Get("ref"))
-	reply(w, http.StatusOK, out, err)
-}
-
-func (s *Server) search(w http.ResponseWriter, r *http.Request) {
-	kind := podsync.SearchChannel
-	if r.URL.Query().Get("kind") == string(podsync.SearchPlaylist) {
-		kind = podsync.SearchPlaylist
-	}
-	out, err := s.svc.Search(r.Context(), r.URL.Query().Get("q"), kind)
+func (s *Server) find(w http.ResponseWriter, r *http.Request) {
+	out, err := s.svc.Find(r.Context(), r.URL.Query().Get("q"))
 	reply(w, http.StatusOK, out, err)
 }
 

@@ -26,10 +26,9 @@ type Syncer interface {
 	// Status reports live activity, current problems and in-flight downloads.
 	Status(ctx context.Context) (SyncStatus, error)
 
-	// Resolve turns a URL, @handle or ID into a feed description.
-	Resolve(ctx context.Context, ref string) (FeedInfo, error)
-	// Search searches the default source by name.
-	Search(ctx context.Context, query string, kind SearchKind) ([]SearchResult, error)
+	// Find looks up what a user typed to add a feed: a URL or @handle resolves
+	// to that feed, anything else is a channel name search (see Source.Find).
+	Find(ctx context.Context, query string) ([]FeedInfo, error)
 	// List returns the window [offset, offset+limit) of a configured feed's
 	// episodes straight from its source, newest first. Nothing is stored.
 	List(ctx context.Context, feedID string, offset, limit int) ([]EpisodeInfo, error)

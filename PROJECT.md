@@ -22,7 +22,7 @@ manual refresh, settings, issue banner) instead of config-file-only operation.
 - Support YouTube channels and playlists as feed sources.
 - Download audio or video via `yt-dlp`, with configurable quality/resolution caps.
 - Generate a standards-compliant podcast RSS feed for each configured feed.
-- Apply per-feed filters: exclude Shorts, title regex include/exclude,
+- Apply per-feed filters: minimum video duration (skips Shorts), title regex include/exclude,
   max resolution, audio-only vs video.
 - Configurable retention/cleanup of downloaded episodes (age- and/or count-based).
 - Persist configuration in a plaintext file that the app loads at startup and
@@ -119,11 +119,13 @@ type Source interface {
     Kind() string                                   // stable identifier, e.g. "youtube"
     Check(ctx context.Context) Health               // are the external tools (yt-dlp, ffmpeg) usable?
 
-    // Resolve turns a user-supplied URL, @handle or ID into a canonical feed.
-    Resolve(ctx context.Context, ref string) (FeedInfo, error)
+    // Find answers what a user typed when adding a feed, guided by hints: a URL, an
+    // @handle or a channel ID resolves to exactly that feed; anything else is searched
+    // by name among channels. Playlists are only found by URL.
+    Find(ctx context.Context, query string) ([]FeedInfo, error)
 
-    // Search finds channels or playlists by name.
-    Search(ctx context.Context, query string, kind SearchKind) ([]SearchResult, error)
+    // Resolve turns an exact reference (URL, @handle or ID) into its canonical feed.
+    Resolve(ctx context.Context, ref string) (FeedInfo, error)
 
     // ListEpisodes returns the window [offset, offset+limit) of a feed's episodes,
     // newest first. The scheduler calls it with offset 0 and limit = page_size;
@@ -142,9 +144,9 @@ type Updater interface{ SelfUpdate(ctx context.Context) (string, error) }
 
 A `SourceRegistry` maps `Kind() -> Source`. The puller, resolver, and API
 handlers depend only on the `Source` interface, never on YouTube specifics.
-Filtering (Shorts exclusion, title regex, resolution cap) is applied generically
+Filtering (minimum duration, title regex) is applied generically
 in the puller using metadata every adapter is required to populate
-(`EpisodeInfo.Duration`, `.IsShort`, `.Title`, available formats), so adapters
+(`EpisodeInfo.DurationSec`, `.Title`, ...), so adapters
 stay thin.
 
 ### 4.2 YouTube adapter
@@ -155,13 +157,12 @@ stay thin.
 - Playlist/channel listing uses `--flat-playlist --dump-single-json` with
   `--playlist-start`/`--playlist-end` derived from the `offset`/`limit` passed
   to `ListEpisodes`, so each call only touches the requested window; full
-  metadata fetch happens lazily per-episode when first downloaded (duration,
-  upload date, Shorts heuristic).
-- Shorts detection: yt-dlp exposes `duration` and the episode URL path
-  (`/shorts/...`); treat as Short if either the source URL used the `/shorts/`
-  form or duration ≤ 60s, configurable.
+  metadata fetch happens lazily per-episode when first downloaded (upload
+  date, description, resolution). The flat listing already carries `duration`.
+- Shorts have no special handling: the `min_duration` filter (default 60s)
+  skips anything shorter, using the listing's duration.
 - Resolution cap enforced via yt-dlp format selector
-  (e.g. `bestvideo[height<=?1080]+bestaudio/best[height<=?1080]`); audio-only
+  (e.g. `bestvideo[height<=?720]+bestaudio/best[height<=?720]`); audio-only
   mode uses `-x --audio-format <fmt>`.
 
 ### 4.3 Library storage: filesystem + sidecar files (no DB)
@@ -199,7 +200,7 @@ data_dir/
   yt-dlp if the file is missing or stale. It is never the only place a
   feed's existence is recorded; config.toml is.
 - **Episode sidecar** (`<episode-id>.json`): app-owned metadata — title,
-  upload date, duration, Shorts flag, applied-filter outcome, download
+  upload date, duration, download
   timestamp, `status` (`downloaded` | `cleaned` | `failed`), `manual` bool (downloaded via
   the UI's Load More rather than the scheduler — exempt from cleanup, §6.1),
   and room for similar flags later. Sidecars exist only for episodes that
@@ -273,8 +274,8 @@ cookies_file = ""            # optional Netscape cookies.txt passed to yt-dlp
 
 [defaults]                    # template applied to newly-added feeds
 format = "video"              # "video" | "audio"
-max_resolution = 1080
-exclude_shorts = true
+max_resolution = 720
+min_duration = "60s"          # skip videos shorter than this (how Shorts are skipped); "0s" = none
 title_include = ""            # regex; only matching titles are downloaded (empty = all)
 title_exclude = ""            # regex; matching titles are skipped (empty = none)
 cleanup_after_days = 0         # 0 = disabled
@@ -286,8 +287,8 @@ id = "UCxxxxxxxxxxxxxxxxxxxxxx"
 kind = "channel"              # "channel" | "playlist"
 name = "Some Channel"
 format = "audio"              # overrides [defaults]
-max_resolution = 720
-exclude_shorts = true
+max_resolution = 480
+min_duration = "0s"
 title_exclude = "(?i)#shorts|\\bcompilation\\b"
 cleanup_after_days = 60
 cleanup_keep_last = 20
@@ -302,7 +303,7 @@ inherit the default.
 ### 6.1 Per-feed / global filters
 - Audio vs video output mode.
 - Max resolution cap (video mode).
-- Exclude Shorts (heuristic in §4.2, overridable).
+- Minimum duration (`min_duration`, default 60s): videos shorter than this are skipped, which is how YouTube Shorts are excluded; `0s` disables it, and videos of unknown length are never skipped.
 - Title filters: two Go `regexp` patterns. `title_include` — if set, only
   titles that match are downloaded. `title_exclude` — titles that match are
   skipped. Both apply (include first, then exclude). Patterns are validated
@@ -353,7 +354,7 @@ backfill mode.
     `ListEpisodes(feed, N, page_size)`, drops any already downloaded, and
     returns HTML rows appended before the button (the button re-renders with
     the new offset). Offsets count raw source positions *before* filtering so
-    pages stay stable. The feed's filters (Shorts, title regex) apply to these
+    pages stay stable. The feed's filters (minimum duration, title regex) apply to these
     results as they do to scheduled pulls; whether to show filtered-out ones
     is an open question (§11).
   - Appearance: not-downloaded episodes render **faded** (reduced opacity),
@@ -377,50 +378,48 @@ backfill mode.
 - **Search bar**: filter episodes (and/or feeds) by title text.
 - **Force pull button**: trigger an immediate check-for-new-episodes pass,
   globally or per-feed, with visible progress/status.
-- **Settings page**: form view over config.toml's `[server]`, `[download]`,
-  and `[defaults]` sections, with an "Apply" action that validates and writes
-  config.toml back, then reloads affected state (e.g. rescheduling the
-  puller interval) without a full restart where feasible. Per-feed
-  overrides are a separate, lighter-weight edit surface inline in the
-  library view — editing writes back to that feed's entry in
-  config.toml's `[[feeds]]` array (same atomic-write path), not a
-  sidecar.
-- **Add feed**: paste a channel/playlist URL (and, per §8, optionally
-  a bare @handle, or a free-text search) to resolve it, optionally override
-  `page_size` (§6.3), and append it to config.toml; the first pull then
-  fetches the newest `page_size` episodes.
+- **Settings page**: edits the operational knobs (simultaneous downloads, update
+  interval, yt-dlp self-update) and the `[defaults]` for feeds, with an "Apply" action that
+  validates and writes config.toml, then tells syncr to apply it. Everything that belongs
+  to whoever runs the service is shown read-only and only changed in config.toml: the
+  public address (`base_url`), the listen/API addresses, the data directory, `yt_dlp_path`
+  and `cookies_file` (a web form must not be able to repoint the downloader or the
+  published address). Per-feed overrides are edited on the feed's own settings page and
+  written to that feed's entry in `[[feeds]]`.
+- **Add feed**: one box (§8): a link or @handle resolves to that feed, anything else is a
+  channel name search; one match goes straight to a preview, several are listed. Playlists
+  are added by link only. Optionally override `page_size` (§6.3); the feed is appended to
+  config.toml and the first pull fetches the newest `page_size` episodes.
 
-## 8. Channel discovery: handles and search
+## 8. Adding feeds: one lookup, guided by hints
 
-### 8.1 Handle / URL resolution (v1, direct add)
+The Add page has a single input. `Source.Find` decides what to do from hints in
+what was typed, in this order:
 
-- **Why it's needed**: users think in `@handle` terms; internally we want the
-  stable `UC...` channel ID (handles can be reassigned/changed; IDs don't).
-- **Mechanism**: pass `https://www.youtube.com/@handle` (or a channel/playlist
-  URL) straight to `yt-dlp --dump-single-json`; the response includes the
-  resolved `channel_id`. No API key, no extra dependency — this is the
-  adapter's `Resolve` method handling a direct reference.
+1. **A link** (`http(s)://…` or a bare YouTube host): resolve it. Channel, playlist and
+   single-video links all work (a video resolves to its channel).
+2. **An `@handle`** (or a `UC…` channel ID): resolve it.
+3. **Anything else**: search channels by that name.
 
-### 8.2 Free-text channel search (v1, in scope)
+Playlists are never searched for; a playlist is added by pasting its link, because a
+name search cannot tell playlists apart reliably. A bare word is a name, not a handle:
+`@` is the hint that makes it one.
 
-Users can search by name (not just paste a handle/URL) and pick from results.
-No YouTube Data API key required. Verified against real yt-dlp output: feeding
-YouTube's own search-results URL with the *channel* type filter
-(`https://www.youtube.com/results?search_query=<term>&sp=EgIQAg%253D%253D`) to
-`yt-dlp --flat-playlist -J` returns real channel entries (id, name, `@handle`,
-subscriber count, avatar) — far better than deriving channels from `ytsearch:`
-video results. The playlist filter is `sp=EgIQAw%253D%253D`.
-
-- UI flow: search box in "Add feed" → debounced query → results list with
-  avatar, name, handle, subscriber count → click to resolve (§8.1) and
-  preview before adding.
-- Caveats: this scrapes YouTube's search page through yt-dlp's extractor, so
-  it takes seconds and can break when YouTube changes markup — best-effort.
-  Results are cached briefly per query, failures are reported to the status
-  banner, and after a failure further searches are paused for a few seconds
-  rather than hammering retries.
-- The `sp` filter tokens are undocumented YouTube parameters; if they stop
-  working the fallback is `ytsearch:` video results deduplicated by channel.
+- **Resolving** passes the reference to `yt-dlp --flat-playlist -J` and reads the
+  canonical `channel_id` (so a handle is stored as a stable `UC…` ID, since handles can
+  change) plus name, avatar, handle and subscriber count. No API key. A reference that
+  does not resolve is reported to the user as invalid input and does not raise a status
+  banner.
+- **Searching** feeds YouTube's own search-results URL with the *channel* type filter
+  (`https://www.youtube.com/results?search_query=<term>&sp=EgIQAg%253D%253D`) to
+  yt-dlp, which returns channel entries (id, name, handle, subscriber count, avatar). The
+  `sp` token is an undocumented YouTube parameter and the page is scraped through
+  yt-dlp's extractor, so it takes seconds and can break when YouTube changes; failures
+  go to the status banner, results are cached for a few minutes, and after a failure
+  searches pause for a few seconds. Link and handle lookups keep working.
+- **UI flow**: submit (Enter) → one match: preview straight away; several: a list, and
+  choosing one looks it up again by ID for its full details → preview → Add. Nothing is
+  looked up while typing, so half-typed handles don't hit YouTube.
 
 ## 9. Tech Stack (proposed)
 

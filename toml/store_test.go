@@ -25,7 +25,7 @@ cleanup_keep_last = 3
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Defaults.PageSize != 7 || cfg.Defaults.CleanupKeepLast != 50 || !cfg.Defaults.ExcludeShorts {
+	if cfg.Defaults.PageSize != 7 || cfg.Defaults.CleanupKeepLast != 50 || cfg.Defaults.MinDuration.Std() != time.Minute {
 		t.Fatalf("defaults not layered correctly: %+v", cfg.Defaults)
 	}
 	f := cfg.Feeds[0]
@@ -33,27 +33,54 @@ cleanup_keep_last = 3
 		t.Fatalf("feed defaults: %+v", f)
 	}
 	eff := f.Effective(cfg.Defaults)
-	if eff.Format != "audio" || eff.CleanupKeepLast != 3 || eff.PageSize != 7 || eff.MaxResolution != 1080 {
+	if eff.Format != "audio" || eff.CleanupKeepLast != 3 || eff.PageSize != 7 || eff.MaxResolution != 720 {
 		t.Fatalf("effective: %+v", eff)
 	}
 }
 
 func TestParseRejectsUnknownKeysAndBadValues(t *testing.T) {
 	cases := map[string]string{
-		"unknown key":   "[defaults]\ntitle_filter = \"x\"\n",
-		"bad regex":     "[defaults]\ntitle_include = \"(\"\n",
-		"bad format":    "[defaults]\nformat = \"gif\"\n",
-		"dup feed":      "[[feeds]]\nid=\"a\"\n[[feeds]]\nid=\"a\"\n",
-		"unsafe id":     "[[feeds]]\nid=\"../x\"\n",
-		"bad interval":  "[download]\nupdate_interval = \"5s\"\n",
-		"bad base url":  "[server]\nbase_url = \"localhost\"\n",
-		"zero page":     "[defaults]\npage_size = 0\n",
-		"feed bad kind": "[[feeds]]\nid=\"a\"\nkind=\"user\"\n",
+		"unknown key":    "[defaults]\ntitle_filter = \"x\"\n",
+		"old shorts key": "[defaults]\nexclude_shorts = true\n",
+		"neg min dur":    "[defaults]\nmin_duration = \"-5s\"\n",
+		"bad regex":      "[defaults]\ntitle_include = \"(\"\n",
+		"bad format":     "[defaults]\nformat = \"gif\"\n",
+		"dup feed":       "[[feeds]]\nid=\"a\"\n[[feeds]]\nid=\"a\"\n",
+		"unsafe id":      "[[feeds]]\nid=\"../x\"\n",
+		"bad interval":   "[download]\nupdate_interval = \"5s\"\n",
+		"bad base url":   "[server]\nbase_url = \"localhost\"\n",
+		"zero page":      "[defaults]\npage_size = 0\n",
+		"feed bad kind":  "[[feeds]]\nid=\"a\"\nkind=\"user\"\n",
 	}
 	for name, in := range cases {
 		if _, err := Parse([]byte(in)); err == nil {
 			t.Errorf("%s: expected error", name)
 		}
+	}
+}
+
+func TestMinDurationParsesAndRoundTrips(t *testing.T) {
+	cfg, err := Parse([]byte("[defaults]\nmin_duration = \"90s\"\n\n[[feeds]]\nid = \"UC1\"\nmin_duration = \"0s\"\n\n[[feeds]]\nid = \"UC2\"\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Defaults.MinDuration.Std() != 90*time.Second || cfg.Feeds[0].MinDuration == nil || *cfg.Feeds[0].MinDuration != 0 || cfg.Feeds[1].MinDuration != nil {
+		t.Fatalf("%+v %+v", cfg.Defaults.MinDuration, cfg.Feeds)
+	}
+	if got := cfg.Feeds[0].Effective(cfg.Defaults).MinDuration; got != 0 {
+		t.Fatal("a feed can turn the minimum off")
+	}
+	data, err := Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	back, err := Parse(data)
+	if err != nil || back.Feeds[0].MinDuration == nil || *back.Feeds[0].MinDuration != 0 || back.Feeds[1].MinDuration != nil || back.Defaults.MinDuration.Std() != 90*time.Second {
+		t.Fatalf("round trip lost the override (an explicit zero must survive): %v\n%s", err, data)
+	}
+	def, _ := Parse([]byte(""))
+	if def.Defaults.MinDuration.Std() != time.Minute || def.Defaults.MaxResolution != 720 {
+		t.Fatalf("defaults: %+v", def.Defaults)
 	}
 }
 

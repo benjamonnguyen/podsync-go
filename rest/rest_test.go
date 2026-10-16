@@ -110,18 +110,13 @@ func TestClientServerRoundTripOfEveryOperation(t *testing.T) {
 	}
 
 	e.src.With(func(s *mock.Source) {
-		s.SearchResults = []podsync.SearchResult{{ID: "UCnew", Name: "Found", Handle: "@f", Subscribers: 5}}
-		s.ResolveFn = func(ref string) (podsync.FeedInfo, error) {
-			return podsync.FeedInfo{Source: "youtube", Kind: "channel", ID: "UCnew", Name: "New <Channel>", Description: "d", ImageURL: "https://img/x.jpg"}, nil
+		s.FindFn = func(q string) ([]podsync.FeedInfo, error) {
+			return []podsync.FeedInfo{{Source: "youtube", Kind: "channel", ID: "UCnew", Name: "Found <" + q + ">", Handle: "@f", Subscribers: 5, ImageURL: "https://img/x.jpg"}}, nil
 		}
 	})
-	res, err := e.client.Search(bg, "found", podsync.SearchChannel)
-	if err != nil || len(res) != 1 || res[0].Handle != "@f" || res[0].Subscribers != 5 {
-		t.Fatalf("%v %+v", err, res)
-	}
-	info, err := e.client.Resolve(bg, "https://youtube.com/@new?x=1&y=2")
-	if err != nil || info.ID != "UCnew" || info.Name != "New <Channel>" || info.ImageURL != "https://img/x.jpg" {
-		t.Fatalf("%v %+v", err, info)
+	found, err := e.client.Find(bg, "https://youtube.com/@new?x=1&y=2")
+	if err != nil || len(found) != 1 || found[0].ID != "UCnew" || found[0].Name != "Found <https://youtube.com/@new?x=1&y=2>" || found[0].Handle != "@f" || found[0].Subscribers != 5 {
+		t.Fatalf("%v %+v", err, found)
 	}
 
 	eps, err := e.client.List(bg, "UCone", 5, 2)
@@ -148,6 +143,10 @@ func TestErrorKindsSurviveTheWire(t *testing.T) {
 		t.Fatalf("404: %v", err)
 	}
 	if _, err := e.client.List(bg, "UCone", 0, 0); !errors.Is(err, podsync.ErrInvalid) {
+		t.Fatalf("400: %v", err)
+	}
+	e.src.With(func(s *mock.Source) { s.FindErr = podsync.Invalid("not a recognized channel URL") })
+	if _, err := e.client.Find(bg, "https://youtube.com/nope"); !errors.Is(err, podsync.ErrInvalid) || !strings.Contains(err.Error(), "recognized") {
 		t.Fatalf("400: %v", err)
 	}
 	if err := e.client.Pull(bg, podsync.PullRequest{Feed: "UCone", Episode: &podsync.EpisodeInfo{ID: "../x"}}); !errors.Is(err, podsync.ErrInvalid) {
@@ -193,7 +192,7 @@ func TestRequestGuardsAndSurface(t *testing.T) {
 		t.Fatal("healthz")
 	}
 	// The API is deliberately small: nothing else is served.
-	for _, p := range []string{"/api/v1/feeds", "/api/v1/settings", "/feeds/UCone.xml", "/media/UCone/x.mp4"} {
+	for _, p := range []string{"/api/v1/feeds", "/api/v1/settings", "/api/v1/resolve", "/api/v1/search", "/feeds/UCone.xml", "/media/UCone/x.mp4"} {
 		if resp, _ := e.raw("GET", p, ""); resp.StatusCode != 404 && resp.StatusCode != 405 {
 			t.Errorf("%s should not exist, got %d", p, resp.StatusCode)
 		}

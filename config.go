@@ -59,14 +59,14 @@ type Download struct {
 // Options are the per-feed settings. [defaults] holds concrete values; each
 // feed may override any of them (see Feed).
 type Options struct {
-	Format           string `toml:"format" json:"format"` // "video" | "audio"
-	MaxResolution    int    `toml:"max_resolution" json:"max_resolution"`
-	ExcludeShorts    bool   `toml:"exclude_shorts" json:"exclude_shorts"`
-	TitleInclude     string `toml:"title_include" json:"title_include"`
-	TitleExclude     string `toml:"title_exclude" json:"title_exclude"`
-	CleanupAfterDays int    `toml:"cleanup_after_days" json:"cleanup_after_days"`
-	CleanupKeepLast  int    `toml:"cleanup_keep_last" json:"cleanup_keep_last"`
-	PageSize         int    `toml:"page_size" json:"page_size"`
+	Format           string   `toml:"format" json:"format"` // "video" | "audio"
+	MaxResolution    int      `toml:"max_resolution" json:"max_resolution"`
+	MinDuration      Duration `toml:"min_duration" json:"min_duration"` // skip videos shorter than this (YouTube Shorts); 0 = no minimum
+	TitleInclude     string   `toml:"title_include" json:"title_include"`
+	TitleExclude     string   `toml:"title_exclude" json:"title_exclude"`
+	CleanupAfterDays int      `toml:"cleanup_after_days" json:"cleanup_after_days"`
+	CleanupKeepLast  int      `toml:"cleanup_keep_last" json:"cleanup_keep_last"`
+	PageSize         int      `toml:"page_size" json:"page_size"`
 }
 
 // Feed is one configured channel or playlist. Option fields that are nil
@@ -77,14 +77,14 @@ type Feed struct {
 	Kind   string `toml:"kind" json:"kind"` // "channel" | "playlist"
 	Name   string `toml:"name" json:"name"`
 
-	Format           *string `toml:"format,omitempty" json:"format,omitempty"`
-	MaxResolution    *int    `toml:"max_resolution,omitempty" json:"max_resolution,omitempty"`
-	ExcludeShorts    *bool   `toml:"exclude_shorts,omitempty" json:"exclude_shorts,omitempty"`
-	TitleInclude     *string `toml:"title_include,omitempty" json:"title_include,omitempty"`
-	TitleExclude     *string `toml:"title_exclude,omitempty" json:"title_exclude,omitempty"`
-	CleanupAfterDays *int    `toml:"cleanup_after_days,omitempty" json:"cleanup_after_days,omitempty"`
-	CleanupKeepLast  *int    `toml:"cleanup_keep_last,omitempty" json:"cleanup_keep_last,omitempty"`
-	PageSize         *int    `toml:"page_size,omitempty" json:"page_size,omitempty"`
+	Format           *string   `toml:"format,omitempty" json:"format,omitempty"`
+	MaxResolution    *int      `toml:"max_resolution,omitempty" json:"max_resolution,omitempty"`
+	MinDuration      *Duration `toml:"min_duration,omitempty" json:"min_duration,omitempty"`
+	TitleInclude     *string   `toml:"title_include,omitempty" json:"title_include,omitempty"`
+	TitleExclude     *string   `toml:"title_exclude,omitempty" json:"title_exclude,omitempty"`
+	CleanupAfterDays *int      `toml:"cleanup_after_days,omitempty" json:"cleanup_after_days,omitempty"`
+	CleanupKeepLast  *int      `toml:"cleanup_keep_last,omitempty" json:"cleanup_keep_last,omitempty"`
+	PageSize         *int      `toml:"page_size,omitempty" json:"page_size,omitempty"`
 }
 
 type Config struct {
@@ -115,8 +115,8 @@ func Default() Config {
 		},
 		Defaults: Options{
 			Format:          FormatVideo,
-			MaxResolution:   1080,
-			ExcludeShorts:   true,
+			MaxResolution:   720,
+			MinDuration:     Duration(60 * time.Second),
 			CleanupKeepLast: 50,
 			PageSize:        10,
 		},
@@ -132,8 +132,8 @@ func (f Feed) Effective(d Options) Options {
 	if f.MaxResolution != nil {
 		o.MaxResolution = *f.MaxResolution
 	}
-	if f.ExcludeShorts != nil {
-		o.ExcludeShorts = *f.ExcludeShorts
+	if f.MinDuration != nil {
+		o.MinDuration = *f.MinDuration
 	}
 	if f.TitleInclude != nil {
 		o.TitleInclude = *f.TitleInclude
@@ -155,7 +155,7 @@ func (f Feed) Effective(d Options) Options {
 
 // HasOverrides reports whether the feed overrides any default.
 func (f Feed) HasOverrides() bool {
-	return f.Format != nil || f.MaxResolution != nil || f.ExcludeShorts != nil ||
+	return f.Format != nil || f.MaxResolution != nil || f.MinDuration != nil ||
 		f.TitleInclude != nil || f.TitleExclude != nil || f.CleanupAfterDays != nil ||
 		f.CleanupKeepLast != nil || f.PageSize != nil
 }
@@ -177,6 +177,9 @@ func (o Options) validate(where string) error {
 	}
 	if o.MaxResolution < 0 {
 		errs = append(errs, fmt.Errorf("%s: max_resolution must be >= 0 (0 = no cap)", where))
+	}
+	if o.MinDuration < 0 {
+		errs = append(errs, fmt.Errorf("%s: min_duration must be >= 0 (0 = no minimum)", where))
 	}
 	if o.CleanupAfterDays < 0 || o.CleanupKeepLast < 0 {
 		errs = append(errs, fmt.Errorf("%s: cleanup values must be >= 0 (0 = disabled)", where))

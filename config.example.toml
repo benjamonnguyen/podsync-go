@@ -13,6 +13,7 @@ base_url = "http://192.168.1.10:8080"
 data_dir = "./data"
 
 [download]
+# The next two settings, like the addresses above, are changed here only (the web UI shows but does not edit them).
 yt_dlp_path = "yt-dlp"
 # Maximum simultaneous downloads (1-16).
 concurrency = 2
@@ -26,8 +27,8 @@ cookies_file = ""
 # Defaults applied to every feed; each feed can override any of them.
 [defaults]
 format = "video"            # "video" (mp4) or "audio" (m4a)
-max_resolution = 1080       # pixels of height; 0 = no limit
-exclude_shorts = true       # skip videos of 60 seconds or less
+max_resolution = 720        # pixels of height; 0 = no limit
+min_duration = "60s"        # skip videos shorter than this (how YouTube Shorts are skipped); "0s" = download everything
 title_include = ""          # regex: if set, only matching titles are downloaded
 title_exclude = ""          # regex: matching titles are skipped, e.g. "(?i)sponsored|#shorts"
 page_size = 10              # only the newest N episodes of a feed are considered per update

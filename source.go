@@ -15,6 +15,9 @@ type FeedInfo struct {
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
 	ImageURL    string `json:"image_url,omitempty"`
+	// Display extras filled in by lookups (not stored).
+	Handle      string `json:"handle,omitempty"`      // e.g. "@LinusTechTips"
+	Subscribers int64  `json:"subscribers,omitempty"` // when the source reports it
 }
 
 // EpisodeInfo describes one episode as reported by a source. Listings are
@@ -30,8 +33,7 @@ type EpisodeInfo struct {
 	DurationSec int       `json:"duration_sec,omitempty"`
 	Channel     string    `json:"channel,omitempty"` // uploader; useful for playlists that mix channels
 	ViewCount   int64     `json:"view_count,omitempty"`
-	Height      int       `json:"height,omitempty"` // video height once downloaded; 0 for audio/unknown
-	IsShort     bool      `json:"is_short,omitempty"`
+	Height      int       `json:"height,omitempty"`      // video height once downloaded; 0 for audio/unknown
 	IsLive      bool      `json:"is_live,omitempty"`     // live or upcoming stream; cannot be downloaded yet
 	Unavailable bool      `json:"unavailable,omitempty"` // private/deleted placeholder entries
 }
@@ -48,24 +50,6 @@ type DownloadResult struct {
 	Episode EpisodeInfo // full metadata discovered during download
 }
 
-type SearchKind string
-
-const (
-	SearchChannel  SearchKind = "channel"
-	SearchPlaylist SearchKind = "playlist"
-)
-
-type SearchResult struct {
-	Kind        string `json:"kind"`
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Handle      string `json:"handle,omitempty"`
-	Description string `json:"description,omitempty"`
-	ImageURL    string `json:"image_url,omitempty"`
-	Subscribers int64  `json:"subscribers,omitempty"`
-	Items       int    `json:"items,omitempty"` // playlist length when known
-}
-
 // Health reports whether a source's external dependencies work.
 type Health struct {
 	Version  string
@@ -77,10 +61,14 @@ type Health struct {
 type Source interface {
 	Kind() string
 	Check(ctx context.Context) Health
-	// Resolve turns a user-supplied URL, @handle or ID into a canonical feed.
+	// Find answers what a user typed when adding a feed, guided by hints: a URL
+	// or an @handle (or a channel ID) resolves to exactly that feed; anything
+	// else is searched by name among channels. Playlists are only found by
+	// URL. Errors from resolving a reference the user typed are ErrInvalid.
+	Find(ctx context.Context, query string) ([]FeedInfo, error)
+	// Resolve turns an exact reference (URL, @handle or ID of a channel or
+	// playlist) into its canonical feed; used when a feed's ID is already known.
 	Resolve(ctx context.Context, ref string) (FeedInfo, error)
-	// Search finds channels or playlists by name.
-	Search(ctx context.Context, query string, kind SearchKind) ([]SearchResult, error)
 	// ListEpisodes returns the window [offset, offset+limit) of a feed's
 	// episodes, newest first. Unavailable entries are included (flagged) so
 	// callers can tell whether a short page means the end of the feed.

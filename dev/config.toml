@@ -18,7 +18,7 @@ cookies_file = ""
 [defaults]
 format = "video"
 max_resolution = 480
-exclude_shorts = true
+min_duration = "1m"
 title_include = ""
 title_exclude = ""
 cleanup_after_days = 0

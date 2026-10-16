@@ -10,11 +10,18 @@ import (
 
 func ptr[T any](v T) *T { return &v }
 
+func TestDefaults(t *testing.T) {
+	d := Default().Defaults
+	if d.MaxResolution != 720 || d.MinDuration.Std() != 60*time.Second || d.PageSize != 10 || d.CleanupKeepLast != 50 {
+		t.Fatalf("%+v", d)
+	}
+}
+
 func TestEffectiveLayersOverridesOverDefaults(t *testing.T) {
 	d := Default().Defaults
-	f := Feed{ID: "UC1", Format: ptr("audio"), CleanupKeepLast: ptr(3), TitleExclude: ptr("x")}
+	f := Feed{ID: "UC1", Format: ptr("audio"), CleanupKeepLast: ptr(3), TitleExclude: ptr("x"), MinDuration: ptr(Duration(0))}
 	got := f.Effective(d)
-	if got.Format != "audio" || got.CleanupKeepLast != 3 || got.TitleExclude != "x" || got.PageSize != d.PageSize || got.MaxResolution != d.MaxResolution {
+	if got.MinDuration != 0 || d.MinDuration == 0 || got.Format != "audio" || got.CleanupKeepLast != 3 || got.TitleExclude != "x" || got.PageSize != d.PageSize || got.MaxResolution != d.MaxResolution {
 		t.Fatalf("%+v", got)
 	}
 	if !f.HasOverrides() || (Feed{ID: "UC2"}).HasOverrides() {
@@ -38,6 +45,7 @@ func TestValidateRejectsBadValues(t *testing.T) {
 		"bad interval":  func(c *Config) { c.Download.UpdateInterval = Duration(5 * time.Second) },
 		"bad base url":  func(c *Config) { c.Server.BaseURL = "localhost" },
 		"zero page":     func(c *Config) { c.Defaults.PageSize = 0 },
+		"neg min dur":   func(c *Config) { c.Defaults.MinDuration = -1 },
 		"feed bad kind": func(c *Config) { c.Feeds[0].Kind = "user" },
 		"feed override": func(c *Config) { c.Feeds[0].PageSize = ptr(9999) },
 		"concurrency":   func(c *Config) { c.Download.Concurrency = 99 },
@@ -115,7 +123,9 @@ func TestEpisodeFilter(t *testing.T) {
 		want bool
 	}{
 		{EpisodeInfo{Title: "Episode 1"}, true},
-		{EpisodeInfo{Title: "Episode 2", IsShort: true}, false}, // shorts excluded by default
+		{EpisodeInfo{Title: "Episode 2", DurationSec: 59}, false}, // under the default 60s minimum
+		{EpisodeInfo{Title: "Episode 3", DurationSec: 60}, true},
+		{EpisodeInfo{Title: "Episode 4"}, true}, // unknown duration is not held back
 		{EpisodeInfo{Title: "Sponsored: Episode"}, false},
 		{EpisodeInfo{Title: "Random"}, false},
 	}
@@ -126,5 +136,11 @@ func TestEpisodeFilter(t *testing.T) {
 	}
 	if _, err := NewEpisodeFilter(Options{TitleInclude: "("}); err == nil {
 		t.Fatal("bad regex must error")
+	}
+	none := Default().Defaults
+	none.MinDuration = 0
+	nf, _ := NewEpisodeFilter(none)
+	if !nf.Allows(EpisodeInfo{Title: "x", DurationSec: 5}) {
+		t.Fatal("min_duration = 0 means no minimum")
 	}
 }

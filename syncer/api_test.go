@@ -82,24 +82,30 @@ func TestStatusListsJobsIssuesAndVersions(t *testing.T) {
 	}
 }
 
-func TestResolveSearchAndBanner(t *testing.T) {
+func TestFindBannerOnlyForServiceProblems(t *testing.T) {
 	e := setup(t, nil, nil)
-	e.src.SearchErr = errors.New("boom")
-	if _, err := e.svc.Search(bg, "x", podsync.SearchChannel); err == nil {
+	e.src.FindErr = errors.New("boom")
+	if _, err := e.svc.Find(bg, "some name"); err == nil {
 		t.Fatal("expected error")
 	}
-	if a := e.st.Active(); len(a) != 1 || a[0].Key != "search" {
-		t.Fatalf("%+v", a)
+	if a := e.st.Active(); len(a) != 1 || a[0].Key != "find" {
+		t.Fatalf("a failed search is a service problem and belongs in the banner: %+v", a)
 	}
-	e.src.SearchErr = nil
-	e.src.SearchResults = []podsync.SearchResult{{ID: "UC1", Name: "n"}}
-	res, err := e.svc.Search(bg, "x", podsync.SearchChannel)
+	e.src.FindErr = nil
+	e.src.FindResults = []podsync.FeedInfo{{ID: "UC1", Name: "n"}}
+	res, err := e.svc.Find(bg, "  some name ")
 	if err != nil || len(res) != 1 || len(e.st.Active()) != 0 {
 		t.Fatalf("%v %+v %+v", err, res, e.st.Active())
 	}
-	info, err := e.svc.Resolve(bg, "  @someone  ")
-	if err != nil || info.ID != "@someone" {
-		t.Fatalf("%v %+v", err, info)
+	// A reference the user mistyped is just shown to them.
+	e.src.FindErr = podsync.Invalid("not a recognized channel URL")
+	if _, err := e.svc.Find(bg, "https://youtube.com/nope"); !errors.Is(err, podsync.ErrInvalid) || len(e.st.Active()) != 0 {
+		t.Fatalf("%v %+v", err, e.st.Active())
+	}
+	// No results is an empty list, not null.
+	e.src.FindErr, e.src.FindResults = nil, nil
+	if res, err := e.svc.Find(bg, "zzz"); err != nil || res == nil || len(res) != 0 {
+		t.Fatalf("%v %#v", err, res)
 	}
 }
 

@@ -14,12 +14,7 @@
         <option value="audio"{{if eq .F.Format "audio"}} selected{{end}}>Audio only (m4a)</option>
       </select></label>
     <label>Maximum resolution (0 = no limit) <input type="number" name="max_resolution" min="0" value="{{.F.MaxResolution}}" placeholder="{{.F.Defaults.MaxResolution}}"></label>
-    <label>Skip Shorts
-      <select name="exclude_shorts">
-        <option value="">Default ({{if .F.Defaults.ExcludeShorts}}yes{{else}}no{{end}})</option>
-        <option value="yes"{{if eq .F.ExcludeShorts "yes"}} selected{{end}}>Yes</option>
-        <option value="no"{{if eq .F.ExcludeShorts "no"}} selected{{end}}>No</option>
-      </select></label>
+    <label>Skip videos shorter than <input type="text" name="min_duration" value="{{.F.MinDuration}}" placeholder="{{secs .F.Defaults.MinDuration}}"><small>For example 60s or 2m; 0 downloads everything.</small></label>
     <label>Only download titles matching (regex) <input type="text" name="title_include" value="{{.F.TitleInclude}}" placeholder="{{.F.Defaults.TitleInclude}}"></label>
     <label>Skip titles matching (regex) <input type="text" name="title_exclude" value="{{.F.TitleExclude}}" placeholder="{{.F.Defaults.TitleExclude}}"></label>
     <label>Episodes checked per update <input type="number" name="page_size" min="1" max="500" value="{{.F.PageSize}}" placeholder="{{.F.Defaults.PageSize}}"></label>

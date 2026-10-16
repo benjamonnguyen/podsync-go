@@ -5,18 +5,18 @@
 <form method="post" action="/settings" class="settings">
   <fieldset>
     <legend>Server</legend>
-    <label>Public address of the sync service
-      <input type="text" name="base_url" value="{{.Cfg.Server.BaseURL}}" required>
-      <small>Where podcast apps fetch your feeds and media (the sync service's public port), used in the feed links shown here, e.g. http://192.168.1.10:8080. This web interface is for managing the library and is not meant to be published.</small></label>
-    <p class="muted">The sync service publishes feeds and media on <code>{{.Cfg.Server.ListenAddr}}</code> and keeps its control API private on <code>{{.Cfg.Server.APIAddr}}</code>; its data directory is <code>{{.Cfg.Server.DataDir}}</code>.<br>
-      Both programs depend on these, so they are changed in <code>config.toml</code> followed by a restart of both.</p>
+    <p class="muted">These belong to whoever runs the service, so they are changed in <code>config.toml</code> (followed by a restart where needed), not here:</p>
+    <dl class="facts">
+      <dt>Feeds and media published on</dt><dd><code>{{.Cfg.Server.ListenAddr}}</code>, reached by podcast apps at <code>{{.Cfg.Server.BaseURL}}</code></dd>
+      <dt>Control API (private)</dt><dd><code>{{.Cfg.Server.APIAddr}}</code></dd>
+      <dt>Data directory</dt><dd><code>{{.Cfg.Server.DataDir}}</code></dd>
+      <dt>yt-dlp</dt><dd><code>{{.Cfg.Download.YtDlpPath}}</code>{{with .Cfg.Download.CookiesFile}}, cookies file <code>{{.}}</code>{{end}}</dd>
+    </dl>
   </fieldset>
   <fieldset>
     <legend>Downloading</legend>
-    <label>yt-dlp path <input type="text" name="yt_dlp_path" value="{{.Cfg.Download.YtDlpPath}}" required></label>
     <label>Simultaneous downloads <input type="number" name="concurrency" min="1" max="16" value="{{.Cfg.Download.Concurrency}}" required></label>
     <label>Check feeds every <input type="text" name="update_interval" value="{{.Cfg.Download.UpdateInterval}}" required><small>For example 30m or 2h. Minimum 1m.</small></label>
-    <label>Cookies file <input type="text" name="cookies_file" value="{{.Cfg.Download.CookiesFile}}"><small>Optional cookies.txt (Netscape format) for YouTube sign-in checks.</small></label>
     <label class="check"><input type="checkbox" name="self_update"{{if .Cfg.Download.SelfUpdate}} checked{{end}}> Keep yt-dlp up to date (runs <code>yt-dlp -U</code> daily)</label>
   </fieldset>
   <fieldset>
@@ -28,7 +28,7 @@
         <option value="audio"{{if eq .Cfg.Defaults.Format "audio"}} selected{{end}}>Audio only (m4a)</option>
       </select></label>
     <label>Maximum resolution (pixels of height, 0 = no limit) <input type="number" name="max_resolution" min="0" value="{{.Cfg.Defaults.MaxResolution}}" required></label>
-    <label class="check"><input type="checkbox" name="exclude_shorts"{{if .Cfg.Defaults.ExcludeShorts}} checked{{end}}> Skip YouTube Shorts (videos of 60 seconds or less)</label>
+    <label>Skip videos shorter than <input type="text" name="min_duration" value="{{secs .Cfg.Defaults.MinDuration}}" required><small>For example 60s or 2m; 0 downloads everything. This is how YouTube Shorts are skipped.</small></label>
     <label>Only download titles matching (regex) <input type="text" name="title_include" value="{{.Cfg.Defaults.TitleInclude}}" placeholder="empty = all titles"></label>
     <label>Skip titles matching (regex) <input type="text" name="title_exclude" value="{{.Cfg.Defaults.TitleExclude}}" placeholder="empty = skip none"></label>
     <label>Episodes checked per update <input type="number" name="page_size" min="1" max="500" value="{{.Cfg.Defaults.PageSize}}" required><small>Only the newest this-many episodes of a feed are considered on each update.</small></label>

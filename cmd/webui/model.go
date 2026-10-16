@@ -50,7 +50,7 @@ type FeedSettings struct {
 	Name             string
 	Format           *string
 	MaxResolution    *int
-	ExcludeShorts    *bool
+	MinDuration      *podsync.Duration
 	TitleInclude     *string
 	TitleExclude     *string
 	CleanupAfterDays *int
@@ -98,9 +98,11 @@ type AddFeedRequest struct {
 	PageSize *int
 }
 
-// Settings is the part of the configuration the settings page edits. The
-// listen address and data directory are shown but not editable: both programs
-// have to agree on them, so they are changed in config.toml with a restart.
+// Settings is the configuration as the settings page shows it. Only some of it
+// is editable there: the concurrency, update interval, self-update switch and
+// the feed defaults. Everything else (addresses, data directory, the public
+// address, the yt-dlp path and the cookies file) belongs to whoever runs the
+// service, so it is shown read-only and changed in config.toml.
 type Settings struct {
 	Server     podsync.Server
 	Download   podsync.Download
@@ -212,7 +214,7 @@ func episodeFromInfo(ep podsync.EpisodeInfo) podsync.Episode {
 	return podsync.Episode{
 		ID: ep.ID, Title: ep.Title, Description: ep.Description, URL: ep.URL, Thumbnail: ep.Thumbnail,
 		Published: ep.Published, DurationSec: ep.DurationSec, Channel: ep.Channel, ViewCount: ep.ViewCount,
-		Height: ep.Height, IsShort: ep.IsShort,
+		Height: ep.Height,
 	}
 }
 
@@ -409,7 +411,7 @@ func (s *Server) UpdateFeed(ctx context.Context, id string, upd FeedSettings) (F
 			if n := strings.TrimSpace(upd.Name); n != "" {
 				f.Name = n
 			}
-			f.Format, f.MaxResolution, f.ExcludeShorts = upd.Format, upd.MaxResolution, upd.ExcludeShorts
+			f.Format, f.MaxResolution, f.MinDuration = upd.Format, upd.MaxResolution, upd.MinDuration
 			f.TitleInclude, f.TitleExclude = upd.TitleInclude, upd.TitleExclude
 			f.CleanupAfterDays, f.CleanupKeepLast, f.PageSize = upd.CleanupAfterDays, upd.CleanupKeepLast, upd.PageSize
 			return nil
@@ -467,11 +469,16 @@ func (s *Server) settings(c podsync.Config) Settings {
 
 func (s *Server) Settings(ctx context.Context) Settings { return s.settings(s.cfg.Get()) }
 
-// UpdateSettings saves the editable settings (base URL, download options,
-// defaults) and tells the sync service to apply them.
+// UpdateSettings saves the editable settings (concurrency, update interval,
+// self-update, feed defaults) and tells the sync service to apply them. Anything
+// else in the submitted Settings is ignored, so a form post cannot change the
+// public address, the yt-dlp path or the cookies file.
 func (s *Server) UpdateSettings(ctx context.Context, in Settings) (SettingsResult, error) {
 	err := s.cfg.Update(func(c *podsync.Config) error {
-		c.Server.BaseURL, c.Download, c.Defaults = in.Server.BaseURL, in.Download, in.Defaults
+		c.Download.Concurrency = in.Download.Concurrency
+		c.Download.UpdateInterval = in.Download.UpdateInterval
+		c.Download.SelfUpdate = in.Download.SelfUpdate
+		c.Defaults = in.Defaults
 		return nil
 	})
 	if err != nil {

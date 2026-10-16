@@ -3,6 +3,7 @@ package youtube
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -21,7 +22,6 @@ func TestParseRef(t *testing.T) {
 		kind refKind
 	}{
 		"@LinusTechTips": {"https://www.youtube.com/@LinusTechTips/videos", refChannel},
-		"LinusTechTips":  {"https://www.youtube.com/@LinusTechTips/videos", refChannel},
 		"https://www.youtube.com/@LinusTechTips/shorts":                  {"https://www.youtube.com/@LinusTechTips/videos", refChannel},
 		"youtube.com/channel/UCXuqSBlHAE6Xw-yeJA0Tunw":                   {"https://www.youtube.com/channel/UCXuqSBlHAE6Xw-yeJA0Tunw/videos", refChannel},
 		"UCXuqSBlHAE6Xw-yeJA0Tunw":                                       {"https://www.youtube.com/channel/UCXuqSBlHAE6Xw-yeJA0Tunw/videos", refChannel},
@@ -38,7 +38,7 @@ func TestParseRef(t *testing.T) {
 			t.Errorf("parseRef(%q) = %q,%v,%v; want %q,%v", in, got, kind, err, want.url, want.kind)
 		}
 	}
-	bad := []string{"", "linus tech tips", "https://evil.example.com/@x", "http://169.254.169.254/latest", "-o /etc/passwd", "--exec=rm", "file:///etc/passwd", "https://youtube.com.evil.com/@x", "@@@"}
+	bad := []string{"", "linus tech tips", "LinusTechTips", "https://evil.example.com/@x", "http://169.254.169.254/latest", "-o /etc/passwd", "--exec=rm", "file:///etc/passwd", "https://youtube.com.evil.com/@x", "@@@"}
 	for _, in := range bad {
 		if u, _, err := parseRef(in); err == nil {
 			t.Errorf("parseRef(%q) should fail, got %q", in, u)
@@ -144,7 +144,9 @@ func fakeYtDlp(args []string) int {
 			{"id": "UCXuqSBlHAE6Xw-yeJA0Tunw", "title": "dupe"},
 			{"id": "dQw4w9WgXcQ", "title": "a video, not a channel"},
 		}})
-	case has("--flat-playlist") && strings.Contains(last, "playlist?list=BAD"):
+	case has("--skip-download"):
+		json.NewEncoder(os.Stdout).Encode(map[string]any{"id": "jNQXAC9IVRw", "channel_id": "UCXuqSBlHAE6Xw-yeJA0Tunw"})
+	case has("--flat-playlist") && strings.Contains(last, "list=BAD"):
 		fmt.Fprintln(os.Stderr, "ERROR: [youtube:tab] The playlist does not exist.")
 		return 1
 	case has("--flat-playlist") && has("--playlist-start"):
@@ -238,8 +240,8 @@ func TestListEpisodesWindowAndFlags(t *testing.T) {
 	if err != nil || len(eps) != 5 {
 		t.Fatalf("%v %d", err, len(eps))
 	}
-	if !eps[1].IsShort || eps[0].IsShort {
-		t.Fatal("short detection")
+	if eps[1].DurationSec != 30 || eps[0].DurationSec != 600 {
+		t.Fatalf("durations come from the listing (the minimum-duration filter uses them): %+v %+v", eps[0], eps[1])
 	}
 	if eps[0].Channel != "Some Channel" || eps[0].ViewCount != 1001 {
 		t.Fatalf("listing metadata: %+v", eps[0])
@@ -256,31 +258,77 @@ func TestListEpisodesWindowAndFlags(t *testing.T) {
 	}
 }
 
-func TestSearchDedupesCachesAndBacksOff(t *testing.T) {
-	y := newFake(t)
-	res, err := y.Search(context.Background(), "linus", podsync.SearchChannel)
-	if err != nil || len(res) != 1 || res[0].Handle != "@LinusTechTips" || res[0].ImageURL != "https://yt3.ggpht.com/a" || res[0].Subscribers != 16900000 {
-		t.Fatalf("%v %+v", err, res)
+func searched(y *YouTube) bool {
+	_, err := os.Stat(filepath.Join(filepath.Dir(y.settings().YtDlpPath), "count"))
+	return err == nil
+}
+
+func TestFindUsesHintsToChooseResolveOrSearch(t *testing.T) {
+	ctx := context.Background()
+	for _, direct := range []string{
+		"@LinusTechTips", "https://www.youtube.com/@LinusTechTips", "youtube.com/@LinusTechTips/videos",
+		"https://www.youtube.com/channel/UCXuqSBlHAE6Xw-yeJA0Tunw", "UCXuqSBlHAE6Xw-yeJA0Tunw",
+		"https://www.youtube.com/playlist?list=PLabcdefghijk", "https://youtu.be/jNQXAC9IVRw",
+	} {
+		y := newFake(t)
+		res, err := y.Find(ctx, "  "+direct+"  ")
+		if err != nil || len(res) != 1 || res[0].ID != "UCXuqSBlHAE6Xw-yeJA0Tunw" || res[0].Kind != "channel" {
+			t.Errorf("%q should resolve to one feed: %v %+v", direct, err, res)
+		}
+		if searched(y) {
+			t.Errorf("%q is a reference and must not trigger a name search", direct)
+		}
 	}
+	for _, name := range []string{"linus", "Linus Tech Tips", "LinusTechTips", "PLabcdefghijk1", "kotlin @home"} {
+		y := newFake(t)
+		res, err := y.Find(ctx, name)
+		if err != nil || len(res) != 1 || res[0].Handle != "@LinusTechTips" || res[0].Kind != "channel" || res[0].Subscribers != 16900000 || res[0].ImageURL != "https://yt3.ggpht.com/a" {
+			t.Errorf("%q should fall back to a channel search: %v %+v", name, err, res)
+		}
+		if !searched(y) {
+			t.Errorf("%q is a name and must be searched", name)
+		}
+	}
+}
+
+func TestFindErrorsAndSearchBehavior(t *testing.T) {
+	ctx := context.Background()
+	y := newFake(t)
+	if _, err := y.Find(ctx, "   "); !errors.Is(err, podsync.ErrInvalid) {
+		t.Fatalf("empty query: %v", err)
+	}
+	if _, err := y.Find(ctx, "https://example.com/@x"); !errors.Is(err, podsync.ErrInvalid) {
+		t.Fatalf("non-YouTube link: %v", err)
+	}
+	// Playlists are not searched: results are channels only, deduplicated (the fake returns a duplicate and a video).
+	res, _ := y.Find(ctx, "linus")
+	if len(res) != 1 {
+		t.Fatalf("channels only, deduplicated: %+v", res)
+	}
+	// Identical searches are cached.
 	script := y.settings().YtDlpPath
 	os.Remove(filepath.Join(filepath.Dir(script), "count"))
-	if _, err := y.Search(context.Background(), "LINUS", podsync.SearchChannel); err != nil {
+	if _, err := y.Find(ctx, "LINUS"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(filepath.Dir(script), "count")); err == nil {
+	if searched(y) {
 		t.Fatal("second identical search should be served from cache")
 	}
 
+	// A failing reference is the user's input (invalid); a failing search is not, and backs off.
 	bad := newFake(t, "FAKE_FAIL=1")
-	if _, err := bad.Search(context.Background(), "x", podsync.SearchChannel); err == nil || !strings.Contains(err.Error(), "boom") {
-		t.Fatalf("expected underlying error, got %v", err)
+	if _, err := bad.Find(ctx, "x y"); err == nil || errors.Is(err, podsync.ErrInvalid) || !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("a failed search is a service problem, got %v", err)
 	}
-	if _, err := bad.Search(context.Background(), "y", podsync.SearchChannel); err == nil || !strings.Contains(err.Error(), "paused") {
+	if _, err := bad.Find(ctx, "y z"); err == nil || !strings.Contains(err.Error(), "paused") {
 		t.Fatalf("expected backoff error, got %v", err)
 	}
 	bad.now = func() time.Time { return time.Now().Add(time.Minute) }
-	if _, err := bad.Search(context.Background(), "z", podsync.SearchChannel); err == nil || strings.Contains(err.Error(), "paused") {
+	if _, err := bad.Find(ctx, "z w"); err == nil || strings.Contains(err.Error(), "paused") {
 		t.Fatalf("backoff should have expired, got %v", err)
+	}
+	if _, err := y.Find(ctx, "https://www.youtube.com/playlist?list=BADLISTxxxxx"); !errors.Is(err, podsync.ErrInvalid) {
+		t.Fatalf("a link that does not resolve is invalid input: %v", err)
 	}
 }
 
@@ -350,16 +398,20 @@ func TestLive(t *testing.T) {
 	if err != nil || len(more) != 3 || more[0].ID == eps[0].ID {
 		t.Fatalf("offset list: %v %+v", err, more)
 	}
-	res, err := y.Search(ctx, "linus tech tips", podsync.SearchChannel)
-	if err != nil || len(res) == 0 {
-		t.Fatalf("search: %v %d", err, len(res))
+	res, err := y.Find(ctx, "linus tech tips")
+	if err != nil || len(res) == 0 || res[0].Kind != "channel" || res[0].Handle == "" {
+		t.Fatalf("search: %v %+v", err, res)
 	}
 	t.Logf("first search hit: %+v", res[0])
-	pl, err := y.Search(ctx, "linus tech tips", podsync.SearchPlaylist)
-	if err != nil || len(pl) == 0 {
-		t.Fatalf("playlist search: %v %d", err, len(pl))
+	byHandle, err := y.Find(ctx, "@LinusTechTips")
+	if err != nil || len(byHandle) != 1 || byHandle[0].ID != info.ID {
+		t.Fatalf("handle: %v %+v", err, byHandle)
 	}
-	t.Logf("first playlist hit: %+v", pl[0])
+	byURL, err := y.Find(ctx, "https://www.youtube.com/playlist?list=PL8mG-RkN2uTwt8wqaIaIH-mCANbhDLmjv")
+	if err != nil || len(byURL) != 1 || byURL[0].Kind != "playlist" {
+		t.Fatalf("playlist url: %v %+v", err, byURL)
+	}
+	t.Logf("playlist by url: %+v", byURL[0])
 	v, err := y.Resolve(ctx, "https://www.youtube.com/watch?v=jNQXAC9IVRw")
 	if err != nil || v.ID != "UC4QobU6STFB0P71PMvOGN5A" {
 		t.Fatalf("video->channel: %v %+v", err, v)

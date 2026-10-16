@@ -486,7 +486,7 @@ func (s *Service) download(j *job) {
 		Thumbnail: firstNonEmpty(res.Episode.Thumbnail, j.ep.Thumbnail), ThumbFile: thumb,
 		Published: res.Episode.Published, DurationSec: res.Episode.DurationSec,
 		Channel: firstNonEmpty(res.Episode.Channel, j.ep.Channel), ViewCount: maxInt64(res.Episode.ViewCount, j.ep.ViewCount), Height: res.Episode.Height,
-		IsShort: j.ep.IsShort, Status: podsync.StatusDownloaded, File: res.File, Size: res.Size,
+		Status: podsync.StatusDownloaded, File: res.File, Size: res.Size,
 		DownloadedAt: &now, Manual: manual,
 	}
 	if ep.Published.IsZero() {
@@ -515,7 +515,7 @@ func (s *Service) recordFailure(j *job, f podsync.Feed, err error) {
 	_ = s.lib.PutEpisode(j.feedID, podsync.Episode{
 		ID: j.ep.ID, Title: title, URL: firstNonEmpty(prev.URL, j.ep.URL), Thumbnail: firstNonEmpty(prev.Thumbnail, j.ep.Thumbnail),
 		Channel: firstNonEmpty(prev.Channel, j.ep.Channel), ViewCount: maxInt64(prev.ViewCount, j.ep.ViewCount),
-		Published: prev.Published, DurationSec: maxInt(prev.DurationSec, j.ep.DurationSec), IsShort: j.ep.IsShort,
+		Published: prev.Published, DurationSec: maxInt(prev.DurationSec, j.ep.DurationSec),
 		Status: podsync.StatusFailed, Attempts: attempts, LastError: err.Error(), Manual: j.manual || prev.Manual,
 	})
 	s.mu.Lock()

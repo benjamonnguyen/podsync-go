@@ -30,7 +30,6 @@ type Episode struct {
 	Channel      string        `json:"channel,omitempty"`
 	ViewCount    int64         `json:"view_count,omitempty"`
 	Height       int           `json:"height,omitempty"`
-	IsShort      bool          `json:"is_short,omitempty"`
 	Status       EpisodeStatus `json:"status"`
 	File         string        `json:"file,omitempty"`
 	Size         int64         `json:"size,omitempty"`

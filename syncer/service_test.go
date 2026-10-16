@@ -95,7 +95,7 @@ func TestPullDownloadsNewestPageAndIsIdempotent(t *testing.T) {
 
 func TestFiltersAndSkippedEntries(t *testing.T) {
 	eps := mock.Episodes(7)
-	eps[0].IsShort = true
+	eps[0].DurationSec = 30 // under the default minimum duration
 	eps[1].IsLive = true
 	eps[2].Unavailable = true
 	eps[3].Title = "Sponsored: thing"

@@ -19,13 +19,15 @@ const shot = n => (process.env.SHOTS ? page.screenshot({ path: `${process.env.SH
 
 // 1. Search and add a feed through the UI
 await page.goto(BASE + '/add');
+check('one lookup box, no playlist search', (await count('form[hx-post="/add/find"]')) === 1 && (await count('input[type=radio]')) === 0);
 await page.type('input[name=q]', 'fake');
-check('search results appear', await waitFor(() => document.querySelector('#results .results li')));
-check('result shows handle + subs', (await text('#results')).includes('@e2efake') && (await text('#results')).includes('123.5K'));
-await page.click('#results li button');
-check('preview card appears', await waitFor(() => document.querySelector('#preview .preview')));
-await page.type('#preview input[name=page_size]', '4');
-await Promise.all([page.waitForNavigation({ waitUntil: 'domcontentloaded' }), page.click('#preview button.primary')]);
+await page.keyboard.press('Enter');
+check('name search lists channels', await waitFor(() => document.querySelectorAll('#found .results li').length === 2));
+check('result shows handle + subs', (await text('#found')).includes('@e2efake') && (await text('#found')).includes('123.5K'));
+await page.click('#found li button');
+check('selecting a result shows the preview', await waitFor(() => document.querySelector('#found .preview')));
+await page.type('#found input[name=page_size]', '4');
+await Promise.all([page.waitForNavigation({ waitUntil: 'domcontentloaded' }), page.click('#found button.primary')]);
 check('redirected to feed page', page.url().endsWith('/feed/' + OK), page.url());
 check('banner shows activity while pulling', await waitFor(() => document.querySelector('#status .banner.info')));
 check('4 episodes appear without reload', await waitFor(() => document.querySelectorAll('#episodes .row:not(.faded)').length === 4, 30000), String(await count('#episodes .row')));
@@ -81,10 +83,14 @@ check('clearing search restores cards', await waitFor(() => document.querySelect
 
 // 8. Failing feed -> error banner; dismiss
 await page.goto(BASE + '/add');
-await page.type('input[name=ref]', 'UCe2eFailChannelBBBBBBBB');
-await page.click('form[hx-post="/add/preview"] button');
-await waitFor(() => document.querySelector('#preview button.primary'));
-await Promise.all([page.waitForNavigation({ waitUntil: 'domcontentloaded' }), page.click('#preview button.primary')]);
+await page.type('input[name=q]', '@nobody-here');
+await page.keyboard.press('Enter');
+check('an @handle that does not resolve is reported inline', await waitFor(() => /unknown url/.test(document.getElementById('found').textContent), 15000));
+await page.$eval('input[name=q]', e => { e.value = ''; });
+await page.type('input[name=q]', 'https://www.youtube.com/channel/UCe2eFailChannelBBBBBBBB');
+await page.keyboard.press('Enter');
+check('a pasted link goes straight to the preview', await waitFor(() => document.querySelector('#found .preview') && !document.querySelector('#found .results'), 15000));
+await Promise.all([page.waitForNavigation({ waitUntil: 'domcontentloaded' }), page.click('#found button.primary')]);
 check('list failure appears in banner', await waitFor(() => /Could not list episodes/.test(document.getElementById('status').textContent), 15000));
 await shot('4-banner');
 await page.evaluate(() => { for (const b of document.querySelectorAll('#status .banner')) if (/Could not list episodes/.test(b.textContent)) { b.querySelector('button').click(); return; } });

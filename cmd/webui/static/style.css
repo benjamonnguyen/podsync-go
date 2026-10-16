@@ -115,3 +115,7 @@ input[type=text], input[type=search], input[type=number], select { width: 100%; 
   .feed-head { flex-direction: column; }
   .actions.vertical { flex-direction: row; }
 }
+
+.facts { margin: .4rem 0 0; }
+.facts dt { color: var(--muted); font-size: .85rem; margin-top: .5rem; }
+.facts dd { margin: 0; overflow-wrap: anywhere; }

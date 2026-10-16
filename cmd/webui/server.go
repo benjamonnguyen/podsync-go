@@ -62,6 +62,7 @@ func newServer(o options) (*Server, error) {
 		"ago":     func(t time.Time) string { return ago(t, time.Now()) },
 		"plural":  plural,
 		"compact": compactNumber,
+		"secs":    seconds,
 		"count":   func(n int, one, many string) string { return fmt.Sprintf("%d %s", n, plural(n, one, many)) },
 	}
 	frag, err := template.New("fragments.html").Funcs(funcs).ParseFS(assets, "templates/fragments.html")
@@ -104,8 +105,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /orphans/{id}/delete", s.handleOrphanDelete)
 
 	mux.HandleFunc("GET /add", s.handleAdd)
-	mux.HandleFunc("POST /add/search", s.handleAddSearch)
-	mux.HandleFunc("POST /add/preview", s.handleAddPreview)
+	mux.HandleFunc("POST /add/find", s.handleAddFind)
 	mux.HandleFunc("POST /add", s.handleAddCommit)
 
 	mux.HandleFunc("GET /settings", s.handleSettings)

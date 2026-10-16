@@ -2,6 +2,7 @@ package syncer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"sort"
@@ -97,31 +98,26 @@ func (s *Service) Status(ctx context.Context) (podsync.SyncStatus, error) {
 
 func (s *Service) defaultSource() (podsync.Source, error) { return s.reg.Get(podsync.DefaultSource) }
 
-func (s *Service) Resolve(ctx context.Context, ref string) (podsync.FeedInfo, error) {
-	src, err := s.defaultSource()
-	if err != nil {
-		return podsync.FeedInfo{}, err
-	}
-	return src.Resolve(ctx, strings.TrimSpace(ref))
-}
-
-func (s *Service) Search(ctx context.Context, query string, kind podsync.SearchKind) ([]podsync.SearchResult, error) {
+// Find looks up what a user typed to add a feed. Mistyped references are
+// ErrInvalid and only shown to the user; any other failure is a problem with
+// the source (e.g. name search broke) and also goes to the status banner.
+func (s *Service) Find(ctx context.Context, query string) ([]podsync.FeedInfo, error) {
 	src, err := s.defaultSource()
 	if err != nil {
 		return nil, err
 	}
-	results, err := src.Search(ctx, query, kind)
+	feeds, err := src.Find(ctx, strings.TrimSpace(query))
 	if err != nil {
-		if ctx.Err() == nil {
-			s.st.Report("search", podsync.LevelWarning, "Channel search failed: "+err.Error())
+		if ctx.Err() == nil && !errors.Is(err, podsync.ErrInvalid) {
+			s.st.Report("find", podsync.LevelWarning, "Looking up feeds failed: "+err.Error())
 		}
 		return nil, err
 	}
-	s.st.Clear("search")
-	if results == nil {
-		results = []podsync.SearchResult{}
+	s.st.Clear("find")
+	if feeds == nil {
+		feeds = []podsync.FeedInfo{}
 	}
-	return results, nil
+	return feeds, nil
 }
 
 func (s *Service) List(ctx context.Context, feedID string, offset, limit int) ([]podsync.EpisodeInfo, error) {
