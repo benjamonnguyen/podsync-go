@@ -1,8 +1,11 @@
 # Copy to compose.yaml and adjust. Then: docker compose up -d
 # Two services that share the config file and the data directory:
-#   syncr - fetches episodes with yt-dlp; has a small control API on the compose network only
-#   webui - the web interface; also serves the podcast feeds and media straight from ./data
-# Only the web UI is published. Both run as the same user so they can both write ./config and ./data.
+#   syncr - fetches episodes with yt-dlp and PUBLISHES the podcast feeds and media (port 8080).
+#           Its control API (port 8081) is for the web UI only and is not published.
+#   webui - the library management interface, for internal use (port 8090). Do not expose it publicly.
+# Both run as the same user so they can both write ./config and ./data.
+# Set "Public address of the sync service" in the web UI's Settings to http://<this-host>:8080:
+# podcast apps use it, and so does your browser when the web UI shows thumbnails.
 services:
   syncr:
     image: podsync-syncr:latest
@@ -23,7 +26,9 @@ services:
     user: "1000:1000"
     environment:
       TZ: UTC
-    # No `ports:` on purpose: the control API has no login, so keep it on the compose network.
+    ports:
+      - "8080:8080" # feeds and media, for podcast apps
+    # The control API (8081) is deliberately not published: it has no login.
     # Optional: cookies for YouTube sign-in checks (then set download.cookies_file = "/config/cookies.txt")
     #   put cookies.txt in ./config
 
@@ -37,7 +42,7 @@ services:
     depends_on:
       - syncr
     ports:
-      - "8080:8080"
+      - "8090:8090" # internal management UI
     volumes:
       # The same two folders as syncr: the web UI edits config.toml and reads/deletes media directly.
       - ./config:/config

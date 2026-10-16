@@ -47,29 +47,34 @@ manual refresh, settings, issue banner) instead of config-file-only operation.
 
 ## 4. Architecture
 
-Two programs that share the config file and the data directory:
+Two programs that share the config file and the data directory. **syncr publishes the feeds; the web UI is
+internal, for library management.**
 
 ```
                       config.toml          data/ (media + JSON sidecars)
                        ▲   ▲                    ▲   ▲
                  writes│   │reads         reads/│   │writes
                        │   │            deletes │   │
- browsers, podcast ──► webui ── REST: apply, pull, status, ──► syncr ──► yt-dlp, ffmpeg, deno
- apps (:8080)          (views, RSS,     resolve, search,       (:8081)
-                        media, edits)   listing                 scheduler, queue, cleanup
+ you (browser) ──► webui (:8090) ── control API ──► syncr ──► yt-dlp, ffmpeg, deno
+                   (views, edits)   127.0.0.1:8081   │  scheduler, queue, cleanup
+                                                     └─ public (:8080): /feeds/<id>.xml, /media/...  ◄── podcast apps
 ```
 
-- **webui** (`cmd/webui`) is the htmx server. It reads and edits the config file, reads the library (and deletes
-  feed folders), renders pages, and serves the RSS feeds and media files itself. It has no yt-dlp.
 - **syncr** (`cmd/syncr`) runs yt-dlp: it lists feeds, downloads episodes, applies cleanup and writes the library.
-  It only *reads* the config file. Its REST API is deliberately tiny (below).
+  It only *reads* the config file. It has two listeners: a **public** one (`server.listen_addr`) serving only the RSS
+  feeds, media and thumbnails (package `publish`), and a **private control API** (`server.api_addr`, loopback by
+  default, must differ from the public one) for the web UI (package `rest`).
+- **webui** (`cmd/webui`, everything in its main package) is the htmx interface for managing the library. It
+  reads and edits the config file, reads the library (and deletes feed folders), and renders pages. It does not
+  publish feeds. The feed links and thumbnail/media URLs it shows point at syncr's public address
+  (`server.base_url`), so the browser must be able to reach it. It has no yt-dlp.
 - Each program has its own in-memory view of the shared files and refreshes it: webui re-reads the config file and
   rescans changed feed folders on every request (cheap when nothing changed); syncr does so on `apply` and at the
   start of every pull.
 - The config file has one writer (webui); the library has one writer (syncr), with two small exceptions in webui:
   deleting feed folders and writing a new feed's `_meta.json`.
 
-### 4.0 syncr's REST API
+### 4.0 syncr's control API
 
 Only what needs the running service (it holds the queue and yt-dlp):
 
@@ -83,7 +88,8 @@ Only what needs the running service (it holds the queue and yt-dlp):
 ### 4.0.1 Package layout
 
 The root package `podsync` is the domain: types and interfaces only, no dependencies beyond the standard
-library. Subpackages are grouped by what they depend on, and the `main` packages wire them together.
+library. Subpackages are grouped by what they depend on. `cmd/syncr` wires them together; `cmd/webui` is the web
+UI itself (a main package that holds its handlers, templates and model).
 
 | Package | Depends on | Role |
 |---|---|---|
@@ -93,15 +99,16 @@ library. Subpackages are grouped by what they depend on, and the `main` packages
 | `toml` | BurntSushi/toml | implements `podsync.ConfigStore` (+ `Reload`) |
 | `status` | — | implements `podsync.StatusTracker` in memory |
 | `syncer` | root interfaces only | implements `podsync.Syncer`: the update loop, queue, cleanup (linked into syncr only) |
-| `rest` | net/http | `Server` (syncr's API) and `Client` (implements `podsync.Syncer` over HTTP; used by webui) |
-| `webui` | net/http, html/template | the htmx interface, feeds and media, plus its model over config + library |
+| `publish` | net/http, rss | syncr's public side: RSS feeds, media, thumbnails |
+| `rest` | net/http | syncr's control API `Server`, and `Client` (implements `podsync.Syncer` over HTTP; used by webui) |
 | `rss` | encoding/xml | podcast feed rendering |
 | `mock` | — | test doubles |
-| `cmd/syncr`, `cmd/webui` | everything above | wiring only |
+| `cmd/syncr` | everything above | wiring + two HTTP listeners |
+| `cmd/webui` | `podsync`, `fs`, `toml`, `rest` | the web UI: templates, handlers, view model |
 
 `podsync.Syncer` is the contract between the two programs: `syncer.Service` implements it inside syncr, and
-`rest.Client` implements it for webui. The webui binary does not link `syncer` or `youtube`. Errors of kind
-not-found / invalid / busy survive the HTTP boundary (`podsync.ErrNotFound`, `ErrInvalid`, `ErrBusy`).
+`rest.Client` implements it for webui. The webui binary does not link `syncer`, `youtube`, `publish` or `rss`.
+Errors of kind not-found / invalid / busy survive the HTTP boundary (`podsync.ErrNotFound`, `ErrInvalid`, `ErrBusy`).
 
 ### 4.1 Source adapter pattern
 
@@ -434,14 +441,15 @@ video results. The playlist filter is `sp=EgIQAw%253D%253D`.
 
 - **Dockerfile**: multi-stage with two final targets. `webui` is a distroless static image holding just the
   binary. `syncr` is `debian:bookworm-slim` with `ffmpeg`, a pinned `yt-dlp` binary and `deno` (yt-dlp's default
-  JavaScript runtime for YouTube). Both binaries are built once on the build host's native arch and
-  cross-compiled (no CGO).
+  JavaScript runtime for YouTube); it sets `SYNCR_API_ADDR=:8081` so the web UI container can reach the control
+  API. Both binaries are built once on the build host's native arch and cross-compiled (no CGO).
 - **Multi-arch (amd64 + arm64)**: `docker buildx build --platform linux/amd64,linux/arm64 --target <syncr|webui> .`
 - **Health checks** use the programs' own `-healthcheck` flag (no curl in the web UI image), so they follow
-  whatever port is configured.
+  whatever port is configured; syncr's probes both its listeners.
 - **`compose.example.yaml`**: two services mounting the same `./config` directory (not the single file: the app
   rewrites config.toml and a single-file bind mount can't be replaced atomically) and `./data`, both running as
-  the user's uid. `syncr` publishes nothing; `webui` publishes `8080` and reaches syncr at `http://syncr:8081`.
+  the user's uid. `syncr` publishes `8080` (feeds and media, for podcast apps) and not its API; `webui` publishes
+  `8090` (internal management) and reaches the API at `http://syncr:8081`.
 
 ## 11. Open Questions
 

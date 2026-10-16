@@ -4,8 +4,10 @@
 # comments, so keep this example file for reference instead of annotating your live one.
 
 [server]
-listen_addr = ":8081"
-# The address podcast apps use to reach the web UI (which serves the feeds). Must be reachable from your phone.
+listen_addr = ":8080"
+# syncr's private control API, used by the web UI. Must differ from listen_addr; keep it off untrusted networks.
+api_addr = "127.0.0.1:8081"
+# syncr's public address as podcast apps (and your browser, for thumbnails) reach listen_addr. Must work from your phone.
 base_url = "http://192.168.1.10:8080"
 # Where media files and metadata are stored (/data in the Docker image).
 data_dir = "./data"

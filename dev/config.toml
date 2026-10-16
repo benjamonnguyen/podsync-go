@@ -1,8 +1,10 @@
-# Development/test configuration for syncr; use dev/run.sh (starts syncr and the web UI) from anywhere.
+# Development/test configuration; use dev/run.sh (starts syncr and the web UI) from anywhere.
+# syncr publishes feeds and media on :8080 and keeps its control API on 127.0.0.1:8081; the web UI is on :8090.
 # Media goes to dev/data (git-ignored). Note: the web UI rewrites this file when you change settings.
 
 [server]
-listen_addr = ":8081"
+listen_addr = ":8080"
+api_addr = "127.0.0.1:8081"
 base_url = "http://towhee:8080"
 data_dir = "./dev/data"
 

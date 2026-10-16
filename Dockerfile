@@ -39,19 +39,22 @@ RUN set -eux; \
     chmod 0755 /out/yt-dlp/yt-dlp /out/deno
 
 # ---- Web UI image: a static binary, nothing else ----
-# It shares /config and /data with the syncr container and calls syncr's API at SYNCR_URL.
+# For managing the library, not for publishing. It shares /config and /data with the syncr
+# container and calls syncr's control API at SYNCR_URL.
 FROM gcr.io/distroless/static-debian12:nonroot AS webui
 COPY --from=build /out/webui /usr/local/bin/webui
 ENV PODSYNC_CONFIG=/config/config.toml \
-    WEBUI_LISTEN=:8080 \
+    WEBUI_LISTEN=:8090 \
     SYNCR_URL=http://syncr:8081
 # Relative paths in the shared config (data_dir = "./data") must resolve like they do in the syncr image.
 WORKDIR /
-EXPOSE 8080
+EXPOSE 8090
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s CMD ["/usr/local/bin/webui", "-healthcheck"]
 ENTRYPOINT ["/usr/local/bin/webui"]
 
 # ---- Sync service image (default target): syncr + yt-dlp + deno + ffmpeg ----
+# Port 8080 publishes the feeds and media. The control API listens on 8081 (SYNCR_API_ADDR) for the
+# web UI container only; do not publish it.
 FROM debian:bookworm-slim AS syncr
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl ffmpeg \
     && rm -rf /var/lib/apt/lists/*
@@ -64,11 +67,12 @@ COPY --from=build /out/syncr /usr/local/bin/syncr
 
 ENV PATH="/opt/yt-dlp:${PATH}" \
     PODSYNC_CONFIG=/config/config.toml \
+    SYNCR_API_ADDR=:8081 \
     XDG_CACHE_HOME=/tmp/.cache \
     HOME=/tmp
 # Relative paths in the default config (data_dir = "./data") resolve under "/".
 WORKDIR /
-EXPOSE 8081
+EXPOSE 8080
 VOLUME ["/config", "/data"]
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s CMD ["/usr/local/bin/syncr", "-healthcheck"]
 ENTRYPOINT ["/usr/local/bin/syncr"]

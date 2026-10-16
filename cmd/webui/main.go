@@ -35,7 +35,7 @@ func envOr(key, def string) string {
 
 func main() {
 	cfgPath := flag.String("config", envOr("PODSYNC_CONFIG", "config.toml"), "path to the config file shared with syncr (env PODSYNC_CONFIG)")
-	listen := flag.String("listen", envOr("WEBUI_LISTEN", ":8090"), "address to serve the web UI on (env WEBUI_LISTEN)")
+	listen := flag.String("listen", envOr("WEBUI_LISTEN", "127.0.0.1:8090"), "address to serve the web UI on (env WEBUI_LISTEN)")
 	syncr := flag.String("syncr", envOr("SYNCR_URL", "http://127.0.0.1:8081"), "base URL of the syncr API (env SYNCR_URL)")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	healthcheck := flag.Bool("healthcheck", false, "probe the running web UI (for container health checks) and exit 0 if healthy")

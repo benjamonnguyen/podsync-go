@@ -10,10 +10,10 @@ It is inspired by [mxpv/podsync](https://github.com/mxpv/podsync); the big diffe
 - Add feeds by pasting a link, `@handle` or ID, or by searching YouTube by name
 - Per-feed options: audio or video, max resolution, skip Shorts, title include/exclude regex, automatic cleanup
 - A status banner that tells you when yt-dlp, YouTube or a download is misbehaving
-- Two small programs: **syncr** (the sync service: fetches and stores episodes with yt-dlp) and **webui** (the web interface, which also serves the podcast feeds). They share the config file and the data directory, and syncr has a tiny REST API for the few things that need the running service. Multi-arch (amd64 + arm64) Docker images for both
+- Two small programs: **syncr** (the sync service: fetches and stores episodes with yt-dlp, and **publishes the podcast feeds and media**) and **webui** (the library management interface, for your own use). They share the config file and the data directory; syncr also has a tiny private control API for the few things that need the running service. Multi-arch (amd64 + arm64) Docker images for both
 - Plain-file storage: no database, just media files with small JSON files next to them, and one `config.toml`
 
-> **No login.** podsync-go has no authentication. Run it on a trusted home network, or put it behind a reverse proxy that does authentication. Anyone who can open the web UI can change settings, delete feeds and download your media. syncr's API port can trigger updates and lookups, so keep it off untrusted networks; the compose example publishes only the web UI.
+> **No login.** podsync-go has no authentication. The only thing meant to be reachable by podcast apps is syncr's feed port (feeds and media are public to anyone who can reach it and knows a feed URL). The web UI can change settings and delete feeds, so keep it on a trusted network or behind an authenticating reverse proxy; syncr's control API listens on a separate private address and is not published by the compose example.
 
 ## Quick start (Docker)
 
@@ -38,15 +38,15 @@ It is inspired by [mxpv/podsync](https://github.com/mxpv/podsync); the big diffe
    docker compose up -d
    ```
 
-3. Open <http://localhost:8080>. On first start a default `config/config.toml` is created.
+3. Open the management UI at <http://localhost:8090>. On first start a default `config/config.toml` is created.
 
-4. **Open Settings and set "Public address of this server"** to the address your podcast app will use to reach the web UI, for example `http://192.168.1.10:8080`. The default `http://localhost:8080` only works on the same machine, so feed links would be useless on your phone until you change it.
+4. **Open Settings and set "Public address of the sync service"** to the address podcast apps (and your browser) will use to reach syncr's port 8080, for example `http://192.168.1.10:8080`. The default `http://localhost:8080` only works on the same machine, so feed links would be useless on your phone until you change it. Your browser also loads episode thumbnails from this address.
 
 5. Click **Add feed**, paste a channel link (or an `@handle`, or search by name), and add it. The newest episodes start downloading right away.
 
-6. Open the feed in the app and copy its **Podcast feed URL** (`http://<your-address>/feeds/<id>.xml`) into your podcast app ("add a show by URL").
+6. Open the feed in the UI and copy its **Podcast feed URL** (`http://<your-address>:8080/feeds/<id>.xml`) into your podcast app ("add a show by URL").
 
-Both containers mount the same `config` and `data` folders and run as the user in `compose.yaml` (`1000:1000` in the example). Create the folders as that user so both programs can write to them. If the web UI shows "Cannot reach the sync service", syncr isn't running or `SYNCR_URL` is wrong; you can still browse and listen meanwhile, but nothing new is downloaded.
+Ports: **8080** syncr's public feeds and media (publish this to podcast apps), **8090** the management UI (keep it internal). syncr's control API on 8081 is only reachable by the web UI container. Both containers mount the same `config` and `data` folders and run as the user in `compose.yaml` (`1000:1000` in the example); create the folders as that user so both programs can write to them. If the web UI shows "Cannot reach the sync service", syncr isn't running or `SYNCR_URL` is wrong; you can still browse and edit settings, and podcast apps keep working, but nothing new is downloaded.
 
 ## Using the web UI
 
@@ -84,8 +84,9 @@ The web UI rewrites this file when you save changes, so hand-written comments ar
 
 | Section / key | Default | Meaning |
 |---|---|---|
-| `server.listen_addr` | `:8081` | Address and port syncr's API listens on (edit the file, restart) |
-| `server.base_url` | `http://localhost:8080` | Address podcast apps use to reach the web UI; used in feed links |
+| `server.listen_addr` | `:8080` | Where syncr publishes feeds and media (edit the file, restart) |
+| `server.api_addr` | `127.0.0.1:8081` | Where syncr's private control API listens; must differ from `listen_addr` (edit the file, restart) |
+| `server.base_url` | `http://localhost:8080` | Public address of `listen_addr` as podcast apps and your browser reach it; used in feed links and enclosure URLs |
 | `server.data_dir` | `./data` | Where media and metadata are stored; both programs use it (edit the file, restart) |
 | `download.yt_dlp_path` | `yt-dlp` | yt-dlp executable |
 | `download.concurrency` | `2` | Simultaneous downloads (1-16) |
@@ -109,12 +110,14 @@ The web UI rewrites this file when you save changes, so hand-written comments ar
 | Flag | Environment | Default | Meaning |
 |---|---|---|---|
 | `-config` | `PODSYNC_CONFIG` | `config.toml` | The config file shared with syncr (also gives webui the data directory) |
-| `-listen` | `WEBUI_LISTEN` | `:8080` | Address to serve the web UI on |
-| `-syncr` | `SYNCR_URL` | `http://127.0.0.1:8081` | Where syncr's API is (`server.listen_addr` in the config) |
+| `-listen` | `WEBUI_LISTEN` | `127.0.0.1:8090` | Address to serve the web UI on (loopback by default; the Docker image sets `:8090`) |
+| `-syncr` | `SYNCR_URL` | `http://127.0.0.1:8081` | Where syncr's control API is (`server.api_addr` in the config) |
 
-The web UI serves the podcast feeds (`/feeds/<id>.xml`) and media files (`/media/...`) itself, straight from the data directory, so `server.base_url` is the web UI's address. Both programs accept `-version` and `-healthcheck` (exit status 0 if the running instance answers), used by the container health checks.
+syncr listens on two addresses: `server.listen_addr` (default `:8080`) for the public feeds and media, and `server.api_addr` (default `127.0.0.1:8081`, loopback only) for the control API. They are separate on purpose so publishing the feeds never exposes the API; the config check refuses to start if they are the same. The Docker image sets `SYNCR_API_ADDR=:8081` (an environment override of `server.api_addr`) because the web UI runs in another container.
 
-Both programs must see the same config file and the same data directory. If `data_dir` is a relative path (like the default `./data`) they resolve it from their own working directory, so start them from the same directory or use an absolute path. The settings page edits everything except `server.listen_addr` and `server.data_dir`, which both programs depend on; change those in the file and restart both.
+`server.base_url` is syncr's *public* address as podcast apps reach it. The web UI uses it for the feed links it shows and to load thumbnails in your browser, so your browser must be able to reach it too. Both programs accept `-version` and `-healthcheck` (exit status 0 if the running instance answers), used by the container health checks.
+
+Both programs must see the same config file and the same data directory. If `data_dir` is a relative path (like the default `./data`) they resolve it from their own working directory, so start them from the same directory or use an absolute path. The settings page edits everything except the addresses and `server.data_dir`, which both programs depend on; change those in the file and restart both.
 
 Regular expressions use Go's [RE2 syntax](https://pkg.go.dev/regexp/syntax); prefix with `(?i)` for case-insensitive matching.
 
@@ -140,11 +143,27 @@ You need Go 1.27+, [yt-dlp](https://github.com/yt-dlp/yt-dlp), `ffmpeg`, and a J
 ```sh
 go build -o syncr ./cmd/syncr
 go build -o webui ./cmd/webui
-./syncr -config config.toml &                                              # sync service, API on :8081
-./webui -config config.toml -listen :8080 -syncr http://127.0.0.1:8081     # web UI on :8080
+./syncr -config config.toml &                                              # feeds on :8080, control API on 127.0.0.1:8081
+./webui -config config.toml -syncr http://127.0.0.1:8081                      # management UI on 127.0.0.1:8090 (add -listen :8090 for your LAN)
 ```
 
-Start both from the same directory (or use an absolute `data_dir`). For a quick look at the UI with a real channel, run `dev/run.sh`: it builds and starts both programs with a ready-made test feed on <http://localhost:8080> (media goes to `dev/data`).
+Start both from the same directory (or use an absolute `data_dir`). For a quick look at the UI with a real channel, run `dev/run.sh`: it builds and starts both programs with a ready-made test feed (UI on <http://localhost:8090>, feeds on `:8080`; media goes to `dev/data`).
+
+## syncr's control API
+
+Everything the web UI can do with the config and the library it does directly on the shared files. syncr's private API (`server.api_addr`) covers only what needs the running service (it runs yt-dlp and holds the download queue):
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /api/v1/apply` | Re-read `config.toml` and rescan the library after the web UI changed them. Replies `{"changed":…,"restart_required":…}` |
+| `POST /api/v1/pull` | Start an update of every feed, or `{"feed":"UC…"}` for one, or `{"feed":"UC…","episode":{"id":"…"}}` to download one episode now. `409` if an update is already running |
+| `GET /api/v1/status` | Activity, current problems, in-flight downloads, tool versions |
+| `GET /api/v1/resolve?ref=` | Turn a URL, `@handle` or ID into a feed description |
+| `GET /api/v1/search?q=&kind=channel\|playlist` | Search YouTube by name |
+| `GET /api/v1/feeds/{id}/listing?offset=&limit=` | A window of a feed's episodes straight from YouTube (nothing is stored) |
+| `GET /healthz` | Liveness |
+
+Errors come back as `{"error":{"kind":"not_found|invalid|busy","message":"…"}}` with status 404, 400 or 409; writes need `Content-Type: application/json`. There is no authentication; keep this address private. The public port serves only `/feeds/<id>.xml`, `/media/<id>/<file>` and `/healthz`.
 
 ## syncr's REST API
 
@@ -182,8 +201,8 @@ Check the banner at the top of the page first; it quotes yt-dlp's error.
 - **"Sign in to confirm you're not a bot"**: YouTube wants a logged-in session. Export cookies from a browser where you're signed in to a `cookies.txt` file (Netscape format), put it somewhere the app can read (in Docker, in the `config` folder), and set `download.cookies_file` (for example `/config/cookies.txt`) in Settings. Use a throwaway account if you can; the cookies grant access to that account.
 - **"Unable to extract..." / downloads suddenly fail everywhere**: yt-dlp is out of date. Tick *Keep yt-dlp up to date* in Settings, or pull a newer image / update the binary. (Self-update only works if the yt-dlp binary is writable by the app, as in the Docker image. It cannot update a yt-dlp installed by a package manager.)
 - **HTTP 429 / rate limited**: YouTube is throttling you. It retries on the next update; lower *Simultaneous downloads* and raise *Check feeds every* if it keeps happening.
-- **"Cannot reach the sync service" in the banner**: the web UI can't talk to syncr, so nothing new is downloaded, and Add feed (name search), Load more, Check now and Download won't work. Browsing, listening and settings still do. Check that syncr is running and that `-syncr` / `SYNCR_URL` points at it. Changes you saved meanwhile are picked up when syncr next starts or runs an update.
-- **Feed links don't work on my phone**: set *Public address of this server* in Settings to the machine's LAN address.
+- **"Cannot reach the sync service" in the banner**: the web UI can't talk to syncr, so nothing new is downloaded, and Add feed (name search), Load more, Check now and Download won't work. Browsing and settings still do, and podcast apps keep fetching from syncr's feed port if it is up. Check that syncr is running and that `-syncr` / `SYNCR_URL` points at it. Changes you saved meanwhile are picked up when syncr next starts or runs an update.
+- **Feed links don't work on my phone**, or thumbnails are missing in the web UI: set *Public address of the sync service* in Settings to the machine's LAN address and syncr's public port (for example `http://192.168.1.10:8080`).
 - **"Permission denied" when saving settings or downloading in Docker**: the `config` and `data` folders must be writable by the user both containers run as (the web UI saves the config and deletes feed folders; syncr writes the media).
 - **Settings don't seem to save when `config.toml` is bind-mounted as a single file**: mount the folder instead (see the compose example).
 - **An episode shows as failed**: the banner and the episode row show yt-dlp's reason (private, members-only and region-blocked videos can't be downloaded). Press **Retry** to try again.
@@ -198,6 +217,6 @@ cd e2e && npm install && ./run.sh                                # browser test:
 dev/run.sh                                                       # run everything locally with a real test feed
 ```
 
-Layout: the root package `podsync` holds the domain types and interfaces (feeds, episodes, the `Source`, `Library` and `ConfigStore` interfaces, and the small `Syncer` contract). Subpackages are grouped by what they depend on: `youtube` (yt-dlp), `fs` (the on-disk library), `toml` (the config file), `rest` (syncr's HTTP API server and the client the web UI uses), `webui` (templates and handlers), `rss`, `status`, and `syncer` (the sync service's logic, which depends only on the root interfaces); `mock` has test doubles. The programs in `cmd/` only wire these together; the web UI binary does not contain the sync service or yt-dlp support. To add another source (Vimeo, ...), implement `podsync.Source` in a new package and register it in `cmd/syncr`. See [`PROJECT.md`](PROJECT.md) for the design.
+Layout: the root package `podsync` holds the domain types and interfaces (feeds, episodes, the `Source`, `Library` and `ConfigStore` interfaces, and the small `Syncer` contract). Subpackages are grouped by what they depend on: `youtube` (yt-dlp), `fs` (the on-disk library), `toml` (the config file), `publish` (the public feeds and media), `rest` (syncr's private control API and the client the web UI uses), `rss`, `status`, and `syncer` (the sync service's logic, which depends only on the root interfaces); `mock` has test doubles. `cmd/syncr` only wires these together. `cmd/webui` is the whole web UI in its main package (templates, handlers, and a model over the config and the library); its binary does not contain the sync service or yt-dlp support. To add another source (Vimeo, ...), implement `podsync.Source` in a new package and register it in `cmd/syncr`. See [`PROJECT.md`](PROJECT.md) for the design.
 
 The UI uses a vendored copy of [htmx](https://htmx.org) (0BSD license).

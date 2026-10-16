@@ -185,3 +185,25 @@ func TestReloadPicksUpExternalEditsAndKeepsConfigOnErrors(t *testing.T) {
 		t.Fatal("memory stores never reload")
 	}
 }
+
+// The documented example must stay loadable as the config format evolves.
+func TestExampleConfigParses(t *testing.T) {
+	data, err := os.ReadFile("../config.example.toml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Parse(data)
+	if err != nil {
+		t.Fatalf("config.example.toml no longer parses: %v", err)
+	}
+	if cfg.Server.APIAddr == cfg.Server.ListenAddr || len(cfg.Feeds) == 0 {
+		t.Fatalf("%+v", cfg.Server)
+	}
+	dev, err := os.ReadFile("../dev/config.toml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Parse(dev); err != nil {
+		t.Fatalf("dev/config.toml no longer parses: %v", err)
+	}
+}
