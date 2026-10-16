@@ -5,6 +5,13 @@ package podsync
 type Library interface {
 	// Load scans storage and rebuilds the in-memory index.
 	Load() error
+	// Refresh picks up changes other processes made to storage since the last
+	// scan (the sync service and the web UI share one data directory). It
+	// reports whether anything changed.
+	Refresh() (changed bool, err error)
+	// CleanTemp removes staged partial downloads. Only the process that
+	// downloads (the sync service) should call it, at startup.
+	CleanTemp() error
 	Root() string
 	// TempDir is where downloads are staged before being moved into place.
 	TempDir() string

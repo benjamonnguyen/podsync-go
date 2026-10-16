@@ -13,15 +13,14 @@ import (
 var _ podsync.StatusTracker = (*Tracker)(nil)
 
 type Tracker struct {
-	mu        sync.Mutex
-	issues    map[string]*podsync.Issue
-	dismissed map[string]time.Time // key -> Last of the issue instance that was dismissed
-	activity  func() podsync.Activity
-	now       func() time.Time
+	mu       sync.Mutex
+	issues   map[string]*podsync.Issue
+	activity func() podsync.Activity
+	now      func() time.Time
 }
 
 func New() *Tracker {
-	return &Tracker{issues: map[string]*podsync.Issue{}, dismissed: map[string]time.Time{}, now: time.Now}
+	return &Tracker{issues: map[string]*podsync.Issue{}, now: time.Now}
 }
 
 func (t *Tracker) SetActivity(fn func() podsync.Activity) {
@@ -50,13 +49,11 @@ func (t *Tracker) Report(key string, level podsync.IssueLevel, message string) {
 	} else {
 		t.issues[key] = &podsync.Issue{Key: key, Level: level, Message: message, Since: now, Last: now, Count: 1}
 	}
-	delete(t.dismissed, key)
 }
 
 func (t *Tracker) Clear(key string) {
 	t.mu.Lock()
 	delete(t.issues, key)
-	delete(t.dismissed, key)
 	t.mu.Unlock()
 }
 
@@ -65,16 +62,7 @@ func (t *Tracker) ClearPrefix(prefix string) {
 	for k := range t.issues {
 		if strings.HasPrefix(k, prefix) {
 			delete(t.issues, k)
-			delete(t.dismissed, k)
 		}
-	}
-	t.mu.Unlock()
-}
-
-func (t *Tracker) Dismiss(key string) {
-	t.mu.Lock()
-	if is, ok := t.issues[key]; ok {
-		t.dismissed[key] = is.Last
 	}
 	t.mu.Unlock()
 }
@@ -83,10 +71,7 @@ func (t *Tracker) Active() []podsync.Issue {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	var out []podsync.Issue
-	for k, is := range t.issues {
-		if d, ok := t.dismissed[k]; ok && !is.Last.After(d) {
-			continue
-		}
+	for _, is := range t.issues {
 		out = append(out, *is)
 	}
 	sort.Slice(out, func(i, j int) bool {

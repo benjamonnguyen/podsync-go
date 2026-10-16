@@ -40,6 +40,8 @@ type Service struct {
 	st  podsync.StatusTracker
 	now func() time.Time
 
+	started podsync.Server // server settings at startup, to tell when a restart is needed
+
 	pullMu sync.Mutex // held for the duration of a pull
 
 	mu       sync.Mutex
@@ -54,7 +56,7 @@ type Service struct {
 
 func New(ctx context.Context, cfg podsync.ConfigStore, lib podsync.Library, reg *podsync.Registry, st podsync.StatusTracker) *Service {
 	s := &Service{
-		ctx: ctx, cfg: cfg, lib: lib, reg: reg, st: st, now: time.Now,
+		ctx: ctx, cfg: cfg, lib: lib, reg: reg, st: st, now: time.Now, started: cfg.Get().Server,
 		jobs:     map[string]*job{},
 		failures: map[string]map[string]string{},
 		versions: map[string]string{},
@@ -109,6 +111,11 @@ func (s *Service) Reconcile() {
 
 // ConfigChanged should be called after the configuration is updated.
 func (s *Service) ConfigChanged(old, cur podsync.Config) {
+	for _, f := range old.Feeds {
+		if _, still := cur.Feed(f.ID); !still {
+			s.ForgetFeed(f.ID)
+		}
+	}
 	s.Reconcile()
 	s.mu.Lock()
 	s.scheduleLocked() // concurrency may have changed
@@ -273,6 +280,7 @@ func (s *Service) setPulling(v bool) {
 func (s *Service) pullFeedsLocked(ids []string) {
 	s.setPulling(true)
 	defer s.setPulling(false)
+	_, _ = s.lib.Refresh() // the web UI may have added or deleted feeds
 	var all []*job
 	for _, id := range ids {
 		if s.ctx.Err() != nil {

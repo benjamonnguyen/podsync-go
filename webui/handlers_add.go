@@ -9,12 +9,7 @@ import (
 )
 
 func (s *Server) handleAdd(w http.ResponseWriter, r *http.Request) {
-	settings, err := s.api.Settings(r.Context())
-	if err != nil {
-		s.fail(w, r, err)
-		return
-	}
-	s.render(w, r, "add", map[string]any{"Title": "Add feed", "DefaultPageSize": settings.Defaults.PageSize})
+	s.render(w, r, "add", map[string]any{"Title": "Add feed", "DefaultPageSize": s.cfg.Get().Defaults.PageSize})
 }
 
 func (s *Server) handleAddSearch(w http.ResponseWriter, r *http.Request) {
@@ -27,7 +22,7 @@ func (s *Server) handleAddSearch(w http.ResponseWriter, r *http.Request) {
 	if r.FormValue("kind") == "playlist" {
 		kind = podsync.SearchPlaylist
 	}
-	results, err := s.api.SearchSource(r.Context(), q, kind)
+	results, err := s.sync.Search(r.Context(), q, kind)
 	if err != nil {
 		if r.Context().Err() != nil {
 			return
@@ -38,16 +33,11 @@ func (s *Server) handleAddSearch(w http.ResponseWriter, r *http.Request) {
 	s.fragment(w, "add_results", map[string]any{"Results": results, "Q": q})
 }
 
-func (s *Server) defaultPageSize(r *http.Request) int {
-	if st, err := s.api.Settings(r.Context()); err == nil {
-		return st.Defaults.PageSize
-	}
-	return 0
-}
+func (s *Server) defaultPageSize(r *http.Request) int { return s.cfg.Get().Defaults.PageSize }
 
 func (s *Server) handleAddPreview(w http.ResponseWriter, r *http.Request) {
 	ref := strings.TrimSpace(r.FormValue("ref"))
-	info, err := s.api.Resolve(r.Context(), ref)
+	info, err := s.sync.Resolve(r.Context(), ref)
 	if err != nil {
 		if r.Context().Err() != nil {
 			return
@@ -63,13 +53,7 @@ func (s *Server) handleAddPreview(w http.ResponseWriter, r *http.Request) {
 	}
 	s.previews[info.ID] = preview{info: info, at: s.now()}
 	s.mu.Unlock()
-	list, _ := s.api.Feeds(r.Context())
-	exists := false
-	for _, f := range list.Feeds {
-		if f.ID == info.ID {
-			exists = true
-		}
-	}
+	_, exists := s.cfg.Get().Feed(info.ID)
 	s.fragment(w, "add_preview", map[string]any{"Info": info, "Exists": exists, "DefaultPageSize": s.defaultPageSize(r)})
 }
 
@@ -93,7 +77,7 @@ func (s *Server) handleAddCommit(w http.ResponseWriter, r *http.Request) {
 		}
 		pageSize = &n
 	}
-	sum, err := s.api.AddFeed(r.Context(), podsync.AddFeedRequest{Info: pv.info, PageSize: pageSize})
+	sum, err := s.AddFeed(r.Context(), AddFeedRequest{Info: pv.info, PageSize: pageSize})
 	if err != nil {
 		s.fragment(w, "add_preview", map[string]any{"Info": pv.info, "DefaultPageSize": s.defaultPageSize(r), "Err": err.Error()})
 		return

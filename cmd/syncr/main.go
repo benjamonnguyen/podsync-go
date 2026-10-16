@@ -1,7 +1,7 @@
 // Command syncr is the sync service: it fetches episodes from feed sources
-// (YouTube via yt-dlp) into the library on disk, and exposes a REST API plus
-// the public RSS feeds and media files. The web UI (cmd/webui) is a client of
-// this API.
+// (YouTube via yt-dlp) into the library on disk. The web UI (cmd/webui) shares
+// the config file and data directory with it and talks to it over a small REST
+// API to apply changes, trigger pulls, read live status and look up sources.
 package main
 
 import (
@@ -85,6 +85,9 @@ func run(cfgPath string) error {
 	if err := lib.Load(); err != nil {
 		return fmt.Errorf("load library from %s: %w", c.Server.DataDir, err)
 	}
+	if err := lib.CleanTemp(); err != nil { // leftovers of an interrupted download; only this program stages downloads
+		log.Printf("could not clean staging directory: %v", err)
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -99,10 +102,9 @@ func run(cfgPath string) error {
 
 	srv := &http.Server{
 		Addr:              c.Server.ListenAddr,
-		Handler:           rest.NewServer(svc, lib).Handler(),
+		Handler:           rest.NewServer(svc).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       2 * time.Minute,
-		// No write timeout: media downloads to slow podcast clients can take long.
 	}
 	errc := make(chan error, 1)
 	go func() { errc <- srv.ListenAndServe() }()

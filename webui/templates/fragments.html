@@ -5,7 +5,7 @@
 {{- range .Issues}}
 <div class="banner {{.Level}}">
   <div class="msg">{{.Message}}{{if gt .Count 1}} <span class="muted">(seen {{.Count}} times)</span>{{end}}</div>
-  <form hx-post="/status/dismiss" hx-target="#status" hx-swap="outerHTML"><input type="hidden" name="key" value="{{.Key}}"><button class="link" type="submit">Dismiss</button></form>
+  {{if .Dismissible}}<form hx-post="/status/dismiss" hx-target="#status" hx-swap="outerHTML"><input type="hidden" name="key" value="{{.Key}}"><button class="link" type="submit">Dismiss</button></form>{{end}}
 </div>
 {{- end}}
 </div>{{end}}

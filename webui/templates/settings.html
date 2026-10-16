@@ -7,13 +7,9 @@
     <legend>Server</legend>
     <label>Public address of this server
       <input type="text" name="base_url" value="{{.Cfg.Server.BaseURL}}" required>
-      <small>Used in podcast feed links, so podcast apps must be able to reach it (e.g. http://192.168.1.10:8080).</small></label>
-    <label>Listen address
-      <input type="text" name="listen_addr" value="{{.Cfg.Server.ListenAddr}}" required>
-      <small>Requires a restart.</small></label>
-    <label>Data directory
-      <input type="text" name="data_dir" value="{{.Cfg.Server.DataDir}}" required>
-      <small>Where media and metadata are stored. Requires a restart; existing files are not moved.</small></label>
+      <small>Used in podcast feed links; this is the address of this web interface, and podcast apps must be able to reach it (e.g. http://192.168.1.10:8080).</small></label>
+    <p class="muted">Sync service listen address: <code>{{.Cfg.Server.ListenAddr}}</code> · data directory: <code>{{.Cfg.Server.DataDir}}</code><br>
+      Both programs (sync service and web UI) share these, so they are changed in <code>config.toml</code> followed by a restart of both.</p>
   </fieldset>
   <fieldset>
     <legend>Downloading</legend>

@@ -11,10 +11,10 @@ import (
 
 func isKind(err error, target error) bool { return errors.Is(err, target) }
 
-// rowView is one episode row: the service's view of the episode plus the
-// presentation context the template needs.
+// rowView is one episode row: the episode's view plus the presentation
+// context the template needs.
 type rowView struct {
-	podsync.EpisodeView
+	EpisodeView
 	FeedID, FeedName string
 	ShowFeed         bool // show the feed name (cross-feed search results)
 	ShowChannel      bool // show the uploader (playlists mix channels)
@@ -28,7 +28,7 @@ func (r rowView) Thumb() string {
 	return r.Thumbnail
 }
 
-func makeRows(feedID, feedName string, playlist bool, views []podsync.EpisodeView) []rowView {
+func makeRows(feedID, feedName string, playlist bool, views []EpisodeView) []rowView {
 	rows := make([]rowView, 0, len(views))
 	for _, v := range views {
 		rows = append(rows, rowView{EpisodeView: v, FeedID: feedID, FeedName: feedName, ShowChannel: playlist})
@@ -38,7 +38,8 @@ func makeRows(feedID, feedName string, playlist bool, views []podsync.EpisodeVie
 
 // hintFromRequest reads the listing data a row carries in hidden inputs or
 // query parameters, so a row can be re-rendered before the library knows the
-// episode. The service sanitizes it.
+// episode. Only a remote https thumbnail is accepted; the sync service
+// re-sanitizes whatever it receives.
 func hintFromRequest(r *http.Request, epID string) podsync.EpisodeInfo {
 	get := func(k string) string {
 		if v := r.PostFormValue(k); v != "" {
@@ -46,39 +47,30 @@ func hintFromRequest(r *http.Request, epID string) podsync.EpisodeInfo {
 		}
 		return r.URL.Query().Get(k)
 	}
-	h := podsync.EpisodeInfo{ID: epID, Title: strings.TrimSpace(get("title")), Channel: strings.TrimSpace(get("channel")), Thumbnail: get("thumb")}
+	h := podsync.EpisodeInfo{ID: epID, Title: strings.TrimSpace(get("title")), Channel: strings.TrimSpace(get("channel"))}
 	h.DurationSec, _ = strconv.Atoi(get("duration"))
 	h.ViewCount, _ = strconv.ParseInt(get("views"), 10, 64)
+	if t := get("thumb"); strings.HasPrefix(t, "https://") {
+		h.Thumbnail = t
+	}
 	return h
 }
 
 // ---- library ----
 
 func (s *Server) handleLibrary(w http.ResponseWriter, r *http.Request) {
-	list, err := s.api.Feeds(r.Context())
-	if err != nil {
-		s.fail(w, r, err)
-		return
-	}
+	list := s.Feeds(r.Context())
 	s.render(w, r, "library", map[string]any{"Title": "Library", "Cards": list.Feeds, "Orphans": list.Orphans})
 }
 
 func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	q := strings.TrimSpace(r.URL.Query().Get("q"))
 	if q == "" {
-		list, err := s.api.Feeds(r.Context())
-		if err != nil {
-			s.fail(w, r, err)
-			return
-		}
+		list := s.Feeds(r.Context())
 		s.fragment(w, "library_body", map[string]any{"Cards": list.Feeds, "Orphans": list.Orphans})
 		return
 	}
-	hits, err := s.api.SearchLibrary(r.Context(), q)
-	if err != nil {
-		s.fail(w, r, err)
-		return
-	}
+	hits := s.SearchLibrary(r.Context(), q)
 	rows := make([]rowView, 0, len(hits.Episodes))
 	for _, h := range hits.Episodes {
 		rows = append(rows, rowView{EpisodeView: h.EpisodeView, FeedID: h.FeedID, FeedName: h.FeedName, ShowFeed: true})
@@ -90,12 +82,12 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleFeed(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	detail, err := s.api.Feed(r.Context(), id)
+	detail, err := s.Feed(r.Context(), id)
 	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
-	views, err := s.api.Episodes(r.Context(), id, "")
+	views, err := s.Episodes(r.Context(), id, "")
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -108,7 +100,7 @@ func (s *Server) handleFeed(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
-	detail, err := s.api.Feed(r.Context(), r.PathValue("id"))
+	detail, err := s.Feed(r.Context(), r.PathValue("id"))
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -119,12 +111,12 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleEpisodes(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	q := strings.TrimSpace(r.URL.Query().Get("q"))
-	detail, err := s.api.Feed(r.Context(), id)
+	detail, err := s.Feed(r.Context(), id)
 	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
-	views, err := s.api.Episodes(r.Context(), id, q)
+	views, err := s.Episodes(r.Context(), id, q)
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -134,7 +126,7 @@ func (s *Server) handleEpisodes(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleOlder(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	detail, err := s.api.Feed(r.Context(), id)
+	detail, err := s.Feed(r.Context(), id)
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -143,7 +135,7 @@ func (s *Server) handleOlder(w http.ResponseWriter, r *http.Request) {
 	if err != nil || offset < 0 || offset > 100000 {
 		offset = 0
 	}
-	page, err := s.api.Older(r.Context(), id, offset)
+	page, err := s.Older(r.Context(), id, offset)
 	if err != nil {
 		if r.Context().Err() != nil {
 			return
@@ -159,13 +151,13 @@ func (s *Server) handleOlder(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 	id, epID := r.PathValue("id"), r.PathValue("ep")
-	detail, err := s.api.Feed(r.Context(), id)
+	detail, err := s.Feed(r.Context(), id)
 	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
 	hint := hintFromRequest(r, epID)
-	if err := s.api.Download(r.Context(), id, hint); err != nil {
+	if err := s.DownloadEpisode(r.Context(), id, hint); err != nil {
 		s.fail(w, r, err)
 		return
 	}
@@ -173,8 +165,7 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleRow(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	detail, err := s.api.Feed(r.Context(), id)
+	detail, err := s.Feed(r.Context(), r.PathValue("id"))
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -182,8 +173,8 @@ func (s *Server) handleRow(w http.ResponseWriter, r *http.Request) {
 	s.renderRow(w, r, detail, hintFromRequest(r, r.PathValue("ep")))
 }
 
-func (s *Server) renderRow(w http.ResponseWriter, r *http.Request, detail podsync.FeedDetail, hint podsync.EpisodeInfo) {
-	v, err := s.api.Episode(r.Context(), detail.ID, hint)
+func (s *Server) renderRow(w http.ResponseWriter, r *http.Request, detail FeedDetail, hint podsync.EpisodeInfo) {
+	v, err := s.Episode(r.Context(), detail.ID, hint)
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -193,30 +184,53 @@ func (s *Server) renderRow(w http.ResponseWriter, r *http.Request, detail podsyn
 
 // ---- pulling & status ----
 
+type issueView struct {
+	podsync.Issue
+	Dismissible bool
+}
+
 type statusView struct {
 	Pulling     bool
 	Downloading int
 	Queued      int
 	Busy        bool
 	Version     uint64
-	Issues      []podsync.Issue
+	Issues      []issueView
 	Notice      string
 }
 
-// statusView asks the sync service for its status. If the service cannot be
-// reached that is itself shown as an error in the banner.
+// statusView combines the sync service's live status with problems the web UI
+// detects itself: the sync service being unreachable and a config file that
+// no longer parses. Those two are not dismissible.
 func (s *Server) statusView(r *http.Request, notice string) statusView {
-	st, err := s.api.Status(r.Context())
+	v := statusView{Notice: notice, Version: s.lib.Version()}
+	now := s.now()
+	st, err := s.sync.Status(r.Context())
 	if err != nil {
-		now := s.now()
-		return statusView{Notice: notice, Issues: []podsync.Issue{{
-			Key: "syncr", Level: podsync.LevelError, Message: "Cannot reach the sync service: " + err.Error(), Since: now, Last: now, Count: 1,
-		}}}
+		v.Issues = append(v.Issues, issueView{Issue: podsync.Issue{
+			Key: "syncr", Level: podsync.LevelError, Message: "Cannot reach the sync service, so nothing is being downloaded: " + err.Error(), Since: now, Last: now, Count: 1,
+		}})
+	} else {
+		v.Pulling, v.Downloading, v.Queued = st.Pulling, st.Downloading, st.Queued
+		v.Busy = st.Pulling || st.Downloading > 0 || st.Queued > 0
+		s.mu.Lock()
+		for _, is := range st.Issues {
+			if d, ok := s.dismissed[is.Key]; ok && !is.Last.After(d) {
+				continue
+			}
+			v.Issues = append(v.Issues, issueView{Issue: is, Dismissible: true})
+		}
+		s.mu.Unlock()
 	}
-	return statusView{
-		Pulling: st.Pulling, Downloading: st.Downloading, Queued: st.Queued, Busy: st.Pulling || st.Downloading > 0 || st.Queued > 0,
-		Version: st.Version, Issues: st.Issues, Notice: notice,
+	s.mu.Lock()
+	cfgErr := s.cfgErr
+	s.mu.Unlock()
+	if cfgErr != nil {
+		v.Issues = append(v.Issues, issueView{Issue: podsync.Issue{
+			Key: "config-file", Level: podsync.LevelError, Message: "The configuration file cannot be read, so the last good settings are in use: " + cfgErr.Error(), Since: now, Last: now, Count: 1,
+		}})
 	}
+	return v
 }
 
 // handleStatus serves the banner. It also tells the page to refresh its
@@ -230,8 +244,18 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	s.fragment(w, "status", v)
 }
 
+// handleDismiss hides an issue until the sync service reports it again.
 func (s *Server) handleDismiss(w http.ResponseWriter, r *http.Request) {
-	_ = s.api.DismissIssue(r.Context(), r.FormValue("key"))
+	key := r.FormValue("key")
+	if st, err := s.sync.Status(r.Context()); err == nil {
+		for _, is := range st.Issues {
+			if is.Key == key {
+				s.mu.Lock()
+				s.dismissed[key] = is.Last
+				s.mu.Unlock()
+			}
+		}
+	}
 	s.fragment(w, "status", s.statusView(r, ""))
 }
 
@@ -246,17 +270,17 @@ func pullNotice(err error, started string) string {
 }
 
 func (s *Server) handlePullAll(w http.ResponseWriter, r *http.Request) {
-	err := s.api.Pull(r.Context(), "")
+	err := s.Pull(r.Context(), "")
 	s.fragment(w, "status", s.statusView(r, pullNotice(err, "Checking all feeds for new episodes…")))
 }
 
 func (s *Server) handlePullFeed(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	detail, err := s.api.Feed(r.Context(), id)
+	detail, err := s.Feed(r.Context(), id)
 	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
-	err = s.api.Pull(r.Context(), id)
+	err = s.Pull(r.Context(), id)
 	s.fragment(w, "status", s.statusView(r, pullNotice(err, "Checking "+detail.Name+" for new episodes…")))
 }

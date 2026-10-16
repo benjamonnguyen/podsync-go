@@ -255,38 +255,6 @@ func TestConcurrencyCapAndBusy(t *testing.T) {
 	}
 }
 
-func TestOlderWindowSkipsKnownAndFiltered(t *testing.T) {
-	eps := mock.Episodes(14)
-	eps[6].IsShort = true
-	e := setup(t, eps, nil) // page_size 5, shorts excluded
-	e.svc.PullFeed("UC1")   // ep00..ep04
-	p, err := e.svc.Older(context.Background(), "UC1", 5)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !p.More || p.NextOffset != 10 || len(p.Episodes) != 4 || p.Episodes[0].ID != "ep05" {
-		t.Fatalf("%+v", p)
-	}
-	p2, _ := e.svc.Older(context.Background(), "UC1", 10)
-	if p2.More || len(p2.Episodes) != 4 || p2.NextOffset != 14 {
-		t.Fatalf("last page: %+v", p2)
-	}
-	// Episodes already in the library (any status) are not offered again.
-	e.svc.RequestDownload("UC1", podsync.EpisodeInfo{ID: "ep05"})
-	waitFor(t, func() bool { return e.svc.JobState("UC1", "ep05") == "" })
-	p3, _ := e.svc.Older(context.Background(), "UC1", 5)
-	if len(p3.Episodes) != 3 {
-		t.Fatalf("known episode offered again: %+v", p3.Episodes)
-	}
-	e.src.ListErr = errors.New("nope")
-	if _, err := e.svc.Older(context.Background(), "UC1", 5); err == nil {
-		t.Fatal("expected error")
-	}
-	if len(e.st.Active()) != 1 {
-		t.Fatal("list failure should reach the banner")
-	}
-}
-
 func waitFor(t *testing.T, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
@@ -332,5 +300,12 @@ func TestSelfUpdateRunsWhenEnabledAndReportsFailure(t *testing.T) {
 		if is.Key == "selfupdate:youtube" {
 			t.Fatal("warning should clear after a successful update")
 		}
+	}
+}
+
+func writeFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }

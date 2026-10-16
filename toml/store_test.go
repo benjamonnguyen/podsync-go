@@ -124,3 +124,64 @@ func TestStoreCreatesUpdatesAndNotifies(t *testing.T) {
 		t.Fatalf("reopen: %v", err)
 	}
 }
+
+func TestReloadPicksUpExternalEditsAndKeepsConfigOnErrors(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	web, err := Open(path) // the web UI: writes
+	if err != nil {
+		t.Fatal(err)
+	}
+	sync, err := Open(path) // the sync service: reads
+	if err != nil {
+		t.Fatal(err)
+	}
+	var notified []podsync.Config
+	sync.OnChange(func(_, n podsync.Config) { notified = append(notified, n) })
+
+	if changed, err := sync.Reload(); err != nil || changed {
+		t.Fatalf("untouched file: %v %v", changed, err)
+	}
+	err = web.Update(func(c *podsync.Config) error {
+		c.Feeds = append(c.Feeds, podsync.Feed{ID: "UC1", Name: "One"})
+		c.Download.Concurrency = 3
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := web.Reload(); err != nil || changed {
+		t.Fatalf("a writer's own Update must not look like an external change: %v %v", changed, err)
+	}
+	if changed, err := sync.Reload(); err != nil || !changed {
+		t.Fatalf("external edit should be picked up: %v %v", changed, err)
+	}
+	if got := sync.Get(); len(got.Feeds) != 1 || got.Download.Concurrency != 3 || len(notified) != 1 {
+		t.Fatalf("%+v notified=%d", got, len(notified))
+	}
+	if changed, _ := sync.Reload(); changed || len(notified) != 1 {
+		t.Fatal("second reload is a no-op")
+	}
+
+	// Hand-edited garbage is reported and ignored.
+	good, _ := os.ReadFile(path)
+	os.WriteFile(path, []byte("[download]\nconcurrency = 99\n"), 0o644)
+	if _, err := sync.Reload(); err == nil || !strings.Contains(err.Error(), "concurrency") {
+		t.Fatalf("expected validation error, got %v", err)
+	}
+	if sync.Get().Download.Concurrency != 3 {
+		t.Fatal("invalid file must not replace the live config")
+	}
+	os.WriteFile(path, []byte("not toml ["), 0o644)
+	if _, err := sync.Reload(); err == nil {
+		t.Fatal("expected parse error")
+	}
+	// Restoring the file recovers without a notification (content equals what is live).
+	os.WriteFile(path, good, 0o644)
+	if changed, err := sync.Reload(); err != nil || changed {
+		t.Fatalf("restored: %v %v", changed, err)
+	}
+
+	if changed, err := NewMemoryStore(podsync.Default()).Reload(); changed || err != nil {
+		t.Fatal("memory stores never reload")
+	}
+}

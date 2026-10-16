@@ -106,3 +106,81 @@ func TestDeleteFeed(t *testing.T) {
 		t.Fatal("index entry should be gone")
 	}
 }
+
+// Two Library values over one directory model the sync service and the web UI,
+// which share the data directory.
+func TestRefreshSeesChangesFromAnotherProcess(t *testing.T) {
+	dir := t.TempDir()
+	writer, reader := New(dir), New(dir)
+	for _, l := range []*Library{writer, reader} {
+		if err := l.Load(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	v0 := reader.Version()
+	if changed, err := reader.Refresh(); err != nil || changed || reader.Version() != v0 {
+		t.Fatalf("nothing changed yet: %v %v", changed, err)
+	}
+
+	writer.EnsureFeed("youtube", "UC1")
+	writer.UpdateMeta("UC1", func(m *podsync.FeedMeta) { m.Name = "Chan" })
+	writer.PutEpisode("UC1", podsync.Episode{ID: "a", Title: "A", Status: podsync.StatusFailed})
+	if changed, _ := reader.Refresh(); !changed {
+		t.Fatal("new feed and episode should be noticed")
+	}
+	if f, ok := reader.Feed("UC1"); !ok || f.Meta.Name != "Chan" {
+		t.Fatalf("%+v %v", f, ok)
+	}
+	if ep, ok := reader.Episode("UC1", "a"); !ok || ep.Status != podsync.StatusFailed {
+		t.Fatalf("%+v %v", ep, ok)
+	}
+	if reader.Version() == v0 {
+		t.Fatal("version must change when Refresh finds changes")
+	}
+	if changed, _ := reader.Refresh(); changed {
+		t.Fatal("a second Refresh with no changes must report none, even inside the settle window")
+	}
+
+	// An update to an existing episode is noticed too.
+	dirPath, _ := writer.FeedDir("UC1")
+	os.WriteFile(filepath.Join(dirPath, "a.mp4"), []byte("x"), 0o644)
+	writer.PutEpisode("UC1", podsync.Episode{ID: "a", Title: "A", Status: podsync.StatusDownloaded, File: "a.mp4", Size: 1})
+	if changed, _ := reader.Refresh(); !changed {
+		t.Fatal("episode update should be noticed")
+	}
+	if ep, _ := reader.Episode("UC1", "a"); ep.Status != podsync.StatusDownloaded {
+		t.Fatalf("%+v", ep)
+	}
+
+	// A feed deleted by the other side disappears.
+	if err := writer.DeleteFeed("UC1"); err != nil {
+		t.Fatal(err)
+	}
+	if changed, _ := reader.Refresh(); !changed {
+		t.Fatal("deleted feed should be noticed")
+	}
+	if _, ok := reader.Feed("UC1"); ok {
+		t.Fatal("feed should be gone from the reader's index")
+	}
+}
+
+func TestLoadLeavesStagingAloneButCleanTempRemovesIt(t *testing.T) {
+	dir := t.TempDir()
+	l := New(dir)
+	staged := filepath.Join(l.TempDir(), "UC1", "vid")
+	if err := os.MkdirAll(staged, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.Load(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(staged); err != nil {
+		t.Fatal("Load runs in the web UI too and must not delete the sync service's in-flight downloads")
+	}
+	if err := l.CleanTemp(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(l.TempDir()); !os.IsNotExist(err) {
+		t.Fatal("CleanTemp should remove the staging dir")
+	}
+}

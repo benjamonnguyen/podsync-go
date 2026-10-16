@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
 	"strings"
 	"sync"
 
@@ -54,12 +55,14 @@ func Marshal(c podsync.Config) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// Store holds the live configuration and is the only writer of the file.
+// Store holds the live configuration. The web UI writes the file (Update); the
+// sync service reads it (Reload). Both may run at once on one file.
 type Store struct {
 	path string
 
 	mu   sync.RWMutex
 	cfg  podsync.Config
+	raw  []byte // file contents the live config was built from
 	subs []func(old, new podsync.Config)
 }
 
@@ -76,7 +79,7 @@ func Open(path string) (*Store, error) {
 		if werr := fs.WriteFileAtomic(path, out, 0o644); werr != nil {
 			return nil, fmt.Errorf("create default config at %s: %w", path, werr)
 		}
-		return &Store{path: path, cfg: cfg}, nil
+		return &Store{path: path, cfg: cfg, raw: out}, nil
 	}
 	if err != nil {
 		return nil, err
@@ -85,7 +88,7 @@ func Open(path string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
-	return &Store{path: path, cfg: cfg}, nil
+	return &Store{path: path, cfg: cfg, raw: data}, nil
 }
 
 // NewMemoryStore returns a store that never touches disk (used by tests).
@@ -135,10 +138,47 @@ func (s *Store) Update(fn func(*podsync.Config) error) error {
 	}
 	old := s.cfg
 	s.cfg = next
+	if s.path != "" {
+		s.raw, _ = Marshal(next)
+	}
 	subs := append([]func(old, new podsync.Config){}, s.subs...)
 	s.mu.Unlock()
 	for _, fn := range subs {
 		fn(clone(old), clone(next))
 	}
 	return nil
+}
+
+// Reload re-reads the file if its contents changed since the live config was
+// built (by someone else; our own Update is already reflected). A file that
+// no longer parses or validates is an error and the live config is kept.
+func (s *Store) Reload() (bool, error) {
+	if s.path == "" {
+		return false, nil
+	}
+	data, err := os.ReadFile(s.path)
+	if err != nil {
+		return false, err
+	}
+	s.mu.Lock()
+	if bytes.Equal(data, s.raw) {
+		s.mu.Unlock()
+		return false, nil
+	}
+	cfg, err := Parse(data)
+	if err != nil {
+		s.mu.Unlock()
+		return false, fmt.Errorf("%s: %w", s.path, err)
+	}
+	old := s.cfg
+	s.cfg, s.raw = cfg, data
+	changed := !reflect.DeepEqual(old, cfg)
+	subs := append([]func(old, new podsync.Config){}, s.subs...)
+	s.mu.Unlock()
+	if changed {
+		for _, fn := range subs {
+			fn(clone(old), clone(cfg))
+		}
+	}
+	return changed, nil
 }

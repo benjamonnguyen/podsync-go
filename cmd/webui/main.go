@@ -1,6 +1,8 @@
-// Command webui is the htmx web interface. It holds no state of its own: it
-// talks to the sync service (cmd/syncr) over its REST API and proxies the RSS
-// feeds and media files from it.
+// Command webui is the htmx web interface. It shares the config file and the
+// data directory with the sync service (cmd/syncr): it reads and writes those
+// directly, serves the podcast feeds and media from them, and calls the sync
+// service's small REST API only to apply changes, trigger pulls, read live
+// status and look up sources.
 package main
 
 import (
@@ -17,7 +19,9 @@ import (
 	"syscall"
 	"time"
 
+	"podsync/fs"
 	"podsync/rest"
+	"podsync/toml"
 	"podsync/webui"
 )
 
@@ -31,8 +35,9 @@ func envOr(key, def string) string {
 }
 
 func main() {
+	cfgPath := flag.String("config", envOr("PODSYNC_CONFIG", "config.toml"), "path to the config file shared with syncr (env PODSYNC_CONFIG)")
 	listen := flag.String("listen", envOr("WEBUI_LISTEN", ":8080"), "address to serve the web UI on (env WEBUI_LISTEN)")
-	syncr := flag.String("syncr", envOr("SYNCR_URL", "http://127.0.0.1:8081"), "base URL of the syncr service (env SYNCR_URL)")
+	syncr := flag.String("syncr", envOr("SYNCR_URL", "http://127.0.0.1:8081"), "base URL of the syncr API (env SYNCR_URL)")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	healthcheck := flag.Bool("healthcheck", false, "probe the running web UI (for container health checks) and exit 0 if healthy")
 	flag.Parse()
@@ -45,7 +50,7 @@ func main() {
 			os.Exit(1)
 		}
 	default:
-		if err := run(*listen, *syncr); err != nil {
+		if err := run(*cfgPath, *listen, *syncr); err != nil {
 			log.Fatalf("error: %v", err)
 		}
 	}
@@ -68,12 +73,21 @@ func probe(listen string) error {
 	return nil
 }
 
-func run(listen, syncr string) error {
-	upstream, err := url.Parse(syncr)
-	if err != nil || (upstream.Scheme != "http" && upstream.Scheme != "https") || upstream.Host == "" {
+func run(cfgPath, listen, syncr string) error {
+	u, err := url.Parse(syncr)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		return fmt.Errorf("-syncr must be an absolute http(s) URL, got %q", syncr)
 	}
-	ui, err := webui.New(rest.NewClient(syncr, nil), upstream)
+	cfg, err := toml.Open(cfgPath)
+	if err != nil {
+		return err
+	}
+	dataDir := cfg.Get().Server.DataDir
+	lib := fs.New(dataDir)
+	if err := lib.Load(); err != nil {
+		return fmt.Errorf("load library from %s: %w", dataDir, err)
+	}
+	ui, err := webui.New(webui.Options{Config: cfg, Library: lib, Syncer: rest.NewClient(syncr, nil)})
 	if err != nil {
 		return err
 	}
@@ -85,11 +99,11 @@ func run(listen, syncr string) error {
 		Handler:           ui.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       2 * time.Minute,
-		// No write timeout: proxied media streams to slow podcast clients can take long.
+		// No write timeout: media downloads to slow podcast clients can take long.
 	}
 	errc := make(chan error, 1)
 	go func() { errc <- srv.ListenAndServe() }()
-	log.Printf("webui %s listening on %s (syncr at %s)", version, listen, syncr)
+	log.Printf("webui %s listening on %s (config %s, data %s, syncr at %s)", version, listen, cfgPath, dataDir, syncr)
 
 	select {
 	case err := <-errc:

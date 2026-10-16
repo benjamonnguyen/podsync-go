@@ -1,7 +1,8 @@
-// Package webui serves the htmx-driven web interface. It is a view layer over
-// podsync.Syncer (in production a rest.Client talking to syncr) and reverse
-// proxies the RSS feeds and media files from syncr so that browsers and
-// podcast apps only need to reach this one server.
+// Package webui serves the htmx-driven web interface and the public podcast
+// feeds and media files. It shares the config file and data directory with the
+// sync service (cmd/syncr): it reads and writes those directly and talks to the
+// sync service, through podsync.Syncer, only for what needs the running
+// service (applying changes, pulls, live status, source lookups).
 package webui
 
 import (
@@ -11,8 +12,6 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
-	"net/http/httputil"
-	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -24,16 +23,26 @@ import (
 //go:embed templates/*.html static/*
 var assets embed.FS
 
+// Options are the web UI's dependencies, wired together by cmd/webui.
+type Options struct {
+	Config  podsync.ConfigStore // the config file shared with the sync service
+	Library podsync.Library     // the data directory shared with the sync service
+	Syncer  podsync.Syncer      // client of the sync service's control API
+}
+
 type Server struct {
-	api      podsync.Syncer
-	upstream *url.URL
-	now      func() time.Time
+	cfg  podsync.ConfigStore
+	lib  podsync.Library
+	sync podsync.Syncer
+	now  func() time.Time
 
 	pages map[string]*template.Template
 	frag  *template.Template
 
-	mu       sync.Mutex
-	previews map[string]preview
+	mu        sync.Mutex
+	previews  map[string]preview
+	dismissed map[string]time.Time // issue key -> Last of the issue instance that was dismissed
+	cfgErr    error                // last failure to re-read the config file
 }
 
 type preview struct {
@@ -45,10 +54,11 @@ const previewTTL = 15 * time.Minute
 
 var pageNames = []string{"library", "feed", "add", "settings", "feed_settings", "delete"}
 
-// New builds the web UI. upstream is the base URL of the syncr service, used
-// to proxy /feeds/ and /media/.
-func New(api podsync.Syncer, upstream *url.URL) (*Server, error) {
-	s := &Server{api: api, upstream: upstream, now: time.Now, previews: map[string]preview{}}
+func New(o Options) (*Server, error) {
+	s := &Server{
+		cfg: o.Config, lib: o.Library, sync: o.Syncer, now: time.Now,
+		previews: map[string]preview{}, dismissed: map[string]time.Time{},
+	}
 	funcs := template.FuncMap{
 		"size":    humanSize,
 		"dur":     humanDuration,
@@ -108,23 +118,28 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /status", s.handleStatus)
 	mux.HandleFunc("POST /status/dismiss", s.handleDismiss)
 
-	proxy := s.proxy()
-	mux.Handle("GET /feeds/{file}", proxy)
-	mux.Handle("GET /media/{id}/{file}", proxy)
+	mux.HandleFunc("GET /feeds/{file}", s.handleRSS)
+	mux.HandleFunc("GET /media/{id}/{file}", s.handleMedia)
 
-	return secure(mux)
+	return secure(s.refresh(mux))
 }
 
-// proxy forwards the public RSS and media endpoints to syncr, streaming the
-// response (and honouring Range requests) untouched.
-func (s *Server) proxy() http.Handler {
-	return &httputil.ReverseProxy{
-		Rewrite: func(pr *httputil.ProxyRequest) { pr.SetURL(s.upstream) },
-		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
-			log.Printf("proxy %s: %v", r.URL.Path, err)
-			http.Error(w, "the sync service is unavailable", http.StatusBadGateway)
-		},
-	}
+// refresh picks up what the sync service (and hand edits) changed in the
+// shared config file and data directory since the previous request. Both
+// checks are cheap when nothing changed.
+func (s *Server) refresh(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, "/static/") && r.URL.Path != "/healthz" {
+			_, err := s.cfg.Reload()
+			s.mu.Lock()
+			s.cfgErr = err
+			s.mu.Unlock()
+			if _, err := s.lib.Refresh(); err != nil {
+				log.Printf("refresh library: %v", err)
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // secure adds security headers and the cross-site write guard.
@@ -176,12 +191,12 @@ func (s *Server) fragment(w http.ResponseWriter, name string, data any) {
 	fmt.Fprint(w, buf.String())
 }
 
-// fail renders an error page for failures the user cannot fix from the page itself.
+// fail renders an error response for failures the user cannot fix from the page itself.
 func (s *Server) fail(w http.ResponseWriter, r *http.Request, err error) {
 	if r.Context().Err() != nil {
 		return
 	}
-	code := http.StatusBadGateway
+	code := http.StatusInternalServerError
 	switch {
 	case isKind(err, podsync.ErrNotFound):
 		code = http.StatusNotFound

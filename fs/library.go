@@ -10,10 +10,12 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"podsync"
 )
@@ -26,6 +28,7 @@ type feedState struct {
 	source   string
 	meta     podsync.FeedMeta
 	episodes map[string]*podsync.Episode
+	dirMod   time.Time // modification time of the feed directory when it was last scanned
 }
 
 type Library struct {
@@ -66,7 +69,6 @@ func (l *Library) Load() error {
 	if err := os.MkdirAll(l.root, 0o755); err != nil {
 		return err
 	}
-	_ = os.RemoveAll(l.TempDir()) // leftovers from an interrupted run
 	sources, err := os.ReadDir(l.root)
 	if err != nil {
 		return err
@@ -84,12 +86,11 @@ func (l *Library) Load() error {
 			if !d.IsDir() {
 				continue
 			}
-			fs := loadFeed(filepath.Join(l.root, src.Name(), d.Name()), src.Name())
 			if _, dup := feeds[d.Name()]; dup {
 				log.Printf("library: feed id %q exists under more than one source; ignoring %s/%s", d.Name(), src.Name(), d.Name())
 				continue
 			}
-			feeds[d.Name()] = fs
+			feeds[d.Name()] = loadFeed(filepath.Join(l.root, src.Name(), d.Name()), src.Name())
 		}
 	}
 	l.mu.Lock()
@@ -99,8 +100,74 @@ func (l *Library) Load() error {
 	return nil
 }
 
+// settleWindow is how long after a directory's last modification Refresh keeps
+// rescanning it, so a write that lands within the filesystem's timestamp
+// granularity right after a scan is not missed.
+const settleWindow = 3 * time.Second
+
+// Refresh picks up changes made by other processes (the sync service writes
+// episodes while the web UI reads them and deletes feeds). A feed directory is
+// rescanned only when its modification time moved; every sidecar write goes
+// through a rename, which updates it.
+func (l *Library) Refresh() (bool, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	sources, err := os.ReadDir(l.root)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return false, err
+	}
+	changed := false
+	seen := map[string]bool{}
+	for _, src := range sources {
+		if !src.IsDir() || strings.HasPrefix(src.Name(), ".") {
+			continue
+		}
+		dirs, err := os.ReadDir(filepath.Join(l.root, src.Name()))
+		if err != nil {
+			return changed, err
+		}
+		for _, d := range dirs {
+			id := d.Name()
+			if !d.IsDir() || seen[id] {
+				continue
+			}
+			seen[id] = true
+			path := filepath.Join(l.root, src.Name(), id)
+			st, err := os.Stat(path)
+			if err != nil {
+				continue
+			}
+			cur := l.feed[id]
+			if cur != nil && cur.source == src.Name() && st.ModTime().Equal(cur.dirMod) && time.Since(st.ModTime()) > settleWindow {
+				continue
+			}
+			next := loadFeed(path, src.Name())
+			if cur == nil || cur.source != next.source || !reflect.DeepEqual(cur.meta, next.meta) || !reflect.DeepEqual(cur.episodes, next.episodes) {
+				changed = true
+			}
+			l.feed[id] = next
+		}
+	}
+	for id := range l.feed {
+		if !seen[id] {
+			delete(l.feed, id)
+			changed = true
+		}
+	}
+	if changed {
+		l.version.Add(1)
+	}
+	return changed, nil
+}
+
+// CleanTemp removes staged partial downloads left by an interrupted run.
+func (l *Library) CleanTemp() error { return os.RemoveAll(l.TempDir()) }
+
 func loadFeed(dir, source string) *feedState {
 	fs := &feedState{source: source, episodes: map[string]*podsync.Episode{}}
+	if st, err := os.Stat(dir); err == nil {
+		fs.dirMod = st.ModTime()
+	}
 	if b, err := os.ReadFile(filepath.Join(dir, metaFile)); err == nil {
 		if err := json.Unmarshal(b, &fs.meta); err != nil {
 			log.Printf("library: ignoring corrupt %s: %v", filepath.Join(dir, metaFile), err)

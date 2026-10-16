@@ -21,12 +21,10 @@ func intField(r *http.Request, name string, dst *int, errs *[]error) {
 
 // applySettingsForm copies the settings form into s. Parse problems are
 // returned; value validation happens in the sync service.
-func applySettingsForm(s *podsync.Settings, r *http.Request) error {
+func applySettingsForm(s *Settings, r *http.Request) error {
 	var errs []error
 	_ = r.ParseForm()
-	s.Server.ListenAddr = r.FormValue("listen_addr")
 	s.Server.BaseURL = r.FormValue("base_url")
-	s.Server.DataDir = r.FormValue("data_dir")
 	s.Download.YtDlpPath = r.FormValue("yt_dlp_path")
 	s.Download.CookiesFile = r.FormValue("cookies_file")
 	s.Download.SelfUpdate = r.FormValue("self_update") == "on"
@@ -48,32 +46,22 @@ func applySettingsForm(s *podsync.Settings, r *http.Request) error {
 	return errors.Join(errs...)
 }
 
-func (s *Server) renderSettings(w http.ResponseWriter, r *http.Request, cur podsync.Settings, flash, errText string) {
+func (s *Server) renderSettings(w http.ResponseWriter, r *http.Request, cur Settings, flash, errText string) {
 	s.render(w, r, "settings", map[string]any{"Title": "Settings", "Cfg": cur, "ConfigPath": cur.ConfigPath, "Flash": flash, "Err": errText})
 }
 
 func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
-	cur, err := s.api.Settings(r.Context())
-	if err != nil {
-		s.fail(w, r, err)
-		return
-	}
-	s.renderSettings(w, r, cur, "", "")
+	s.renderSettings(w, r, s.Settings(r.Context()), "", "")
 }
 
 func (s *Server) handleSettingsSave(w http.ResponseWriter, r *http.Request) {
-	cur, err := s.api.Settings(r.Context())
-	if err != nil {
-		s.fail(w, r, err)
-		return
-	}
-	attempt := cur
+	attempt := s.Settings(r.Context())
 	parseErr := applySettingsForm(&attempt, r)
 	if parseErr != nil {
 		s.renderSettings(w, r, attempt, "", parseErr.Error())
 		return
 	}
-	res, err := s.api.UpdateSettings(r.Context(), attempt)
+	res, err := s.UpdateSettings(r.Context(), attempt)
 	if err != nil {
 		if r.Context().Err() != nil {
 			return
@@ -82,8 +70,11 @@ func (s *Server) handleSettingsSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	flash := "Saved. Changes are applied."
-	if res.RestartRequired {
-		flash = "Saved. The listen address and data directory only take effect after a restart."
+	switch {
+	case res.ApplyErr != nil:
+		flash = res.ApplyErr.Error()
+	case res.RestartRequired:
+		flash = "Saved. The sync service's listen address or data directory changed in the config file and only take effect after a restart."
 	}
 	s.renderSettings(w, r, res.Settings, flash, "")
 }
@@ -117,7 +108,7 @@ func sval(p *string) string {
 	return *p
 }
 
-func feedSettingsFrom(id, kind string, fs podsync.FeedSettings, d podsync.Options) feedSettingsView {
+func feedSettingsFrom(id, kind string, fs FeedSettings, d podsync.Options) feedSettingsView {
 	v := feedSettingsView{
 		ID: id, Name: fs.Name, Kind: kind, Format: sval(fs.Format), MaxResolution: itoa(fs.MaxResolution),
 		TitleInclude: sval(fs.TitleInclude), TitleExclude: sval(fs.TitleExclude),
@@ -133,8 +124,8 @@ func feedSettingsFrom(id, kind string, fs podsync.FeedSettings, d podsync.Option
 	return v
 }
 
-func settingsFromFeed(f podsync.Feed) podsync.FeedSettings {
-	return podsync.FeedSettings{
+func settingsFromFeed(f podsync.Feed) FeedSettings {
+	return FeedSettings{
 		Name: f.Name, Format: f.Format, MaxResolution: f.MaxResolution, ExcludeShorts: f.ExcludeShorts,
 		TitleInclude: f.TitleInclude, TitleExclude: f.TitleExclude, CleanupAfterDays: f.CleanupAfterDays,
 		CleanupKeepLast: f.CleanupKeepLast, PageSize: f.PageSize,
@@ -162,10 +153,10 @@ func optInt(r *http.Request, name string, errs *[]error) *int {
 	return &n
 }
 
-func feedSettingsFromForm(r *http.Request, current string) (podsync.FeedSettings, error) {
+func feedSettingsFromForm(r *http.Request, current string) (FeedSettings, error) {
 	var errs []error
 	_ = r.ParseForm()
-	fs := podsync.FeedSettings{Name: current}
+	fs := FeedSettings{Name: current}
 	if n := strings.TrimSpace(r.FormValue("name")); n != "" {
 		fs.Name = n
 	}
@@ -187,14 +178,14 @@ func feedSettingsFromForm(r *http.Request, current string) (podsync.FeedSettings
 	return fs, errors.Join(errs...)
 }
 
-func (s *Server) renderFeedSettings(w http.ResponseWriter, r *http.Request, d podsync.FeedDetail, fs podsync.FeedSettings, flash, errText string) {
+func (s *Server) renderFeedSettings(w http.ResponseWriter, r *http.Request, d FeedDetail, fs FeedSettings, flash, errText string) {
 	s.render(w, r, "feed_settings", map[string]any{
 		"Title": d.Name + " settings", "F": feedSettingsFrom(d.ID, d.Kind, fs, d.Defaults), "Flash": flash, "Err": errText,
 	})
 }
 
 func (s *Server) handleFeedSettings(w http.ResponseWriter, r *http.Request) {
-	d, err := s.api.Feed(r.Context(), r.PathValue("id"))
+	d, err := s.Feed(r.Context(), r.PathValue("id"))
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -204,7 +195,7 @@ func (s *Server) handleFeedSettings(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleFeedSettingsSave(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	d, err := s.api.Feed(r.Context(), id)
+	d, err := s.Feed(r.Context(), id)
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -214,7 +205,7 @@ func (s *Server) handleFeedSettingsSave(w http.ResponseWriter, r *http.Request) 
 		s.renderFeedSettings(w, r, d, fs, "", parseErr.Error())
 		return
 	}
-	updated, err := s.api.UpdateFeed(r.Context(), id, fs)
+	updated, err := s.UpdateFeed(r.Context(), id, fs)
 	if err != nil {
 		if r.Context().Err() != nil {
 			return
@@ -228,7 +219,7 @@ func (s *Server) handleFeedSettingsSave(w http.ResponseWriter, r *http.Request) 
 // ---- deleting ----
 
 func (s *Server) handleDeleteConfirm(w http.ResponseWriter, r *http.Request) {
-	d, err := s.api.Feed(r.Context(), r.PathValue("id"))
+	d, err := s.Feed(r.Context(), r.PathValue("id"))
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -237,7 +228,7 @@ func (s *Server) handleDeleteConfirm(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
-	if err := s.api.DeleteFeed(r.Context(), r.PathValue("id"), r.FormValue("delete_files") == "on"); err != nil {
+	if err := s.DeleteFeed(r.Context(), r.PathValue("id"), r.FormValue("delete_files") == "on"); err != nil {
 		s.fail(w, r, err)
 		return
 	}
@@ -245,7 +236,7 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleOrphanDelete(w http.ResponseWriter, r *http.Request) {
-	if err := s.api.DeleteOrphan(r.Context(), r.PathValue("id")); err != nil {
+	if err := s.DeleteOrphan(r.Context(), r.PathValue("id")); err != nil {
 		s.fail(w, r, err)
 		return
 	}
