@@ -1,8 +1,8 @@
-# Development/test configuration: `go run ./cmd/podsync -config dev/config.toml` (run from the repo root).
+# Development/test configuration for syncr; use dev/run.sh (starts syncr and the web UI) from anywhere.
 # Media goes to dev/data (git-ignored). Note: the web UI rewrites this file when you change settings.
 
 [server]
-listen_addr = ":8080"
+listen_addr = ":8081"
 base_url = "http://localhost:8080"
 data_dir = "./dev/data"
 

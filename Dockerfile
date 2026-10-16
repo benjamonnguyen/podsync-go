@@ -1,7 +1,9 @@
 # syntax=docker/dockerfile:1
 
-# Multi-arch image (linux/amd64, linux/arm64):
-#   docker buildx build --platform linux/amd64,linux/arm64 -t podsync-go .
+# Two images from one Dockerfile (both multi-arch: linux/amd64, linux/arm64):
+#   docker buildx build --platform linux/amd64,linux/arm64 --target syncr -t podsync-syncr .
+#   docker buildx build --platform linux/amd64,linux/arm64 --target webui -t podsync-webui .
+# Building without --target gives the syncr image.
 
 # ---- Go build (always runs on the build host's native arch and cross-compiles) ----
 FROM --platform=$BUILDPLATFORM golang:1.27-bookworm AS build
@@ -12,8 +14,9 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
-    go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o /out/podsync ./cmd/podsync
+ENV CGO_ENABLED=0
+RUN GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o /out/syncr ./cmd/syncr
+RUN GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o /out/webui ./cmd/webui
 
 # ---- Fetch pinned yt-dlp and deno for the target arch ----
 # yt-dlp needs a JavaScript runtime to solve YouTube's player challenges; deno is its default.
@@ -35,8 +38,17 @@ RUN set -eux; \
     unzip -q /tmp/deno.zip -d /out; \
     chmod 0755 /out/yt-dlp/yt-dlp /out/deno
 
-# ---- Runtime ----
-FROM debian:bookworm-slim
+# ---- Web UI image: a static binary, nothing else ----
+FROM gcr.io/distroless/static-debian12:nonroot AS webui
+COPY --from=build /out/webui /usr/local/bin/webui
+ENV WEBUI_LISTEN=:8080 \
+    SYNCR_URL=http://syncr:8081
+EXPOSE 8080
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s CMD ["/usr/local/bin/webui", "-healthcheck"]
+ENTRYPOINT ["/usr/local/bin/webui"]
+
+# ---- Sync service image (default target): syncr + yt-dlp + deno + ffmpeg ----
+FROM debian:bookworm-slim AS syncr
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 # yt-dlp lives in its own world-writable directory so `download.self_update` can replace it
@@ -44,7 +56,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 COPY --from=tools /out/yt-dlp /opt/yt-dlp
 COPY --from=tools /out/deno /usr/local/bin/deno
 RUN chmod 0777 /opt/yt-dlp && mkdir -p /config /data && chmod 0777 /config /data
-COPY --from=build /out/podsync /usr/local/bin/podsync
+COPY --from=build /out/syncr /usr/local/bin/syncr
 
 ENV PATH="/opt/yt-dlp:${PATH}" \
     PODSYNC_CONFIG=/config/config.toml \
@@ -52,7 +64,7 @@ ENV PATH="/opt/yt-dlp:${PATH}" \
     HOME=/tmp
 # Relative paths in the default config (data_dir = "./data") resolve under "/".
 WORKDIR /
-EXPOSE 8080
+EXPOSE 8081
 VOLUME ["/config", "/data"]
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s CMD curl -fsS http://127.0.0.1:8080/healthz || exit 1
-ENTRYPOINT ["/usr/local/bin/podsync"]
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s CMD ["/usr/local/bin/syncr", "-healthcheck"]
+ENTRYPOINT ["/usr/local/bin/syncr"]

@@ -10,10 +10,10 @@ It is inspired by [mxpv/podsync](https://github.com/mxpv/podsync); the big diffe
 - Add feeds by pasting a link, `@handle` or ID, or by searching YouTube by name
 - Per-feed options: audio or video, max resolution, skip Shorts, title include/exclude regex, automatic cleanup
 - A status banner that tells you when yt-dlp, YouTube or a download is misbehaving
-- Single static binary or a multi-arch (amd64 + arm64) Docker image
+- Two small programs: **syncr** (fetches and stores episodes, serves the podcast feeds and a REST API) and **webui** (the web interface, a client of that API). Multi-arch (amd64 + arm64) Docker images for both
 - Plain-file storage: no database, just media files with small JSON files next to them, and one `config.toml`
 
-> **No login.** podsync-go has no authentication. Run it on a trusted home network, or put it behind a reverse proxy that does authentication. Anyone who can open the page can change settings, delete feeds and download your media.
+> **No login.** podsync-go has no authentication. Run it on a trusted home network, or put it behind a reverse proxy that does authentication. Anyone who can open the web UI, or reach syncr's API port, can change settings, delete feeds and download your media. The compose example therefore publishes only the web UI.
 
 ## Quick start (Docker)
 
@@ -25,10 +25,11 @@ It is inspired by [mxpv/podsync](https://github.com/mxpv/podsync); the big diffe
    cp compose.example.yaml compose.yaml
    ```
 
-   The example builds the image from the repository. To build the multi-architecture image yourself:
+   The example builds two images from the repository: `syncr` (the sync service) and `webui`. To build them yourself for both architectures:
 
    ```sh
-   docker buildx build --platform linux/amd64,linux/arm64 -t podsync-go .
+   docker buildx build --platform linux/amd64,linux/arm64 --target syncr -t podsync-syncr .
+   docker buildx build --platform linux/amd64,linux/arm64 --target webui  -t podsync-webui .
    ```
 
 2. Start it:
@@ -37,15 +38,15 @@ It is inspired by [mxpv/podsync](https://github.com/mxpv/podsync); the big diffe
    docker compose up -d
    ```
 
-3. Open <http://localhost:8080>. On first start a default `config/config.toml` is created.
+3. Open <http://localhost:8080>. On first start syncr creates a default `config/config.toml`.
 
-4. **Open Settings and set "Public address of this server"** to the address your podcast app will use to reach it, for example `http://192.168.1.10:8080`. The default `http://localhost:8080` only works on the same machine, so feed links would be useless on your phone until you change it.
+4. **Open Settings and set "Public address of this server"** to the address your podcast app will use to reach the web UI, for example `http://192.168.1.10:8080`. The default `http://localhost:8080` only works on the same machine, so feed links would be useless on your phone until you change it.
 
 5. Click **Add feed**, paste a channel link (or an `@handle`, or search by name), and add it. The newest episodes start downloading right away.
 
 6. Open the feed in the app and copy its **Podcast feed URL** (`http://<your-address>/feeds/<id>.xml`) into your podcast app ("add a show by URL").
 
-The container runs as the user in `compose.yaml` (`1000:1000` in the example). Create `config` and `data` as that user so it can write to them.
+The syncr container runs as the user in `compose.yaml` (`1000:1000` in the example). Create `config` and `data` as that user so it can write to them. If the web UI shows "Cannot reach the sync service", syncr isn't running or `SYNCR_URL` is wrong.
 
 ## Using the web UI
 
@@ -77,14 +78,14 @@ The container runs as the user in `compose.yaml` (`1000:1000` in the example). C
 
 ## Configuration
 
-Everything can be changed in the web UI. The settings live in one TOML file (default `config.toml` in the working directory, `/config/config.toml` in Docker; override with `-config` or the `PODSYNC_CONFIG` environment variable). If it doesn't exist it is created with defaults. See [`config.example.toml`](config.example.toml) for a fully commented example.
+Everything can be changed in the web UI. The settings live in one TOML file (syncr's config: default `config.toml` in the working directory, `/config/config.toml` in Docker; override with `-config` or the `PODSYNC_CONFIG` environment variable). If it doesn't exist it is created with defaults. See [`config.example.toml`](config.example.toml) for a fully commented example.
 
 The web UI rewrites this file when you save changes, so hand-written comments are lost; keep annotated copies elsewhere. Unknown keys are rejected at startup so typos don't go unnoticed.
 
 | Section / key | Default | Meaning |
 |---|---|---|
-| `server.listen_addr` | `:8080` | Address and port to listen on (restart needed) |
-| `server.base_url` | `http://localhost:8080` | Address podcast apps use to reach the server; used in feed links |
+| `server.listen_addr` | `:8081` | Address and port syncr's API listens on (restart needed) |
+| `server.base_url` | `http://localhost:8080` | Address podcast apps use to reach the web UI; used in feed links |
 | `server.data_dir` | `./data` | Where media and metadata are stored (restart needed) |
 | `download.yt_dlp_path` | `yt-dlp` | yt-dlp executable |
 | `download.concurrency` | `2` | Simultaneous downloads (1-16) |
@@ -100,6 +101,17 @@ The web UI rewrites this file when you save changes, so hand-written comments ar
 | `defaults.cleanup_keep_last` | `50` | Keep newest N downloaded episodes; `0` = all |
 | `defaults.cleanup_after_days` | `0` | Remove episodes published more than N days ago; `0` = never |
 | `[[feeds]]` | | One block per feed: `id`, `kind` (`channel` or `playlist`), `name`, plus optional overrides of any `defaults` key |
+
+### The web UI program
+
+`webui` has no config file. Its options are flags (with environment variable equivalents):
+
+| Flag | Environment | Default | Meaning |
+|---|---|---|---|
+| `-listen` | `WEBUI_LISTEN` | `:8080` | Address to serve the web UI on |
+| `-syncr` | `SYNCR_URL` | `http://127.0.0.1:8081` | Where syncr's API is (`server.listen_addr` in syncr's config) |
+
+The web UI also serves the podcast feeds (`/feeds/<id>.xml`) and media files (`/media/...`) by proxying them from syncr, so `server.base_url` is normally the web UI's address. Both programs accept `-version` and `-healthcheck` (exit status 0 if the running instance answers), used by the container health checks.
 
 Regular expressions use Go's [RE2 syntax](https://pkg.go.dev/regexp/syntax); prefix with `(?i)` for case-insensitive matching.
 
@@ -123,11 +135,26 @@ It is all plain files, so backing up is just copying the folder. Deleting a medi
 You need Go 1.27+, [yt-dlp](https://github.com/yt-dlp/yt-dlp), `ffmpeg`, and a JavaScript runtime for yt-dlp (`deno` is its default) on your `PATH`.
 
 ```sh
-go build -o podsync ./cmd/podsync
-./podsync -config config.toml
+go build -o syncr ./cmd/syncr
+go build -o webui ./cmd/webui
+./syncr -config config.toml &                         # sync service, API on :8081
+./webui -listen :8080 -syncr http://127.0.0.1:8081    # web UI on :8080
 ```
 
-For a quick look at the UI with a real channel, `go run ./cmd/podsync -config dev/config.toml` starts the app on <http://localhost:8080> with a ready-made test feed (media goes to `dev/data`).
+For a quick look at the UI with a real channel, run `dev/run.sh`: it builds and starts both programs with a ready-made test feed on <http://localhost:8080> (media goes to `dev/data`).
+
+## The REST API
+
+syncr's API is plain JSON under `/api/v1`; the web UI is just one client of it, so you can script against it too. Errors come back as `{"error":{"kind":"not_found|invalid|busy","message":"..."}}` with status 404, 400 or 409.
+
+```sh
+curl localhost:8081/api/v1/feeds                         # configured feeds (and orphaned folders)
+curl localhost:8081/api/v1/feeds/UCXuqSBlHAE6Xw-yeJA0Tunw/episodes
+curl -X POST localhost:8081/api/v1/pull                  # check every feed now
+curl localhost:8081/api/v1/status                        # activity and current problems
+```
+
+Writes need `Content-Type: application/json`. The feeds, media and health endpoints (`/feeds/<id>.xml`, `/media/<id>/<file>`, `/healthz`) live at the top level. The API has no authentication; do not expose it to untrusted networks.
 
 ## Troubleshooting
 
@@ -136,6 +163,7 @@ Check the banner at the top of the page first; it quotes yt-dlp's error.
 - **"Sign in to confirm you're not a bot"**: YouTube wants a logged-in session. Export cookies from a browser where you're signed in to a `cookies.txt` file (Netscape format), put it somewhere the app can read (in Docker, in the `config` folder), and set `download.cookies_file` (for example `/config/cookies.txt`) in Settings. Use a throwaway account if you can; the cookies grant access to that account.
 - **"Unable to extract..." / downloads suddenly fail everywhere**: yt-dlp is out of date. Tick *Keep yt-dlp up to date* in Settings, or pull a newer image / update the binary. (Self-update only works if the yt-dlp binary is writable by the app, as in the Docker image. It cannot update a yt-dlp installed by a package manager.)
 - **HTTP 429 / rate limited**: YouTube is throttling you. It retries on the next update; lower *Simultaneous downloads* and raise *Check feeds every* if it keeps happening.
+- **"Cannot reach the sync service" in the banner**: the web UI can't talk to syncr. Check that syncr is running and that `-syncr` / `SYNCR_URL` points at it.
 - **Feed links don't work on my phone**: set *Public address of this server* in Settings to the machine's LAN address.
 - **"Permission denied" when saving settings or downloading in Docker**: the `config` and `data` folders must be writable by the user the container runs as.
 - **Settings don't seem to save when `config.toml` is bind-mounted as a single file**: mount the folder instead (see the compose example).
@@ -145,11 +173,12 @@ Check the banner at the top of the page first; it quotes yt-dlp's error.
 ## Development
 
 ```sh
-go vet ./... && go test -race ./...                       # unit and HTTP tests (no network)
-PODSYNC_LIVE=1 go test ./internal/source/youtube -run Live -v   # talks to real YouTube via your yt-dlp
-cd e2e && npm install && ./run.sh                          # browser test: fake yt-dlp + headless Chromium
+go vet ./... && go test -race ./...                              # unit and HTTP tests (no network)
+PODSYNC_LIVE=1 go test ./youtube -run Live -v                    # talks to real YouTube via your yt-dlp
+cd e2e && npm install && ./run.sh                                # browser test: both programs + fake yt-dlp + headless Chromium
+dev/run.sh                                                       # run everything locally with a real test feed
 ```
 
-Layout: `cmd/podsync` (entrypoint), `internal/config`, `internal/library` (files + sidecars), `internal/source` (adapter interface) and `internal/source/youtube` (yt-dlp adapter), `internal/puller` (scheduler, queue, cleanup), `internal/rss`, `internal/web` (templates and static files are embedded in the binary). Other sources can be added by implementing `source.Source`; see [`PROJECT.md`](PROJECT.md) for the design.
+Layout: the root package `podsync` holds the domain types and interfaces (feeds, episodes, the `Source` and `Library` interfaces, the `Syncer` service contract). Subpackages are grouped by what they depend on: `youtube` (yt-dlp), `fs` (the on-disk library), `toml` (the config file), `rest` (HTTP API server and client), `webui` (templates and handlers), `rss`, `status`, and `syncer` (the service logic, which depends only on the root interfaces); `mock` has test doubles. The programs in `cmd/` only wire these together. To add another source (Vimeo, ...), implement `podsync.Source` in a new package and register it in `cmd/syncr`. See [`PROJECT.md`](PROJECT.md) for the design.
 
 The UI uses a vendored copy of [htmx](https://htmx.org) (0BSD license).

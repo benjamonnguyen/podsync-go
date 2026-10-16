@@ -4,8 +4,8 @@
 # comments, so keep this example file for reference instead of annotating your live one.
 
 [server]
-listen_addr = ":8080"
-# The address podcast apps use to reach this server. Must be reachable from your phone.
+listen_addr = ":8081"
+# The address podcast apps use to reach the web UI (which serves the feeds). Must be reachable from your phone.
 base_url = "http://192.168.1.10:8080"
 # Where media files and metadata are stored (/data in the Docker image).
 data_dir = "./data"

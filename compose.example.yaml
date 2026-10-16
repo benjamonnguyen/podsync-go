@@ -1,23 +1,40 @@
 # Copy to compose.yaml and adjust. Then: docker compose up -d
+# Two services: syncr (fetches episodes, owns the config and data) and webui (the web interface).
+# Only the web UI is published; it proxies the podcast feeds and media from syncr.
 services:
-  podsync:
-    image: podsync-go:latest
-    # Build it yourself (multi-arch: docker buildx build --platform linux/amd64,linux/arm64 .):
-    build: .
-    container_name: podsync
+  syncr:
+    image: podsync-syncr:latest
+    # Build it yourself (multi-arch: docker buildx build --platform linux/amd64,linux/arm64 --target syncr .):
+    build:
+      context: .
+      target: syncr
+    container_name: podsync-syncr
     restart: unless-stopped
-    ports:
-      - "8080:8080"
     volumes:
       # Mount the *directory*, not the single file: the app rewrites config.toml when you
       # change settings in the UI, and a single-file bind mount can't be replaced atomically.
       - ./config:/config
       # Downloaded media and metadata. Back this up; config.toml alone is enough to
-      # re-create your feeds, but watched/downloaded state lives here.
+      # re-create your feeds, but downloaded state lives here.
       - ./data:/data
     # Run as your own user so files in ./config and ./data are yours (create both dirs first).
     user: "1000:1000"
     environment:
       TZ: UTC
+    # No `ports:` on purpose: the API has no login, so keep it on the compose network.
     # Optional: cookies for YouTube sign-in checks (then set download.cookies_file = "/config/cookies.txt")
     #   put cookies.txt in ./config
+
+  webui:
+    image: podsync-webui:latest
+    build:
+      context: .
+      target: webui
+    container_name: podsync-webui
+    restart: unless-stopped
+    depends_on:
+      - syncr
+    ports:
+      - "8080:8080"
+    environment:
+      SYNCR_URL: http://syncr:8081

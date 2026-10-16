@@ -47,40 +47,51 @@ manual refresh, settings, issue banner) instead of config-file-only operation.
 
 ## 4. Architecture
 
+Two programs, deliberately separate, that only talk over HTTP:
+
 ```
-                         +-------------------+
-                         |     Web UI        |
-                         |  (Go templates +   |
-                         |   htmx)            |
-                         +---------+----------+
-                                   |  HTML fragments / REST
-                         +---------v----------+
-                         |   HTTP API Server   |
-                         +---------+----------+
-                                   |
-        +--------------------------+--------------------------+
-        |                          |                          |
-+-------v--------+       +---------v----------+      +---------v---------+
-|  Config Store   |       |  Filesystem Library |      |   Scheduler /      |
-| (plaintext file:|       | (media + JSON       |      |   Puller           |
-|  feeds +|       |  sidecar files,      |      |                    |
-|  settings)      |       |  in-memory index)   |      |                    |
-+-----------------+       +---------------------+      +---------+----------+
-                                                                  |
-                                                        +---------v----------+
-                                                        |  Source Adapter     |
-                                                        |  interface          |
-                                                        +---------+----------+
-                                                                  |
-                                                     +------------v------------+
-                                                     |     YouTube Adapter       |
-                                                     | (yt-dlp subprocess/lib)  |
-                                                     +--------------------------+
+ podcast apps ──► webui (:8080) ──proxy /feeds, /media──┐
+ browsers  ─────► webui           ──REST /api/v1────────┤
+                  (htmx views,                           ▼
+                   stateless)                     syncr (:8081)
+                                                  ├─ REST API + RSS + media
+                                                  ├─ syncer.Service (scheduler, download queue, cleanup)
+                                                  ├─ toml.Store   (config.toml)
+                                                  ├─ fs.Library   (media + JSON sidecars, in-memory index)
+                                                  └─ youtube.YouTube ──► yt-dlp, ffmpeg, deno
 ```
+
+- **syncr** (`cmd/syncr`) fetches from feed sources, owns the config file and the data directory (single writer),
+  and exposes the REST API, the RSS feeds and the media files.
+- **webui** (`cmd/webui`) is the htmx server. It has no state or config file: it renders pages from the REST
+  API and reverse-proxies `/feeds/` and `/media/` from syncr, so podcast apps and browsers use one address.
+
+### 4.0 Package layout
+
+The root package `podsync` is the domain: types and interfaces only, no dependencies beyond the standard
+library. Subpackages are grouped by what they depend on, and the `main` packages wire them together.
+
+| Package | Depends on | Role |
+|---|---|---|
+| `podsync` (root) | stdlib | `Feed`/`Config`, `Episode`, `Source`, `Library`, `ConfigStore`, `StatusTracker`, the `Syncer` service contract and its DTOs, error kinds, `EpisodeFilter`, `Registry` |
+| `youtube` | yt-dlp | implements `podsync.Source` |
+| `fs` | filesystem | implements `podsync.Library` (+ atomic file writes) |
+| `toml` | BurntSushi/toml | implements `podsync.ConfigStore` |
+| `status` | — | implements `podsync.StatusTracker` in memory |
+| `syncer` | root interfaces only | implements `podsync.Syncer`: the update loop, queue, cleanup, all application logic |
+| `rest` | net/http | `Server` (JSON API + RSS + media) and `Client` (implements `podsync.Syncer` over HTTP) |
+| `webui` | net/http, html/template | the htmx interface, written against `podsync.Syncer` |
+| `rss` | encoding/xml | podcast feed rendering |
+| `mock` | — | test doubles |
+| `cmd/syncr`, `cmd/webui` | everything above | wiring only |
+
+`podsync.Syncer` is the one contract everything is built around: `syncer.Service` implements it, `rest.Server`
+exposes it, `rest.Client` implements it again for the web UI. Errors of kind not-found / invalid / busy survive the
+HTTP boundary (`podsync.ErrNotFound`, `ErrInvalid`, `ErrBusy`).
 
 ### 4.1 Source adapter pattern
 
-Core abstraction all sources implement, so YouTube is just the first plugin:
+Core abstraction all sources implement (`podsync.Source`), so YouTube (package `youtube`) is just the first plugin:
 
 ```go
 type Source interface {
@@ -397,7 +408,7 @@ video results. The playlist filter is `sp=EgIQAw%253D%253D`.
 - Config: TOML (`github.com/BurntSushi/toml` or `github.com/pelletier/go-toml`).
 - Storage: no database — filesystem + JSON sidecar files per §4.3, with an
   in-memory index built at startup. Standard library `encoding/json`.
-- HTTP: standard library `net/http` + `chi` or similar lightweight router.
+- HTTP: standard library `net/http` (Go 1.22 pattern routing) for both the REST API and the web UI; JSON over HTTP between the two programs.
 - Web UI: server-rendered Go `html/template` + **htmx** for partial updates
   (triggering a force-pull and polling its status, debounced live search,
   Load More, the status banner), no Alpine.js needed. No Node build step, no SPA
@@ -407,25 +418,16 @@ video results. The playlist filter is `sp=EgIQAw%253D%253D`.
 
 ## 10. Deployment
 
-- **Dockerfile**: multi-stage build — compile the Go binary (templates/assets
-  embedded via `go:embed`, so this is a single Go build stage, no Node) in a
-  builder stage, copy into a slim runtime image (e.g. `debian:bookworm-slim`
-  or `alpine`) that also has `yt-dlp` and `ffmpeg` installed, since the app
-  shells out to both at runtime. `yt-dlp` ships as a self-contained
-  binary/pip package, so pin a version in the image rather than relying on
-  whatever the base image repo has.
-- **Multi-arch (amd64 + arm64)**: build with `docker buildx build --platform
-  linux/amd64,linux/arm64`. Go cross-compiles trivially (`GOOS=linux
-  GOARCH=arm64`) and with no CGO dependency (no SQLite driver, nothing else
-  native) there's nothing arch-specific on the Go side; the only per-arch
-  concern is making sure the `yt-dlp`/`ffmpeg` packages installed in the
-  image are available for both target arches in the base distro's package repo.
-- **`compose.example.yaml`**: example Compose file showing the service with
-  a bind-mounted config.toml (feeds + settings — §5) and a separate
-  volume for `data_dir` (downloaded media + per-episode JSON sidecars —
-  §4.3), the exposed web UI port, and relevant env/arg overrides for the
-  config file path. Ships as a template for users to copy to `compose.yaml`
-  and adjust — not wired into CI, just documentation-as-code.
+- **Dockerfile**: multi-stage with two final targets. `webui` is a distroless static image holding just the
+  binary. `syncr` is `debian:bookworm-slim` with `ffmpeg`, a pinned `yt-dlp` binary and `deno` (yt-dlp's default
+  JavaScript runtime for YouTube). Both binaries are built once on the build host's native arch and
+  cross-compiled (no CGO).
+- **Multi-arch (amd64 + arm64)**: `docker buildx build --platform linux/amd64,linux/arm64 --target <syncr|webui> .`
+- **Health checks** use the programs' own `-healthcheck` flag (no curl in the web UI image), so they follow
+  whatever port is configured.
+- **`compose.example.yaml`**: two services. `syncr` gets the bind-mounted `./config` directory (not the single file:
+  the app rewrites config.toml and a single-file bind mount can't be replaced atomically) and `./data`, runs as the
+  user's uid, and publishes nothing; `webui` publishes `8080` and reaches syncr at `http://syncr:8081`.
 
 ## 11. Open Questions
 

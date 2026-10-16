@@ -1,5 +1,7 @@
 # FOLLOWUP — decisions to review
 
+> Sections below were written as the work progressed. Package paths like `internal/puller` or `internal/web` in older sections predate the restructure described under **Restructure into syncr + webui**; the behavior they describe still applies, now living in `syncer/`, `webui/`, `fs/`, `toml/` etc.
+
 Running log of judgment calls made during unsupervised implementation.
 **⚠ = I was unsure; worth discussing.** Everything else I'm fairly comfortable with but is listed so you can veto it.
 
@@ -15,7 +17,7 @@ Running log of judgment calls made during unsupervised implementation.
 9. ⚠ **arm64 runtime image was not built** (only the Go cross-compile and the yt-dlp/deno arm64 layers were verified), and the amd64 image is 688 MB. → *Docker*.
 10. Blank per-feed field means "inherit", so you can't override a non-empty default with an empty regex. → *Web UI*.
 11. A permanently failed episode keeps its banner entry until retried/dismissed/restart. → *Puller*.
-12. Module path is plain `podsync-go`; no license file was chosen; I committed at milestones. → *Setup*.
+12. Module path is now `podsync`; no license file was chosen; I committed at milestones. → *Setup*.
 
 Real bugs my own tests/browser run caught along the way (all fixed): shared staging dir between concurrent downloads, UI refresh missing short downloads between polls, duplicated rows after Load More downloads, stale header stats. Details in the sections below.
 
@@ -25,7 +27,7 @@ Real bugs my own tests/browser run caught along the way (all fixed): shared stag
 - yt-dlp problems surface as a banner (see Status banner below).
 
 ## Setup
-- Go module path is plain `podsync-go` (no host), since you didn't give a GitHub namespace. If this will be `go install`-able or published, rename it before the codebase grows: `go mod edit -module github.com/you/podsync-go` plus a find/replace of the import prefix.
+- ⚠ Go module path is now plain `podsync` (was `podsync-go`; changed so the root package's import path equals its name, as in your layout). If this will be `go install`-able or published, rename it to `github.com/you/podsync` early: `go mod edit -module ...` plus a find/replace of the `"podsync` import prefix.
 - I committed at each milestone (you said "git init", I read that as "use git"). History is the milestone list; squash if you prefer.
 
 ## Config
@@ -103,7 +105,7 @@ Tested three ways: Go `httptest` for every route, a headless-Chromium run (puppe
 - ⚠ **Image size is 688 MB.** Debian's `ffmpeg` pulls ~270 packages (X11, pango, … via libavfilter) and deno is 85 MB. Options if that bothers you: a static ffmpeg build in the `tools` stage (smaller, but third-party hosts and harder to pin), or an Alpine/musl base with yt-dlp's musl binary. I chose boring and big over small and clever.
 - yt-dlp and deno versions are pinned with build args (`YTDLP_VERSION`, `DENO_VERSION`). yt-dlp goes stale quickly; bump the arg or enable `download.self_update` (the binary lives in a world-writable `/opt/yt-dlp` so any `--user` can replace it; the update is lost when the container is recreated).
 - deno is bundled because yt-dlp now needs a JavaScript runtime for YouTube's player challenges; without one, some videos fail with "format not available".
-- The `HEALTHCHECK` hardcodes port 8080; if you change `listen_addr` inside the container it will report unhealthy.
+- Health checks now use each program's own `-healthcheck` flag (reads the configured port), so changing the listen address no longer breaks them (this replaced a hardcoded `curl :8080`).
 - The default config written on first start has `data_dir = "./data"`; it lands in `/data` only because the image's `WORKDIR` is `/`. Slightly magical, but it keeps the default config identical to the non-Docker one.
 - `compose.example.yaml` uses `build: .` (no published image / CI). It sets `user: "1000:1000"`; `/config` and `/data` are mode 0777 inside the image so other uids work too.
 
@@ -124,3 +126,24 @@ Watched/favorited (dropped per your note), in-browser player, OPML export, `play
 - When a row is re-rendered before the library knows the episode, a thumbnail URL sent by the browser is accepted **only if it starts with `https://`** (otherwise `javascript:`-style URLs could end up in an `<img>`; tested).
 - `dev/config.toml` is a checked-in dev config with `https://youtube.com/@aragusea` (channel `UC9_p50tH3WmMslWRWKnM7dQ`), 480p, `page_size = 5`, data in git-ignored `dev/data`. Run: `go run ./cmd/podsync -config dev/config.toml` from the repo root. The UI rewrites this tracked file when you change settings, so expect a diff after using Settings.
 - Observed live: one of the five first-pull downloads failed with `HTTP Error 403: Forbidden` (a transient YouTube/CDN thing; yt-dlp had already retried 3x). It showed up as a failed row plus a red banner exactly as designed, and a manual Retry succeeded. ⚠ It would also have been retried automatically on the next scheduled pull; I did not add an immediate in-job retry for 403s. If you see a lot of these, a quick second attempt with a different yt-dlp player client may be worth adding.
+
+## Restructure into syncr + webui (your layout)
+You asked for: root package = domain types, subpackages grouped by dependency, main packages only wire things, `cmd/syncr` (fetch + REST API), `cmd/webui` (htmx server), a `youtube` package. Done; the old single `cmd/podsync` is gone. All tests (including the browser run, now against two separate processes) pass.
+- Layout: root `podsync` (types + interfaces; stdlib only) · `youtube` (yt-dlp) · `fs` (library on disk) · `toml` (config file) · `status` · `syncer` (the service logic) · `rest` (API server + client) · `webui` · `rss` · `mock`. Details in PROJECT.md §4.0.
+- The seam is one interface, `podsync.Syncer`: `syncer.Service` implements it, `rest.Server` exposes it, `rest.Client` implements it again, and the web UI only ever sees the interface. Business logic that used to live in web handlers (row state, search, add/update/delete, settings) moved into `syncer`, so the UI is a thin view layer.
+- The web UI runs as a separate, stateless process and proxies `/feeds/*` and `/media/*` to syncr, so podcast apps and browsers use a single address. Compose publishes only the web UI.
+- Module path is `podsync` (see Setup).
+- ⚠ **`syncer` is not in the root package.** The service logic (scheduler, queue, cleanup) is application logic, not a domain type, so I gave it its own package that depends only on root interfaces. The root still holds a little pure logic (config validation, `EpisodeFilter`, `Registry`); say if you want those pushed out too.
+- ⚠ **Root types carry both `toml` and `json` struct tags** (no imports, so the root stays dependency-free, but the domain types do "know" their wire formats). The alternative is separate DTOs for the REST API and config file, which is a lot more mapping code for a project this size.
+- ⚠ `toml` imports `fs` just for `WriteFileAtomic`. By your "group by dependency" rule a third micro-package would be purer; I kept the package count down.
+- ⚠ **Feeds and media are served by syncr and proxied by the web UI.** If the web UI is down, podcast apps can't fetch feeds (unless `base_url` points straight at syncr, which then has to be reachable from phones, i.e. its API port is exposed too). I picked "one public address, API port stays private".
+- ⚠ **The REST API has no auth**, same as before, but it is now a *network* service on its own port. Mitigations: browsers can't call it cross-site (`CrossSiteGuard` plus a required `Content-Type: application/json` on writes), and compose doesn't publish the port. Anyone who can reach the port can still do everything.
+- The public API shape is the DTOs in `syncer.go` at the repo root, under `/api/v1`. There's no versioning policy beyond the prefix.
+- The "add feed" preview cache now lives in the web UI process (in memory, 15 min). Restarting the web UI between preview and Add gives "preview expired", harmless.
+- The web UI makes a few API calls per interaction (e.g. each polled row costs two). Cheap on one host or one Docker network.
+- If syncr is unreachable the web UI shows that in its own banner ("Cannot reach the sync service") instead of an error page; pages that need data return 502 with the reason.
+- **Bug found while restructuring (existed since the first pass):** `html/template` doesn't treat `hx-*` attributes as URLs, so the polled row URL put raw title/thumbnail text into a query string. A title containing `&`, `#` or `+` would have broken polling of that row. Values are now `urlquery`-escaped (test added).
+- Default `server.listen_addr` is now `:8081` (the API) so it doesn't collide with the web UI's `:8080`. An existing config that still says `:8080` would clash if both run on one host; nothing was released, so I didn't add a migration.
+- The old all-in-one binary is gone. If you want a "single process, no REST hop" build for simple installs, it's a ~40-line `cmd/podsync` that passes `syncer.Service` directly to `webui.New` (it already takes a `podsync.Syncer`); the proxy would then point at the same process. Not built because you asked for two mains.
+- `mock` is a normal (non-`_test`) package, per the usual standard-layout convention, so syncer, rest and webui tests share one fake source instead of three copies.
+- Dockerfile now has two targets (`syncr`, `webui`); the web UI image is distroless (static binary only). Build/run status is under *Docker* below.
