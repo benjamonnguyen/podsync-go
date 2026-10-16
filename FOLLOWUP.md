@@ -3,6 +3,22 @@
 Running log of judgment calls made during unsupervised implementation.
 **⚠ = I was unsure; worth discussing.** Everything else I'm fairly comfortable with but is listed so you can veto it.
 
+## Start here: the 12 things I'd most like your eyes on
+1. ⚠ **No authentication** (as scoped). Anyone who can reach the port can delete feeds and download everything. Cheap guards exist (cross-site POST blocking, YouTube-only URL allowlist, CSP) but they are not auth. → *Security*.
+2. ⚠ **The Shorts heuristic misfired on my first real test.** Channel "jawed" has exactly one video ("Me at the zoo", 19 s); with the default `exclude_shorts = true` it was silently skipped, so the feed looked empty until I turned the option off. A fixed ≤60 s rule is blunt for playlists and tiny channels. → *yt-dlp / YouTube adapter*.
+3. ⚠ **Channel search depends on undocumented YouTube `sp=` tokens** and has no fallback. Works today, returns great data, may break without notice; add-by-link/@handle is unaffected. → *yt-dlp / YouTube adapter*.
+4. ⚠ **Playlists use YouTube's playlist order**, so an oldest-first playlist (a course/series) would only ever pull its first `page_size` episodes. podsync solves this with `playlist_sort`; I didn't. → *yt-dlp / YouTube adapter*.
+5. ⚠ **`cleanup_after_days` counts from the publish date**, so slow-publishing channels can be emptied. Off by default. → *Puller*.
+6. ⚠ **The UI rewrites `config.toml` and drops hand-written comments/ordering.** `config.example.toml` is the documented reference. → *Config*.
+7. **Flat listings have no upload date**, so Load More rows show no date and dates only exist after download. → *yt-dlp / YouTube adapter*.
+8. ⚠ **Episodes inside the newest window that your filters skip are invisible** (no "filtered" badge, no way to grab one). Open question left in PROJECT.md. → *Web UI*.
+9. ⚠ **arm64 runtime image was not built** (only the Go cross-compile and the yt-dlp/deno arm64 layers were verified), and the amd64 image is 688 MB. → *Docker*.
+10. Blank per-feed field means "inherit", so you can't override a non-empty default with an empty regex. → *Web UI*.
+11. A permanently failed episode keeps its banner entry until retried/dismissed/restart. → *Puller*.
+12. Module path is plain `podsync-go`; no license file was chosen; I committed at milestones. → *Setup*.
+
+Real bugs my own tests/browser run caught along the way (all fixed): shared staging dir between concurrent downloads, UI refresh missing short downloads between polls, duplicated rows after Load More downloads, stale header stats. Details in the sections below.
+
 ## Scope changes from your answers
 - `title_filter` split into `title_include` / `title_exclude` (include applied first, then exclude). Old key `title_filter` is rejected by the strict config loader, not silently ignored.
 - **Watched dropped entirely** (no flag, no filter). I also dropped `favorited`, since it had no UI and nothing to drive it. Easy to add back (it's one sidecar field) if you want a "pin" feature.
@@ -80,3 +96,20 @@ Tested three ways: Go `httptest` for every route, a headless-Chromium run (puppe
 - `PODSYNC_LIVE=1 go test ./internal/source/youtube -run Live -v` runs the real thing against YouTube (resolve @handle, window listing, channel/playlist search, video→channel, real video + audio download). Passing as of this writing; it's skipped by default because it needs network and yt-dlp.
 - `e2e/run.sh` (Node + puppeteer-core + a Chromium binary): 32 browser checks against a fake yt-dlp. Optional dev tooling; nothing in the Go build depends on it.
 - Not covered by automation: arm64 *runtime* behavior (see Docker), `self_update` against a real yt-dlp install, cookies-file flow, and anything on a real phone/podcast app. I did not test with an actual podcast client.
+
+## Docker
+- **Verified (amd64):** built the image, ran it as uid 1000 with `/config` and `/data` mounted, healthcheck went healthy, `yt-dlp`/`deno`/`ffmpeg` all present, added a real channel through the API and downloaded a real video as m4a (ffprobe: AAC) from inside the container. `yt-dlp -U` runs (reported up to date).
+- **Verified (arm64, partially):** the Go binary cross-compiles to a static aarch64 ELF; the `tools` stage built with `--platform linux/arm64` and both the yt-dlp and deno files are aarch64 ELFs (checked the ELF header). ⚠ **I did not build or run the arm64 *runtime* stage** (`apt-get install ffmpeg` under QEMU): the native amd64 apt step alone took ~30 min on this machine, so emulated arm64 would be hours. Debian bookworm ships ffmpeg for arm64 so I expect it to work, but it is unproven. A real arm64 box (or CI with native runners) should run `docker buildx build --platform linux/amd64,linux/arm64 .` once.
+- ⚠ **Image size is 688 MB.** Debian's `ffmpeg` pulls ~270 packages (X11, pango, … via libavfilter) and deno is 85 MB. Options if that bothers you: a static ffmpeg build in the `tools` stage (smaller, but third-party hosts and harder to pin), or an Alpine/musl base with yt-dlp's musl binary. I chose boring and big over small and clever.
+- yt-dlp and deno versions are pinned with build args (`YTDLP_VERSION`, `DENO_VERSION`). yt-dlp goes stale quickly; bump the arg or enable `download.self_update` (the binary lives in a world-writable `/opt/yt-dlp` so any `--user` can replace it; the update is lost when the container is recreated).
+- deno is bundled because yt-dlp now needs a JavaScript runtime for YouTube's player challenges; without one, some videos fail with "format not available".
+- The `HEALTHCHECK` hardcodes port 8080; if you change `listen_addr` inside the container it will report unhealthy.
+- The default config written on first start has `data_dir = "./data"`; it lands in `/data` only because the image's `WORKDIR` is `/`. Slightly magical, but it keeps the default config identical to the non-Docker one.
+- `compose.example.yaml` uses `build: .` (no published image / CI). It sets `user: "1000:1000"`; `/config` and `/data` are mode 0777 inside the image so other uids work too.
+
+## Deliberately not built (say if you want any)
+Watched/favorited (dropped per your note), in-browser player, OPML export, `playlist_sort`, per-feed cookies, hooks/webhooks, private feed tokens, auth/HTTPS, an episode-level delete button, pagination of the library page (fine for dozens of feeds), log-file configuration (logs go to stdout).
+
+## Environment quirks worth knowing
+- This sandbox's Docker daemon is slow at disk-heavy steps; builds that take minutes here should be much faster elsewhere.
+- Everything was developed with Go 1.27 (`go 1.27.0` in go.mod, `golang:1.27-bookworm` in the Dockerfile).
