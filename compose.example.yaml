@@ -1,0 +1,23 @@
+# Copy to compose.yaml and adjust. Then: docker compose up -d
+services:
+  podsync:
+    image: podsync-go:latest
+    # Build it yourself (multi-arch: docker buildx build --platform linux/amd64,linux/arm64 .):
+    build: .
+    container_name: podsync
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      # Mount the *directory*, not the single file: the app rewrites config.toml when you
+      # change settings in the UI, and a single-file bind mount can't be replaced atomically.
+      - ./config:/config
+      # Downloaded media and metadata. Back this up; config.toml alone is enough to
+      # re-create your feeds, but watched/downloaded state lives here.
+      - ./data:/data
+    # Run as your own user so files in ./config and ./data are yours (create both dirs first).
+    user: "1000:1000"
+    environment:
+      TZ: UTC
+    # Optional: cookies for YouTube sign-in checks (then set download.cookies_file = "/config/cookies.txt")
+    #   put cookies.txt in ./config

@@ -1,0 +1,43 @@
+# Example podsync-go configuration with every option documented.
+# If the file doesn't exist the app creates one with these defaults.
+# NOTE: the web UI rewrites this file when you change settings or feeds, which drops
+# comments, so keep this example file for reference instead of annotating your live one.
+
+[server]
+listen_addr = ":8080"
+# The address podcast apps use to reach this server. Must be reachable from your phone.
+base_url = "http://192.168.1.10:8080"
+# Where media files and metadata are stored (/data in the Docker image).
+data_dir = "./data"
+
+[download]
+yt_dlp_path = "yt-dlp"
+# Maximum simultaneous downloads (1-16).
+concurrency = 2
+# How often every feed is checked for new episodes (minimum 1m).
+update_interval = "30m"
+# Run `yt-dlp -U` at startup and daily. YouTube changes often; keeping yt-dlp current avoids most failures.
+self_update = false
+# Optional cookies.txt (Netscape format) exported from a signed-in browser, for "confirm you're not a bot" errors.
+cookies_file = ""
+
+# Defaults applied to every feed; each feed can override any of them.
+[defaults]
+format = "video"            # "video" (mp4) or "audio" (m4a)
+max_resolution = 1080       # pixels of height; 0 = no limit
+exclude_shorts = true       # skip videos of 60 seconds or less
+title_include = ""          # regex: if set, only matching titles are downloaded
+title_exclude = ""          # regex: matching titles are skipped, e.g. "(?i)sponsored|#shorts"
+page_size = 10              # only the newest N episodes of a feed are considered per update
+cleanup_keep_last = 50      # keep the newest N downloaded episodes; 0 = keep all
+cleanup_after_days = 0      # delete episodes published more than N days ago; 0 = never
+
+# One [[feeds]] block per channel or playlist. Easiest is to add them from the web UI.
+[[feeds]]
+id = "UCXuqSBlHAE6Xw-yeJA0Tunw"     # channel ID (UC...) or playlist ID (PL...)
+source = "youtube"
+kind = "channel"                     # "channel" or "playlist"
+name = "Linus Tech Tips"
+# Optional per-feed overrides of any [defaults] key:
+format = "audio"
+page_size = 5

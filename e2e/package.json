@@ -1,0 +1,7 @@
+{
+  "name": "podsync-go-e2e",
+  "private": true,
+  "type": "module",
+  "description": "Browser end-to-end test: fake yt-dlp + headless Chromium via puppeteer-core",
+  "dependencies": { "puppeteer-core": "^24.0.0" }
+}

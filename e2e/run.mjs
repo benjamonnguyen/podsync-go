@@ -1,0 +1,112 @@
+import puppeteer from 'puppeteer-core';
+const BASE = 'http://127.0.0.1:8099';
+const OK = 'UCe2eFakeChannelAAAAAAAA';
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+let failures = 0;
+const check = (name, cond, extra = '') => { console.log((cond ? 'PASS ' : 'FAIL ') + name + (cond ? '' : ' ' + extra)); if (!cond) failures++; };
+
+const browser = await puppeteer.launch({ executablePath: process.env.CHROMIUM || '/usr/bin/chromium', headless: true, args: ['--no-sandbox'] });
+const page = await browser.newPage();
+await page.setViewport({ width: 1000, height: 900 });
+const consoleErrors = [];
+page.on('console', m => { if (['error', 'warning'].includes(m.type())) consoleErrors.push(m.text()); });
+page.on('pageerror', e => consoleErrors.push('pageerror: ' + e.message));
+
+const waitFor = async (fn, ms = 15000, arg) => { try { await page.waitForFunction(fn, { timeout: ms, polling: 200 }, arg); return true; } catch { return false; } };
+const count = sel => page.$$eval(sel, els => els.length);
+const text = sel => page.$eval(sel, e => e.textContent).catch(() => '');
+const shot = n => (process.env.SHOTS ? page.screenshot({ path: `${process.env.SHOTS}/${n}.png` }) : null);
+
+// 1. Search and add a feed through the UI
+await page.goto(BASE + '/add');
+await page.type('input[name=q]', 'fake');
+check('search results appear', await waitFor(() => document.querySelector('#results .results li')));
+check('result shows handle + subs', (await text('#results')).includes('@e2efake') && (await text('#results')).includes('123.5K'));
+await page.click('#results li button');
+check('preview card appears', await waitFor(() => document.querySelector('#preview .preview')));
+await page.type('#preview input[name=page_size]', '4');
+await Promise.all([page.waitForNavigation({ waitUntil: 'domcontentloaded' }), page.click('#preview button.primary')]);
+check('redirected to feed page', page.url().endsWith('/feed/' + OK), page.url());
+check('banner shows activity while pulling', await waitFor(() => document.querySelector('#status .banner.info')));
+check('4 episodes appear without reload', await waitFor(() => document.querySelectorAll('#episodes .row:not(.faded)').length === 4, 30000), String(await count('#episodes .row')));
+check('header stats refresh after pull', await waitFor(() => /4 episodes downloaded/.test(document.getElementById('feed-stats').textContent) && !/never/.test(document.getElementById('feed-stats').textContent), 10000), await text('#feed-stats'));
+await shot('1-feed');
+
+// 2. Load More
+await page.click('#more button');
+check('Load more adds faded rows into #loaded', await waitFor(() => document.querySelectorAll('#loaded .row.faded').length === 4), String(await count('#loaded .row.faded')));
+check('Load more button advanced offset', (await page.$eval('#more button', b => b.getAttribute('hx-get'))).endsWith('offset=8'));
+check('faded rows have Download buttons', (await page.$$eval('.row.faded button', bs => bs.map(b => b.textContent.trim()))).every(t => t === 'Download'));
+await shot('2-loadmore');
+
+// 3. Download a faded episode
+const firstFaded = await page.$eval('.row.faded', r => r.id);
+await page.click(`#${firstFaded} button`);
+check('row shows downloading state', await waitFor(id => /downloading|queued/.test(document.getElementById(id)?.textContent || ''), 5000, firstFaded));
+check('row finishes and un-fades', await waitFor(id => { const r = document.getElementById(id); return r && !r.classList.contains('faded') && r.querySelector('a.title'); }, 20000, firstFaded));
+check('manual episode tagged "kept"', (await text(`#${firstFaded}`)).includes('kept'));
+await sleep(7000); // let the main list refresh and the dedupe run
+const ids = await page.$$eval('.row[id]', rs => rs.map(r => r.id));
+check('no duplicate episode rows', new Set(ids).size === ids.length, JSON.stringify(ids));
+check('downloaded episode moved to main list', await page.evaluate(id => !!document.querySelector('#episodes #' + id), firstFaded), JSON.stringify({ id: firstFaded, main: await page.$$eval('#episodes .row', rs => rs.map(r => r.id)), loaded: await page.$$eval('#loaded .row', rs => rs.map(r => r.id)) }));
+
+// 4. A failing download surfaces in row and banner
+await page.click('#ep-e2e00000007 button');
+check('failed row shows error + Retry', await waitFor(() => /failed/.test(document.getElementById('ep-e2e00000007')?.textContent || '') , 20000));
+check('retry button present', (await text('#ep-e2e00000007')).includes('Retry'));
+check('banner reports the download failure', await waitFor(() => /Download failed/.test(document.getElementById('status').textContent), 8000));
+await shot('3-failed');
+
+// 5. Load more to the end
+await page.click('#more button');
+await waitFor(() => document.querySelector('#more button')?.getAttribute('hx-get')?.endsWith('offset=12'));
+await page.click('#more button');
+check('end of feed reached', await waitFor(() => /end of the feed/.test(document.getElementById('more')?.textContent || ''), 15000));
+check('short (episode 13) hidden by filter', !(await page.content()).includes('Episode 13 of'));
+
+// 6. Filter in feed
+await page.type('input[aria-label="Filter episodes"]', 'Episode 2 ');
+check('filter narrows list', await waitFor(() => document.querySelectorAll('#episodes .row').length === 1));
+await page.$eval('input[aria-label="Filter episodes"]', e => { e.value = ''; e.dispatchEvent(new Event('input', { bubbles: true })); });
+check('clearing filter restores list', await waitFor(() => document.querySelectorAll('#episodes .row').length >= 5));
+
+// 7. Library search
+await page.goto(BASE + '/');
+check('library card present', (await text('.card h3')).includes('E2E Fake Channel'));
+await page.type('input[aria-label="Search"]', 'Episode 3');
+check('library search shows episode hits', await waitFor(() => /Episodes matching/.test(document.getElementById('content').textContent)));
+check('hit row has feed name', (await text('#content')).includes('E2E Fake Channel'));
+await page.$eval('input[aria-label="Search"]', e => { e.value = ''; e.dispatchEvent(new Event('input', { bubbles: true })); });
+check('clearing search restores cards', await waitFor(() => document.querySelector('#content .grid .card')));
+
+// 8. Failing feed -> error banner; dismiss
+await page.goto(BASE + '/add');
+await page.type('input[name=ref]', 'UCe2eFailChannelBBBBBBBB');
+await page.click('form[hx-post="/add/preview"] button');
+await waitFor(() => document.querySelector('#preview button.primary'));
+await Promise.all([page.waitForNavigation({ waitUntil: 'domcontentloaded' }), page.click('#preview button.primary')]);
+check('list failure appears in banner', await waitFor(() => /Could not list episodes/.test(document.getElementById('status').textContent), 15000));
+await shot('4-banner');
+await page.evaluate(() => { for (const b of document.querySelectorAll('#status .banner')) if (/Could not list episodes/.test(b.textContent)) { b.querySelector('button').click(); return; } });
+check('dismiss hides banner', await waitFor(() => !/Could not list episodes/.test(document.getElementById('status').textContent), 5000));
+
+// 9. Settings
+await page.goto(BASE + '/settings');
+await page.$eval('input[name=concurrency]', e => e.value = '3');
+await Promise.all([page.waitForNavigation({ waitUntil: 'domcontentloaded' }), page.click('button.primary')]);
+check('settings saved flash', (await text('.notice.ok')).includes('Saved'));
+await page.$eval('input[name=page_size]', e => { e.removeAttribute('min'); e.value = '0'; });
+await Promise.all([page.waitForNavigation({ waitUntil: 'domcontentloaded' }), page.click('button.primary')]);
+check('invalid settings show error and keep value', (await text('.notice.err')).includes('page_size'));
+await shot('5-settings-error');
+
+// 10. Delete the failing feed
+await page.goto(BASE + '/feed/UCe2eFailChannelBBBBBBBB/delete');
+await Promise.all([page.waitForNavigation({ waitUntil: 'domcontentloaded' }), page.click('button.danger')]);
+check('feed deleted (files kept, shown as orphan)', (await text('#content')).includes('Not in config') && !(await text('#content')).match(/E2E Failing Channel[\s\S]*Check now/));
+
+const realErrors = consoleErrors.filter(e => !/ERR_NAME_NOT_RESOLVED/.test(e));
+check('no console errors / CSP violations', realErrors.length === 0, JSON.stringify(realErrors));
+await browser.close();
+console.log(failures === 0 ? 'ALL PASSED' : failures + ' FAILED');
+process.exit(failures ? 1 : 0);

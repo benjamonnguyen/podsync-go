@@ -1,0 +1,41 @@
+#!/usr/bin/env python3
+import sys, json, time, os
+args = sys.argv[1:]
+def val(flag):
+    return args[args.index(flag)+1] if flag in args and args.index(flag)+1 < len(args) else None
+last = args[-1] if args else ""
+OK = "UCe2eFakeChannelAAAAAAAA"
+BAD = "UCe2eFailChannelBBBBBBBB"
+def err(msg):
+    sys.stderr.write("ERROR: " + msg + "\n"); sys.exit(1)
+if "--version" in args:
+    print("2099.01.01"); sys.exit(0)
+if "results?search_query=" in last:
+    print(json.dumps({"entries": [
+        {"id": OK, "title": "E2E Fake Channel", "uploader_id": "@e2efake", "channel_follower_count": 123456, "thumbnails": {"url": "//example.invalid/a.jpg", "width": 176, "height": 176}, "description": "A fake channel for tests"},
+        {"id": BAD, "title": "E2E Failing Channel", "uploader_id": "@e2efail", "channel_follower_count": 42}]}))
+    sys.exit(0)
+if "--write-info-json" in args:
+    vid = val("-o").split(".")[0]
+    time.sleep(1.5)
+    if vid == "e2e00000007":
+        err("[youtube] e2e00000007: Video unavailable")
+    d = val("-P")
+    open(os.path.join(d, vid + ".mp4"), "wb").write(b"x" * 2048)
+    n = int(vid[3:])
+    json.dump({"id": vid, "title": "Episode %d of fake" % n, "description": "desc", "timestamp": 1700000000 - n*86400, "duration": 600, "webpage_url": "https://www.youtube.com/watch?v=" + vid}, open(os.path.join(d, vid + ".info.json"), "w"))
+    sys.exit(0)
+if "--flat-playlist" in args:
+    chan = OK if OK in last else (BAD if BAD in last else None)
+    if chan is None: err("unknown url " + last)
+    if "--playlist-start" in args:
+        if chan == BAD: err("HTTP Error 429: Too Many Requests")
+        s, e = int(val("--playlist-start")), int(val("--playlist-end"))
+        ents = []
+        for n in range(1, 15):
+            ents.append({"id": "e2e%08d" % n, "title": "Episode %d of fake" % n, "url": "https://www.youtube.com/watch?v=e2e%08d" % n, "duration": 30 if n == 13 else 600})
+        print(json.dumps({"id": chan, "entries": ents[s-1:e]}))
+    else:
+        print(json.dumps({"id": chan, "channel": "E2E Fake Channel" if chan == OK else "E2E Failing Channel", "title": "x - Videos", "thumbnails": [{"url": "//example.invalid/avatar.jpg", "width": 900, "height": 900}]}))
+    sys.exit(0)
+sys.stderr.write("fake: unhandled %r\n" % args); sys.exit(2)

@@ -1,0 +1,6 @@
+.git
+data
+config.toml
+e2e
+*.md
+!README.md
