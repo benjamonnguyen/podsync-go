@@ -99,7 +99,7 @@ func newHarness(t *testing.T) *harness {
 	t.Cleanup(cancel)
 	reg := source.NewRegistry(src)
 	svc := puller.New(ctx, cfg, lib, reg, st)
-	cfg.OnChange(func(_, _ config.Config) { svc.ConfigChanged() })
+	cfg.OnChange(svc.ConfigChanged)
 	svc.Reconcile()
 	srv, err := New(cfg, lib, svc, reg, st)
 	if err != nil {

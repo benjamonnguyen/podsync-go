@@ -112,16 +112,21 @@ func (s *Service) Reconcile() {
 }
 
 // ConfigChanged should be called after the configuration is updated.
-func (s *Service) ConfigChanged() {
+func (s *Service) ConfigChanged(old, cur config.Config) {
 	s.Reconcile()
 	s.mu.Lock()
 	s.scheduleLocked() // concurrency may have changed
 	s.mu.Unlock()
-	select {
-	case s.wake <- struct{}{}:
-	default:
+	if old.Download.UpdateInterval != cur.Download.UpdateInterval {
+		select {
+		case s.wake <- struct{}{}:
+		default:
+		}
 	}
 	go s.CheckHealth()
+	if !old.Download.SelfUpdate && cur.Download.SelfUpdate {
+		go s.selfUpdateOnce()
+	}
 }
 
 // Run blocks until the service context is cancelled.
@@ -165,28 +170,29 @@ func (s *Service) CheckHealth() {
 	}
 }
 
-func (s *Service) selfUpdateLoop() {
-	run := func() {
-		if !s.cfg.Get().Download.SelfUpdate {
-			return
-		}
-		for _, src := range s.reg.All() {
-			u, ok := src.(source.Updater)
-			if !ok {
-				continue
-			}
-			key := "selfupdate:" + src.Kind()
-			out, err := u.SelfUpdate(s.ctx)
-			if err != nil {
-				s.st.Report(key, status.Warning, fmt.Sprintf("Self-update of %s tooling failed: %v", src.Kind(), err))
-				continue
-			}
-			s.st.Clear(key)
-			log.Printf("self-update (%s): %s", src.Kind(), out)
-		}
-		s.CheckHealth()
+func (s *Service) selfUpdateOnce() {
+	if !s.cfg.Get().Download.SelfUpdate {
+		return
 	}
-	run()
+	for _, src := range s.reg.All() {
+		u, ok := src.(source.Updater)
+		if !ok {
+			continue
+		}
+		key := "selfupdate:" + src.Kind()
+		out, err := u.SelfUpdate(s.ctx)
+		if err != nil {
+			s.st.Report(key, status.Warning, fmt.Sprintf("Self-update of %s tooling failed: %v", src.Kind(), err))
+			continue
+		}
+		s.st.Clear(key)
+		log.Printf("self-update (%s): %s", src.Kind(), out)
+	}
+	s.CheckHealth()
+}
+
+func (s *Service) selfUpdateLoop() {
+	s.selfUpdateOnce()
 	t := time.NewTicker(24 * time.Hour)
 	defer t.Stop()
 	for {
@@ -194,7 +200,7 @@ func (s *Service) selfUpdateLoop() {
 		case <-s.ctx.Done():
 			return
 		case <-t.C:
-			run()
+			s.selfUpdateOnce()
 		}
 	}
 }

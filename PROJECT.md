@@ -1,5 +1,8 @@
 # Podsync-Go — Project Overview & Requirements
 
+> Status: implemented. This document is the original design; where the implementation
+> differs or a call was uncertain, see [FOLLOWUP.md](FOLLOWUP.md). User docs are in [README.md](README.md).
+
 ## 1. Overview
 
 A self-hosted Go application that turns YouTube channels/playlists into podcast
@@ -81,22 +84,28 @@ Core abstraction all sources implement, so YouTube is just the first plugin:
 
 ```go
 type Source interface {
-    // Kind returns a stable identifier, e.g. "youtube".
-    Kind() string
+    Kind() string                                   // stable identifier, e.g. "youtube"
+    Check(ctx context.Context) Health               // are the external tools (yt-dlp, ffmpeg) usable?
 
-    // Resolve turns a user-supplied reference (URL, handle, ID) into a
-    // canonical Feed descriptor (title, ID, kind: channel/playlist).
+    // Resolve turns a user-supplied URL, @handle or ID into a canonical feed.
     Resolve(ctx context.Context, ref string) (FeedInfo, error)
 
-    // ListEpisodes returns the window [offset, offset+limit) of a feed's
-    // episodes, newest first. The scheduler calls it with offset 0 and
-    // limit = page_size; the UI's Load More calls it with later offsets.
+    // Search finds channels or playlists by name.
+    Search(ctx context.Context, query string, kind SearchKind) ([]SearchResult, error)
+
+    // ListEpisodes returns the window [offset, offset+limit) of a feed's episodes,
+    // newest first. The scheduler calls it with offset 0 and limit = page_size;
+    // the UI's Load More calls it with later offsets. Unavailable entries are
+    // returned (flagged) so callers can tell a short page means "end of feed".
     ListEpisodes(ctx context.Context, feed FeedInfo, offset, limit int) ([]EpisodeInfo, error)
 
-    // Download fetches a single episode's media to destDir according to
-    // the feed's format options, returning the resulting file path.
+    // Download fetches one episode into destDir and returns the file plus the
+    // full metadata discovered while downloading (title, date, duration).
     Download(ctx context.Context, ep EpisodeInfo, opts DownloadOptions, destDir string) (DownloadResult, error)
 }
+
+// Optional: sources that can update their own tooling (yt-dlp -U).
+type Updater interface{ SelfUpdate(ctx context.Context) (string, error) }
 ```
 
 A `SourceRegistry` maps `Kind() -> Source`. The puller, resolver, and API
@@ -306,7 +315,7 @@ backfill mode.
 - **Load More (feed detail view)**: after scrolling to the end of a feed's
   episode list, a **Load More** button queries the source for the next
   window of older episodes that aren't downloaded.
-  - Mechanics: htmx `GET /feeds/{feed_id}/older?offset=N`, where `N` is the
+  - Mechanics: htmx `GET /feed/{feed_id}/older?offset=N`, where `N` is the
     number of source episodes already seen; the handler calls
     `ListEpisodes(feed, N, page_size)`, drops any already downloaded, and
     returns HTML rows appended before the button (the button re-renders with
@@ -316,7 +325,7 @@ backfill mode.
     is an open question (§11).
   - Appearance: not-downloaded episodes render **faded** (reduced opacity),
     with title, date, and duration, plus a **Download** button.
-  - Download: `POST /feeds/{feed_id}/episodes/{episode_id}/download` enqueues
+  - Download: `POST /feed/{feed_id}/episodes/{episode_id}/download` enqueues
     the episode on the normal download queue (same concurrency cap, same
     format/resolution settings), writes its sidecar with `manual = true` on
     success, and the row un-fades in place (htmx polling on the row until the

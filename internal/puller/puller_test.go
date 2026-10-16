@@ -28,6 +28,15 @@ type fakeSource struct {
 	maxActive int
 	downloads map[string]int
 	health    source.Health
+	updates   int
+	updateErr error
+}
+
+func (f *fakeSource) SelfUpdate(context.Context) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.updates++
+	return "updated", f.updateErr
 }
 
 func (f *fakeSource) Kind() string { return "youtube" }
@@ -320,10 +329,10 @@ func TestConcurrencyCapAndBusy(t *testing.T) {
 		t.Fatalf("second trigger should be busy, got %v", err)
 	}
 	// Raise the cap live.
+	e.cfg.OnChange(e.svc.ConfigChanged)
 	if err := e.cfg.Update(func(c *config.Config) error { c.Download.Concurrency = 4; return nil }); err != nil {
 		t.Fatal(err)
 	}
-	e.svc.ConfigChanged()
 	waitFor(t, func() bool { e.src.mu.Lock(); defer e.src.mu.Unlock(); return e.src.active == 4 })
 	close(e.src.gate)
 	waitFor(t, func() bool { a := e.svc.Activity(); return !a.Pulling && a.Downloading == 0 && a.Queued == 0 })
@@ -377,4 +386,40 @@ func waitFor(t *testing.T, cond func() bool) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	t.Fatal("condition not reached in time")
+}
+
+func TestSelfUpdateRunsWhenEnabledAndReportsFailure(t *testing.T) {
+	e := setup(t, nil, nil)
+	e.cfg.OnChange(e.svc.ConfigChanged)
+	e.svc.selfUpdateOnce()
+	if e.src.updates != 0 {
+		t.Fatal("must not self-update while disabled")
+	}
+	e.src.updateErr = errors.New("installed with a package manager")
+	if err := e.cfg.Update(func(c *config.Config) error { c.Download.SelfUpdate = true; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		e.src.mu.Lock()
+		defer e.src.mu.Unlock()
+		return e.src.updates == 1
+	})
+	waitFor(t, func() bool {
+		for _, is := range e.st.Active() {
+			if is.Key == "selfupdate:youtube" {
+				return true
+			}
+		}
+		return false
+	})
+	// A later success clears the warning.
+	e.src.mu.Lock()
+	e.src.updateErr = nil
+	e.src.mu.Unlock()
+	e.svc.selfUpdateOnce()
+	for _, is := range e.st.Active() {
+		if is.Key == "selfupdate:youtube" {
+			t.Fatal("warning should clear after a successful update")
+		}
+	}
 }

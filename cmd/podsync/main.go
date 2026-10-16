@@ -63,7 +63,7 @@ func run(cfgPath string) error {
 	})
 	reg := source.NewRegistry(yt)
 	svc := puller.New(ctx, cfg, lib, reg, st)
-	cfg.OnChange(func(_, _ config.Config) { svc.ConfigChanged() })
+	cfg.OnChange(svc.ConfigChanged)
 	go svc.Run()
 
 	ui, err := web.New(cfg, lib, svc, reg, st)
