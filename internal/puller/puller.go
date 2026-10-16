@@ -455,11 +455,21 @@ func (s *Service) download(j *job) {
 		s.recordFailure(j, f, fmt.Errorf("move into library: %w", err))
 		return
 	}
-	_ = os.Remove(tmp)
+	thumb := ""
+	if res.Thumb != "" {
+		if err := os.Rename(filepath.Join(tmp, res.Thumb), filepath.Join(feedDir, res.Thumb)); err == nil {
+			thumb = res.Thumb
+		} else {
+			log.Printf("keeping %s/%s without thumbnail: %v", j.feedID, j.ep.ID, err)
+		}
+	}
+	_ = os.RemoveAll(tmp)
 	now := s.now().UTC()
 	ep := library.Episode{
 		ID: j.ep.ID, Title: res.Episode.Title, Description: res.Episode.Description, URL: res.Episode.URL,
-		Thumbnail: res.Episode.Thumbnail, Published: res.Episode.Published, DurationSec: res.Episode.DurationSec,
+		Thumbnail: firstNonEmpty(res.Episode.Thumbnail, j.ep.Thumbnail), ThumbFile: thumb,
+		Published: res.Episode.Published, DurationSec: res.Episode.DurationSec,
+		Channel: firstNonEmpty(res.Episode.Channel, j.ep.Channel), ViewCount: maxInt64(res.Episode.ViewCount, j.ep.ViewCount), Height: res.Episode.Height,
 		IsShort: j.ep.IsShort, Status: library.StatusDownloaded, File: res.File, Size: res.Size,
 		DownloadedAt: &now, Manual: manual,
 	}
@@ -488,6 +498,7 @@ func (s *Service) recordFailure(j *job, f config.Feed, err error) {
 	title := firstNonEmpty(prev.Title, j.ep.Title, j.ep.ID)
 	_ = s.lib.PutEpisode(j.feedID, library.Episode{
 		ID: j.ep.ID, Title: title, URL: firstNonEmpty(prev.URL, j.ep.URL), Thumbnail: firstNonEmpty(prev.Thumbnail, j.ep.Thumbnail),
+		Channel: firstNonEmpty(prev.Channel, j.ep.Channel), ViewCount: maxInt64(prev.ViewCount, j.ep.ViewCount),
 		Published: prev.Published, DurationSec: maxInt(prev.DurationSec, j.ep.DurationSec), IsShort: j.ep.IsShort,
 		Status: library.StatusFailed, Attempts: attempts, LastError: err.Error(), Manual: j.manual || prev.Manual,
 	})
@@ -643,6 +654,13 @@ func firstNonEmpty(ss ...string) string {
 		}
 	}
 	return ""
+}
+
+func maxInt64(a, b int64) int64 {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func maxInt(a, b int) int {

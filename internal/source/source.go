@@ -29,6 +29,9 @@ type EpisodeInfo struct {
 	Thumbnail   string
 	Published   time.Time
 	DurationSec int
+	Channel     string // uploader; useful for playlists that mix channels
+	ViewCount   int64
+	Height      int // video height in pixels once downloaded; 0 for audio/unknown
 	IsShort     bool
 	IsLive      bool // live or upcoming stream; cannot be downloaded yet
 	Unavailable bool // private/deleted placeholder entries
@@ -42,6 +45,7 @@ type DownloadOptions struct {
 type DownloadResult struct {
 	File    string // base name inside destDir
 	Size    int64
+	Thumb   string      // base name of the saved jpg thumbnail inside destDir; empty if none
 	Episode EpisodeInfo // full metadata discovered during download
 }
 

@@ -53,7 +53,7 @@ The container runs as the user in `compose.yaml` (`1000:1000` in the example). C
 
 **Add feed**: paste a channel URL, `@handle`, channel ID (`UC...`), playlist URL or even a single video URL (its channel is used). Or search by name and pick a result. You get a preview before anything is added. You can set how many episodes to fetch per update; the default comes from Settings.
 
-**Feed page**: all episodes known for the feed, with a filter box. Newest downloads are at the top.
+**Feed page**: all episodes known for the feed, with a filter box. Newest downloads are at the top. Each row shows the episode's thumbnail, publish date, length, views, resolution and size; **Details** expands the description and a link to the video on YouTube.
 
 - **Load more** (at the bottom) looks further back in the channel and lists older episodes that were not downloaded. They appear faded. Click **Download** on any of them to fetch it. Episodes you download this way are marked *kept* and are never removed by automatic cleanup.
 - Episodes removed by cleanup, or that failed to download, also appear faded with **Download again** / **Retry**.
@@ -73,6 +73,7 @@ The container runs as the user in `compose.yaml` (`1000:1000` in the example). C
 - Failed downloads are retried on the next checks, up to 3 attempts, then wait for you to press **Retry**.
 - **Cleanup** runs after each update. `cleanup_keep_last` keeps only the newest N downloaded episodes of a feed; `cleanup_after_days` also removes episodes published more than N days ago. Only the media file is removed: the episode is remembered as "removed by cleanup", so it will not be downloaded again. Episodes you downloaded manually are never cleaned up.
 - Video downloads are mp4 (up to `max_resolution`); audio-only downloads are m4a.
+- Each episode's thumbnail is saved next to it as a jpg (served by the app and used as the episode image in the podcast feed), together with its title, description, publish date, duration, channel, view count and resolution. Cleanup removes only the media; the thumbnail and details are kept.
 
 ## Configuration
 
@@ -111,7 +112,8 @@ data/
   youtube/<channel or playlist id>/
     _meta.json            cached name, image, last check time
     <video id>.mp4        the media (or .m4a for audio feeds)
-    <video id>.json       episode details and download status
+    <video id>.jpg        the episode thumbnail
+    <video id>.json       episode details (title, description, date, duration, channel, views, resolution) and download status
 ```
 
 It is all plain files, so backing up is just copying the folder. Deleting a media file by hand is safe: the episode is then treated as removed and not re-downloaded. Partial downloads are staged in `data/.tmp` and cleaned up on startup.
@@ -124,6 +126,8 @@ You need Go 1.27+, [yt-dlp](https://github.com/yt-dlp/yt-dlp), `ffmpeg`, and a J
 go build -o podsync ./cmd/podsync
 ./podsync -config config.toml
 ```
+
+For a quick look at the UI with a real channel, `go run ./cmd/podsync -config dev/config.toml` starts the app on <http://localhost:8080> with a ready-made test feed (media goes to `dev/data`).
 
 ## Troubleshooting
 

@@ -4,3 +4,4 @@
 /bin/
 *.test
 .DS_Store
+/dev/data/

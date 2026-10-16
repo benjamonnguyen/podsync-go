@@ -40,7 +40,9 @@ func (s *Server) handleRSS(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleMedia(w http.ResponseWriter, r *http.Request) {
 	id, file := r.PathValue("id"), r.PathValue("file")
-	if _, ok := s.lib.EpisodeByFile(id, file); !ok {
+	_, isMedia := s.lib.EpisodeByFile(id, file)
+	_, isThumb := s.lib.EpisodeByThumb(id, file)
+	if !isMedia && !isThumb {
 		s.notFound(w, r)
 		return
 	}

@@ -95,14 +95,18 @@ func (f *fakeSource) Download(ctx context.Context, ep source.EpisodeInfo, _ sour
 	if err := os.WriteFile(filepath.Join(dest, ep.ID+".mp4"), []byte("media"), 0o644); err != nil {
 		return source.DownloadResult{}, err
 	}
+	if err := os.WriteFile(filepath.Join(dest, ep.ID+".jpg"), []byte("jpg"), 0o644); err != nil {
+		return source.DownloadResult{}, err
+	}
 	idx := 0
 	for i, e := range f.eps {
 		if e.ID == ep.ID {
 			idx = i
 		}
 	}
-	return source.DownloadResult{File: ep.ID + ".mp4", Size: 5, Episode: source.EpisodeInfo{
+	return source.DownloadResult{File: ep.ID + ".mp4", Size: 5, Thumb: ep.ID + ".jpg", Episode: source.EpisodeInfo{
 		ID: ep.ID, Title: "T " + ep.ID, Published: base.AddDate(0, 0, -idx), URL: "http://x/" + ep.ID, DurationSec: 100,
+		Channel: "Chan", ViewCount: 77, Height: 720, Thumbnail: "https://remote/" + ep.ID + ".jpg",
 	}}, nil
 }
 
@@ -177,6 +181,12 @@ func TestPullDownloadsNewestPageAndIsIdempotent(t *testing.T) {
 		}
 		return nil
 	})
+	if eps[0].ThumbFile != "ep00.jpg" || eps[0].Channel != "Chan" || eps[0].ViewCount != 77 || eps[0].Height != 720 || eps[0].Thumbnail != "https://remote/ep00.jpg" {
+		t.Fatalf("metadata not stored: %+v", eps[0])
+	}
+	if _, err := os.Stat(filepath.Join(dir, "ep00.jpg")); err != nil {
+		t.Fatal("thumbnail not moved into the feed dir")
+	}
 	if sum, _ := e.lib.Feed("UC1"); sum.Meta.LastPull.IsZero() || sum.Meta.ImageURL != "http://img/x.jpg" {
 		t.Fatalf("meta: %+v", sum.Meta)
 	}
@@ -291,6 +301,12 @@ func TestCleanupKeepLastTombstonesAndManualExempt(t *testing.T) {
 		ep, _ := e.lib.Episode("UC1", id)
 		if wantKept != (ep.Status == library.StatusDownloaded) {
 			t.Errorf("%s status %s", id, ep.Status)
+		}
+		if _, err := os.Stat(filepath.Join(dir, id+".jpg")); err != nil {
+			t.Errorf("%s: thumbnail must survive cleanup: %v", id, err)
+		}
+		if ep.ThumbFile != id+".jpg" {
+			t.Errorf("%s: thumb_file lost: %+v", id, ep)
 		}
 	}
 	// Next pull must not resurrect cleaned episodes.

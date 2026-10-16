@@ -135,7 +135,10 @@ func Build(baseURL string, f Feed, eps []library.Episode, now time.Time) ([]byte
 		if ep.DurationSec > 0 {
 			it.Duration = clock(ep.DurationSec)
 		}
-		if ep.Thumbnail != "" {
+		switch {
+		case ep.ThumbFile != "":
+			it.Image = &itunesImg{Href: MediaURL(baseURL, f.ID, ep.ThumbFile)}
+		case ep.Thumbnail != "":
 			it.Image = &itunesImg{Href: ep.Thumbnail}
 		}
 		ch.Items = append(ch.Items, it)

@@ -62,8 +62,12 @@ func (f *fakeSource) Download(_ context.Context, ep source.EpisodeInfo, _ source
 	if err := os.WriteFile(filepath.Join(dest, ep.ID+".mp4"), []byte("0123456789"), 0o644); err != nil {
 		return source.DownloadResult{}, err
 	}
-	return source.DownloadResult{File: ep.ID + ".mp4", Size: 10, Episode: source.EpisodeInfo{
+	if err := os.WriteFile(filepath.Join(dest, ep.ID+".jpg"), []byte("JPEGDATA"), 0o644); err != nil {
+		return source.DownloadResult{}, err
+	}
+	return source.DownloadResult{File: ep.ID + ".mp4", Size: 10, Thumb: ep.ID + ".jpg", Episode: source.EpisodeInfo{
 		ID: ep.ID, Title: "Title " + ep.ID, Published: time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC), DurationSec: 75, URL: "https://youtu.be/" + ep.ID,
+		Description: "Line one\nLine <two>", Channel: "The Channel", ViewCount: 1234567, Height: 480,
 	}}, nil
 }
 
@@ -92,7 +96,7 @@ func newHarness(t *testing.T) *harness {
 	}
 	src := &fakeSource{}
 	for i := 0; i < 8; i++ {
-		src.eps = append(src.eps, source.EpisodeInfo{ID: fmt.Sprintf("vid%07d", i), Title: fmt.Sprintf("Video %d", i)})
+		src.eps = append(src.eps, source.EpisodeInfo{ID: fmt.Sprintf("vid%07d", i), Title: fmt.Sprintf("Video %d", i), Thumbnail: fmt.Sprintf("https://i.ytimg.com/vi/vid%07d/hq.jpg", i), ViewCount: 2500, Channel: "Remote Chan"})
 	}
 	st := status.New()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -215,6 +219,42 @@ func TestPullFeedThenBrowseEpisodesRSSAndMedia(t *testing.T) {
 	h.mustContain(h.get("/search?q=0000002"), 200, "Title vid0000002", "Episodes matching")
 	h.mustContain(h.get("/search?q=channel+one"), 200, "Channel One")
 	h.mustContain(h.get("/search?q="), 200, "Channel One")
+}
+
+func TestThumbnailsAndMetadataInUIAndMedia(t *testing.T) {
+	h := newHarness(t)
+	h.svc.PullFeed("UCone")
+	page := h.get("/feed/UCone")
+	h.mustContain(page, 200,
+		`<img class="thumb" src="/media/UCone/vid0000000.jpg"`, "1.2M views", "480p", "<summary>Details</summary>",
+		"Line one\nLine &lt;two&gt;", `href="https://youtu.be/vid0000000"`)
+	h.mustContain(h.get("/media/UCone/vid0000000.jpg"), 200, "JPEGDATA")
+	h.mustContain(h.get("/feeds/UCone.xml"), 200, `<itunes:image href="http://pod.example:8080/media/UCone/vid0000000.jpg">`)
+
+	// Thumbnails survive cleanup; the media does not.
+	h.cfg.Update(func(c *config.Config) error { c.Defaults.CleanupKeepLast = 1; return nil })
+	h.svc.Cleanup("UCone")
+	h.mustContain(h.get("/media/UCone/vid0000002.jpg"), 200, "JPEGDATA")
+	h.mustContain(h.get("/media/UCone/vid0000002.mp4"), 404)
+	cleaned := h.get("/feed/UCone").Body.String()
+	if !strings.Contains(cleaned, `src="/media/UCone/vid0000002.jpg"`) || !strings.Contains(cleaned, "removed by cleanup") {
+		t.Fatalf("cleaned row should keep its thumbnail:\n%s", cleaned)
+	}
+	// Only known thumbnails are served.
+	h.mustContain(h.get("/media/UCone/unknown.jpg"), 404)
+
+	// Load More rows show the remote thumbnail, views and channel metadata; downloading keeps the hint.
+	older := h.get("/feed/UCone/older?offset=3")
+	h.mustContain(older, 200, `src="https://i.ytimg.com/vi/vid0000003/hq.jpg"`, "2.5K views")
+	dl := h.do("POST", "/feed/UCone/episodes/vid0000003/download", url.Values{
+		"title": {"Video 3"}, "thumb": {"https://i.ytimg.com/vi/vid0000003/hq.jpg"}, "views": {"2500"}, "channel": {"Remote Chan"},
+	})
+	h.mustContain(dl, 200, `src="https://i.ytimg.com/vi/vid0000003/hq.jpg"`)
+	bad := h.do("POST", "/feed/UCone/episodes/vid0000004/download", url.Values{"title": {"Video 4"}, "thumb": {"javascript:alert(1)"}})
+	if strings.Contains(bad.Body.String(), "javascript:") {
+		t.Fatalf("non-https thumbnail hint must be ignored: %s", bad.Body.String())
+	}
+	h.waitIdle()
 }
 
 func TestLoadMoreShowsFadedRowsAndDownloadWorks(t *testing.T) {

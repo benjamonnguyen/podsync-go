@@ -35,8 +35,12 @@ type Episode struct {
 	Description  string     `json:"description,omitempty"`
 	URL          string     `json:"url,omitempty"`
 	Thumbnail    string     `json:"thumbnail,omitempty"`
+	ThumbFile    string     `json:"thumb_file,omitempty"` // local jpg next to the media
 	Published    time.Time  `json:"published"`
 	DurationSec  int        `json:"duration_sec,omitempty"`
+	Channel      string     `json:"channel,omitempty"`
+	ViewCount    int64      `json:"view_count,omitempty"`
+	Height       int        `json:"height,omitempty"`
 	IsShort      bool       `json:"is_short,omitempty"`
 	Status       Status     `json:"status"`
 	File         string     `json:"file,omitempty"`
@@ -396,6 +400,21 @@ func (l *Library) EpisodeByFile(feedID, file string) (Episode, bool) {
 	if fs, ok := l.feed[feedID]; ok {
 		for _, ep := range fs.episodes {
 			if ep.Status == StatusDownloaded && ep.File == file {
+				return *ep, true
+			}
+		}
+	}
+	return Episode{}, false
+}
+
+// EpisodeByThumb finds the episode that owns a saved thumbnail file name. The
+// thumbnail outlives the media: cleanup removes only the media file.
+func (l *Library) EpisodeByThumb(feedID, file string) (Episode, bool) {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	if fs, ok := l.feed[feedID]; ok {
+		for _, ep := range fs.episodes {
+			if ep.ThumbFile != "" && ep.ThumbFile == file {
 				return *ep, true
 			}
 		}

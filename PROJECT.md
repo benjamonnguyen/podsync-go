@@ -159,6 +159,7 @@ data_dir/
                                             # last-pull timestamp
     <episode-id>.json                      # episode metadata + download status
     <episode-id>.mp4 / .m4a                # media file (present once downloaded)
+    <episode-id>.jpg                       # thumbnail (kept after cleanup)
 ```
 
 - **`_meta.json`** is a *cache*, not configuration — display name/thumbnail

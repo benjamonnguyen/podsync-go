@@ -320,6 +320,8 @@ type ytEntry struct {
 	URL           string    `json:"url"`
 	Description   string    `json:"description"`
 	Duration      float64   `json:"duration"`
+	ViewCount     float64   `json:"view_count"`
+	Height        float64   `json:"height"`
 	LiveStatus    string    `json:"live_status"`
 	Timestamp     float64   `json:"timestamp"`
 	UploadDate    string    `json:"upload_date"`
@@ -438,6 +440,8 @@ func (y *YouTube) ListEpisodes(ctx context.Context, feed source.FeedInfo, offset
 			Published:   publishedOf(e),
 			DurationSec: int(e.Duration),
 			Description: e.Description,
+			Channel:     firstNonEmpty(e.Channel, e.Uploader),
+			ViewCount:   int64(e.ViewCount),
 			IsLive:      e.LiveStatus == "is_live" || e.LiveStatus == "is_upcoming" || e.LiveStatus == "post_live",
 			IsShort:     strings.Contains(e.URL, "/shorts/") || (e.Duration > 0 && e.Duration <= shortMaxSeconds),
 			Unavailable: e.Title == "[Private video]" || e.Title == "[Deleted video]",
@@ -574,6 +578,7 @@ func (y *YouTube) Download(ctx context.Context, ep source.EpisodeInfo, opts sour
 		return source.DownloadResult{}, err
 	}
 	args := append(y.baseArgs(), "--no-playlist", "--write-info-json", "--no-write-comments",
+		"--write-thumbnail", "--convert-thumbnails", "jpg",
 		"--retries", "3", "--fragment-retries", "3",
 		"-P", destDir, "-o", ep.ID+".%(ext)s")
 	args = append(args, formatArgs(opts)...)
@@ -599,6 +604,13 @@ func (y *YouTube) Download(ctx context.Context, ep source.EpisodeInfo, opts sour
 				meta.DurationSec = int(info.Duration)
 			}
 			meta.Thumbnail = firstNonEmpty(info.Thumbnail, meta.Thumbnail)
+			meta.Channel = firstNonEmpty(info.Channel, info.Uploader, meta.Channel)
+			if info.ViewCount > 0 {
+				meta.ViewCount = int64(info.ViewCount)
+			}
+			if !opts.Audio && info.Height > 0 {
+				meta.Height = int(info.Height)
+			}
 			meta.URL = firstNonEmpty(info.WebpageURL, "https://www.youtube.com/watch?v="+ep.ID)
 		}
 		_ = os.Remove(infoPath)
@@ -608,7 +620,12 @@ func (y *YouTube) Download(ctx context.Context, ep source.EpisodeInfo, opts sour
 	if err != nil {
 		return source.DownloadResult{}, err
 	}
-	return source.DownloadResult{File: file, Size: size, Episode: meta}, nil
+	res := source.DownloadResult{File: file, Size: size, Episode: meta}
+	// The thumbnail is a nice-to-have: a missing or unconvertible one must not fail the episode.
+	if st, err := os.Stat(filepath.Join(destDir, ep.ID+".jpg")); err == nil && !st.IsDir() && st.Size() > 0 {
+		res.Thumb = ep.ID + ".jpg"
+	}
+	return res, nil
 }
 
 func truncate(s string, n int) string {

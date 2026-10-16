@@ -45,20 +45,29 @@
 {{- else}}<p class="empty">No downloaded episodes match.</p>{{end}}
 {{end}}
 
-{{define "episode_row"}}<div class="row{{if ne .State "downloaded"}} faded{{end}}" id="ep-{{.ID}}"{{if or (eq .State "queued") (eq .State "downloading")}} hx-get="/feed/{{.FeedID}}/episodes/{{.ID}}/row?title={{.Title}}&amp;duration={{.DurationSec}}" hx-trigger="every 2s" hx-swap="outerHTML"{{end}}>
-  <input type="hidden" name="title" value="{{.Title}}"><input type="hidden" name="duration" value="{{.DurationSec}}">
+{{define "episode_row"}}<div class="row{{if ne .State "downloaded"}} faded{{end}}" id="ep-{{.ID}}"{{if or (eq .State "queued") (eq .State "downloading")}} hx-get="/feed/{{.FeedID}}/episodes/{{.ID}}/row?title={{.Title}}&amp;duration={{.DurationSec}}&amp;thumb={{.Thumb}}&amp;channel={{.Channel}}&amp;views={{.Views}}" hx-trigger="every 2s" hx-swap="outerHTML"{{end}}>
+  <input type="hidden" name="title" value="{{.Title}}"><input type="hidden" name="duration" value="{{.DurationSec}}"><input type="hidden" name="thumb" value="{{.Thumb}}"><input type="hidden" name="channel" value="{{.Channel}}"><input type="hidden" name="views" value="{{.Views}}">
+  {{if .Thumb}}<img class="thumb" src="{{.Thumb}}" alt="" loading="lazy" referrerpolicy="no-referrer">{{else}}<div class="thumb placeholder"></div>{{end}}
   <div class="row-main">
     {{if .ShowFeed}}<a class="feedname" href="/feed/{{.FeedID}}">{{.FeedName}}</a>{{end}}
     {{if eq .State "downloaded"}}<a class="title" href="/media/{{.FeedID}}/{{.File}}" target="_blank" rel="noopener">{{.Title}}</a>{{else}}<span class="title">{{.Title}}</span>{{end}}
     <div class="meta">
+      {{if .ShowChannel}}{{with .Channel}}<span>{{.}}</span>{{end}}{{end}}
       {{with date .Published}}<span>{{.}}</span>{{end}}
       {{with dur .DurationSec}}<span>{{.}}</span>{{end}}
-      {{if eq .State "downloaded"}}<span>{{size .Size}}</span>{{if .Manual}}<span class="tag">kept</span>{{end}}{{end}}
+      {{if .Views}}<span>{{compact .Views}} views</span>{{end}}
+      {{if eq .State "downloaded"}}{{if .Height}}<span>{{.Height}}p</span>{{end}}<span>{{size .Size}}</span>{{if .Manual}}<span class="tag">kept</span>{{end}}{{end}}
       {{if eq .State "cleaned"}}<span>removed by cleanup</span>{{end}}
       {{if eq .State "queued"}}<span>queued…</span>{{end}}
       {{if eq .State "downloading"}}<span><span class="spinner" aria-hidden="true"></span> downloading…</span>{{end}}
       {{if eq .State "failed"}}<span class="error">failed: {{.Error}}</span>{{end}}
     </div>
+    {{if and (eq .State "downloaded") (or .Description .URL)}}
+    <details class="details"><summary>Details</summary>
+      {{with .Description}}<div class="desc">{{.}}</div>{{end}}
+      {{with .URL}}<a href="{{.}}" target="_blank" rel="noopener noreferrer">Open on YouTube</a>{{end}}
+    </details>
+    {{end}}
   </div>
   <div class="row-actions">
     {{if or (eq .State "available") (eq .State "cleaned") (eq .State "failed")}}

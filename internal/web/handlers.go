@@ -36,6 +36,13 @@ type rowView struct {
 	State            string // downloaded | cleaned | failed | available | queued | downloading
 	Error            string
 	Manual           bool
+	Thumb            string // local /media/... URL when saved, else the remote thumbnail URL
+	Channel          string
+	ShowChannel      bool
+	Views            int64
+	Height           int
+	Description      string
+	URL              string
 }
 
 func (s *Server) rssURL(cfg config.Config, id string) string {
@@ -75,20 +82,39 @@ func (s *Server) cards() (cards, orphans []feedCard) {
 	return cards, orphans
 }
 
-func (s *Server) rowFor(feedID, feedName, epID, title string, dur int) rowView {
-	r := rowView{FeedID: feedID, FeedName: feedName, ID: epID, Title: title, DurationSec: dur, State: "available"}
-	if ep, ok := s.lib.Episode(feedID, epID); ok {
+// rowFor builds a row from what the caller already knows (base: listing data
+// or form values) overlaid with the library record and live download state.
+func (s *Server) rowFor(feedID, feedName string, base rowView) rowView {
+	r := base
+	r.FeedID, r.FeedName, r.State = feedID, feedName, "available"
+	if f, ok := s.cfg.Get().Feed(feedID); ok {
+		r.ShowChannel = f.Kind == config.KindPlaylist
+	}
+	if ep, ok := s.lib.Episode(feedID, base.ID); ok {
 		r.Title, r.Published, r.Size, r.File, r.Manual = ep.Title, ep.Published, ep.Size, ep.File, ep.Manual
+		r.Description, r.URL, r.Height = ep.Description, ep.URL, ep.Height
 		if ep.DurationSec > 0 {
 			r.DurationSec = ep.DurationSec
 		}
+		if ep.Channel != "" {
+			r.Channel = ep.Channel
+		}
+		if ep.ViewCount > 0 {
+			r.Views = ep.ViewCount
+		}
+		switch {
+		case ep.ThumbFile != "":
+			r.Thumb = "/media/" + feedID + "/" + ep.ThumbFile
+		case ep.Thumbnail != "":
+			r.Thumb = ep.Thumbnail
+		}
 		r.State, r.Error = string(ep.Status), ep.LastError
 	}
-	if js := s.svc.JobState(feedID, epID); js != "" {
+	if js := s.svc.JobState(feedID, base.ID); js != "" {
 		r.State = js
 	}
 	if r.Title == "" {
-		r.Title = epID
+		r.Title = base.ID
 	}
 	return r
 }
@@ -109,7 +135,7 @@ func (s *Server) episodeRows(feedID, feedName, q string) []rowView {
 		if q != "" && !matchWords(ep.Title, q) {
 			continue
 		}
-		rows = append(rows, s.rowFor(feedID, feedName, ep.ID, ep.Title, ep.DurationSec))
+		rows = append(rows, s.rowFor(feedID, feedName, rowView{ID: ep.ID, Title: ep.Title}))
 	}
 	// Episodes without a date (e.g. failed before metadata was fetched) are
 	// almost always recent, so show them first rather than burying them.
@@ -152,7 +178,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			name = h.FeedID + " (orphaned)"
 		}
-		row := s.rowFor(h.FeedID, name, h.Episode.ID, h.Episode.Title, h.Episode.DurationSec)
+		row := s.rowFor(h.FeedID, name, rowView{ID: h.Episode.ID, Title: h.Episode.Title})
 		row.ShowFeed = true
 		rows = append(rows, row)
 	}
@@ -219,9 +245,10 @@ func (s *Server) handleOlder(w http.ResponseWriter, r *http.Request) {
 	}
 	var rows []rowView
 	for _, ep := range page.Episodes {
-		row := s.rowFor(f.ID, f.Name, ep.ID, ep.Title, ep.DurationSec)
-		row.Published = ep.Published
-		rows = append(rows, row)
+		rows = append(rows, s.rowFor(f.ID, f.Name, rowView{
+			ID: ep.ID, Title: ep.Title, Published: ep.Published, DurationSec: ep.DurationSec,
+			Thumb: ep.Thumbnail, Channel: ep.Channel, Views: ep.ViewCount,
+		}))
 	}
 	s.fragment(w, "older", map[string]any{"FeedID": f.ID, "Rows": rows, "More": page.More, "NextOffset": page.NextOffset, "Empty": len(rows) == 0 && !page.More})
 }
@@ -236,13 +263,14 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid episode id", http.StatusBadRequest)
 		return
 	}
-	title := strings.TrimSpace(r.FormValue("title"))
-	dur, _ := strconv.Atoi(r.FormValue("duration"))
-	if err := s.svc.RequestDownload(f.ID, source.EpisodeInfo{ID: epID, Title: title, DurationSec: dur}); err != nil {
+	hint := hintFromRequest(r, epID)
+	if err := s.svc.RequestDownload(f.ID, source.EpisodeInfo{
+		ID: epID, Title: hint.Title, DurationSec: hint.DurationSec, Thumbnail: hint.Thumb, Channel: hint.Channel, ViewCount: hint.Views,
+	}); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	s.fragment(w, "episode_row", s.rowFor(f.ID, f.Name, epID, title, dur))
+	s.fragment(w, "episode_row", s.rowFor(f.ID, f.Name, hint))
 }
 
 func (s *Server) handleRow(w http.ResponseWriter, r *http.Request) {
@@ -250,8 +278,26 @@ func (s *Server) handleRow(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	dur, _ := strconv.Atoi(r.URL.Query().Get("duration"))
-	s.fragment(w, "episode_row", s.rowFor(f.ID, f.Name, r.PathValue("ep"), r.URL.Query().Get("title"), dur))
+	s.fragment(w, "episode_row", s.rowFor(f.ID, f.Name, hintFromRequest(r, r.PathValue("ep"))))
+}
+
+// hintFromRequest reads the listing data a row carries around in hidden
+// inputs / query parameters, so a row can be re-rendered before the library
+// knows the episode. Only a remote https thumbnail is accepted from the client.
+func hintFromRequest(r *http.Request, epID string) rowView {
+	get := func(k string) string {
+		if v := r.PostFormValue(k); v != "" {
+			return v
+		}
+		return r.URL.Query().Get(k)
+	}
+	h := rowView{ID: epID, Title: strings.TrimSpace(get("title")), Channel: strings.TrimSpace(get("channel"))}
+	h.DurationSec, _ = strconv.Atoi(get("duration"))
+	h.Views, _ = strconv.ParseInt(get("views"), 10, 64)
+	if t := get("thumb"); strings.HasPrefix(t, "https://") {
+		h.Thumb = t
+	}
+	return h
 }
 
 // ---- pulling & status ----

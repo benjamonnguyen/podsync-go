@@ -98,7 +98,7 @@ func fakeEntries(n int) []map[string]any {
 	var es []map[string]any
 	for i := 1; i <= n; i++ {
 		id := fmt.Sprintf("vid%08d", i)
-		e := map[string]any{"id": id, "title": "Episode " + strconv.Itoa(i), "url": "https://www.youtube.com/watch?v=" + id, "duration": 600}
+		e := map[string]any{"id": id, "title": "Episode " + strconv.Itoa(i), "url": "https://www.youtube.com/watch?v=" + id, "duration": 600, "channel": "Some Channel", "view_count": 1000 + i}
 		switch i {
 		case 2:
 			e["duration"] = 30
@@ -177,7 +177,10 @@ func fakeYtDlp(args []string) int {
 			ext = "m4a"
 		}
 		_ = os.WriteFile(filepath.Join(dir, id+"."+ext), []byte("media-bytes"), 0o644)
-		info, _ := json.Marshal(map[string]any{"id": id, "title": "Real Title", "description": "desc", "timestamp": 1700000000, "duration": 321, "webpage_url": "https://www.youtube.com/watch?v=" + id})
+		if os.Getenv("FAKE_NO_THUMB") != "1" {
+			_ = os.WriteFile(filepath.Join(dir, id+".jpg"), []byte("jpgbytes"), 0o644)
+		}
+		info, _ := json.Marshal(map[string]any{"id": id, "title": "Real Title", "description": "desc", "timestamp": 1700000000, "duration": 321, "webpage_url": "https://www.youtube.com/watch?v=" + id, "channel": "Chan Name", "view_count": 4321, "height": 720, "thumbnail": "https://i.ytimg.com/vi/" + id + "/maxresdefault.jpg"})
 		_ = os.WriteFile(filepath.Join(dir, id+".info.json"), info, 0o644)
 	default:
 		fmt.Fprintln(os.Stderr, "fake yt-dlp: unhandled", args)
@@ -238,6 +241,9 @@ func TestListEpisodesWindowAndFlags(t *testing.T) {
 	if !eps[1].IsShort || eps[0].IsShort {
 		t.Fatal("short detection")
 	}
+	if eps[0].Channel != "Some Channel" || eps[0].ViewCount != 1001 {
+		t.Fatalf("listing metadata: %+v", eps[0])
+	}
 	if !eps[2].IsLive || !eps[3].Unavailable {
 		t.Fatalf("live/unavailable flags: %+v %+v", eps[2], eps[3])
 	}
@@ -291,9 +297,17 @@ func TestDownloadSuccessAndFailure(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dest, "abcdEFGhij1.info.json")); err == nil {
 		t.Fatal("info json should be removed")
 	}
+	if res.Thumb != "abcdEFGhij1.jpg" || res.Episode.Channel != "Chan Name" || res.Episode.ViewCount != 4321 || res.Episode.Height != 720 || !strings.Contains(res.Episode.Thumbnail, "maxresdefault") {
+		t.Fatalf("metadata not extracted: %+v", res)
+	}
 	audio, err := y.Download(context.Background(), source.EpisodeInfo{ID: "abcdEFGhij2"}, source.DownloadOptions{Audio: true}, dest)
-	if err != nil || audio.File != "abcdEFGhij2.m4a" {
-		t.Fatalf("%v %+v", err, audio)
+	if err != nil || audio.File != "abcdEFGhij2.m4a" || audio.Episode.Height != 0 {
+		t.Fatalf("audio downloads have no video height: %v %+v", err, audio)
+	}
+	noThumb := newFake(t, "FAKE_NO_THUMB=1")
+	nt, err := noThumb.Download(context.Background(), source.EpisodeInfo{ID: "abcdEFGhij9"}, source.DownloadOptions{}, t.TempDir())
+	if err != nil || nt.Thumb != "" || nt.File == "" {
+		t.Fatalf("a missing thumbnail must not fail the download: %v %+v", err, nt)
 	}
 	if _, err := y.Download(context.Background(), source.EpisodeInfo{ID: "../../etc"}, source.DownloadOptions{}, dest); err == nil {
 		t.Fatal("bad id must be rejected")
@@ -357,8 +371,11 @@ func TestLive(t *testing.T) {
 		t.Fatalf("download: %v", err)
 	}
 	t.Logf("download: %+v", dl)
-	if dl.Episode.Title == "" || dl.Episode.Published.IsZero() || dl.Size < 10_000 {
+	if dl.Episode.Title == "" || dl.Episode.Published.IsZero() || dl.Size < 10_000 || dl.Thumb == "" || dl.Episode.Channel == "" || dl.Episode.ViewCount == 0 || dl.Episode.Height == 0 {
 		t.Fatalf("incomplete: %+v", dl)
+	}
+	if st, err := os.Stat(filepath.Join(dest, dl.Thumb)); err != nil || st.Size() < 1000 {
+		t.Fatalf("thumbnail not saved: %v", err)
 	}
 	aud, err := y.Download(ctx, source.EpisodeInfo{ID: "jNQXAC9IVRw"}, source.DownloadOptions{Audio: true}, t.TempDir())
 	if err != nil || !strings.HasSuffix(aud.File, ".m4a") {

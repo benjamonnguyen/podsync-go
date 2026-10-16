@@ -1,0 +1,30 @@
+# Development/test configuration: `go run ./cmd/podsync -config dev/config.toml` (run from the repo root).
+# Media goes to dev/data (git-ignored). Note: the web UI rewrites this file when you change settings.
+
+[server]
+listen_addr = ":8080"
+base_url = "http://localhost:8080"
+data_dir = "./dev/data"
+
+[download]
+yt_dlp_path = "yt-dlp"
+concurrency = 2
+update_interval = "30m"
+self_update = false
+cookies_file = ""
+
+[defaults]
+format = "video"
+max_resolution = 480
+exclude_shorts = true
+title_include = ""
+title_exclude = ""
+cleanup_after_days = 0
+cleanup_keep_last = 50
+page_size = 5
+
+[[feeds]]
+id = "UC9_p50tH3WmMslWRWKnM7dQ"
+source = "youtube"
+kind = "channel"
+name = "Adam Ragusea"

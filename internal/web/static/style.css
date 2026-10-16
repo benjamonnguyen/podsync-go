@@ -71,6 +71,10 @@ input[type=text], input[type=search], input[type=number], select { width: 100%; 
 .rows:empty { display: none; }
 .row.faded { opacity: .55; }
 .row.faded:hover { opacity: .9; }
+.thumb { width: 128px; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 4px; flex: none; background: var(--border); }
+.details { margin-top: .3rem; font-size: .85rem; }
+.details summary { cursor: pointer; color: var(--muted); }
+.details .desc { white-space: pre-line; overflow-wrap: anywhere; max-height: 14rem; overflow: auto; margin: .3rem 0; padding: .4rem .6rem; background: var(--bg); border-radius: 4px; }
 .row-main { min-width: 0; flex: 1; }
 .row .title { display: block; font-weight: 500; overflow-wrap: anywhere; }
 .row .feedname { font-size: .85rem; color: var(--muted); display: block; }
@@ -107,6 +111,7 @@ input[type=text], input[type=search], input[type=number], select { width: 100%; 
 
 @media (max-width: 600px) {
   .row { flex-direction: column; align-items: stretch; }
+  .thumb { width: 100%; }
   .feed-head { flex-direction: column; }
   .actions.vertical { flex-direction: row; }
 }

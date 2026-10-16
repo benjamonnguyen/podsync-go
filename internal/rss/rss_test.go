@@ -12,8 +12,8 @@ import (
 func TestBuild(t *testing.T) {
 	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	eps := []library.Episode{
-		{ID: "old", Title: "Old & <Busy>", Status: library.StatusDownloaded, File: "old.m4a", Size: 10, Published: now.AddDate(0, 0, -5), DurationSec: 3725},
-		{ID: "new", Title: "New", Status: library.StatusDownloaded, File: "new one.mp4", Size: 20, Published: now.AddDate(0, 0, -1), Thumbnail: "http://t/x.jpg"},
+		{ID: "old", Title: "Old & <Busy>", Status: library.StatusDownloaded, File: "old.m4a", Size: 10, Published: now.AddDate(0, 0, -5), DurationSec: 3725, Thumbnail: "http://t/old.jpg"},
+		{ID: "new", Title: "New", Status: library.StatusDownloaded, File: "new one.mp4", Size: 20, Published: now.AddDate(0, 0, -1), Thumbnail: "http://t/x.jpg", ThumbFile: "new.jpg"},
 		{ID: "gone", Title: "Cleaned", Status: library.StatusCleaned, Published: now},
 		{ID: "bad", Title: "Failed", Status: library.StatusFailed},
 	}
@@ -35,7 +35,7 @@ func TestBuild(t *testing.T) {
 	if items[1].Enclosure.Type != "audio/mp4" {
 		t.Fatalf("item 2: %+v", items[1])
 	}
-	for _, want := range []string{`xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd"`, `<itunes:image href="http://img/a.jpg">`, `<guid isPermaLink="false">UC1:new</guid>`, `<itunes:duration>01:02:05</itunes:duration>`, "&amp; &lt;Busy&gt;"} {
+	for _, want := range []string{`xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd"`, `<itunes:image href="http://img/a.jpg">`, `<itunes:image href="http://host:8080/media/UC1/new.jpg">`, `<itunes:image href="http://t/old.jpg">`, `<guid isPermaLink="false">UC1:new</guid>`, `<itunes:duration>01:02:05</itunes:duration>`, "&amp; &lt;Busy&gt;"} {
 		if !strings.Contains(string(out), want) {
 			t.Errorf("missing %q in:\n%s", want, out)
 		}
