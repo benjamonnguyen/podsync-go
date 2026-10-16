@@ -38,3 +38,13 @@ All of this was exercised against real YouTube (`PODSYNC_LIVE=1 go test ./intern
 - Channel avatar: largest *square* thumbnail rather than `avatar_uncropped`, because the latter is `=s0` (original size, can be multi-MB).
 - Errors from yt-dlp are reduced to its last `ERROR:` line plus a hint for the common cases (bot check → cookies, 429, "unable to extract" → update yt-dlp).
 - Search results are cached 10 min per (query, kind); after a failed search, further searches are refused for 10 s.
+
+## Puller / scheduler
+- Pull = list newest `page_size` → filter → queue unseen → wait for downloads → cleanup. Feeds are listed one after another (a few seconds each) but downloads then run in parallel up to `download.concurrency`; the cap is applied from live config, so changing it in Settings takes effect without a restart.
+- Only one pull runs at a time (scheduler tick and the Force Pull buttons share a lock). A second Force Pull while one is running gets a "busy" message instead of queuing up.
+- Failed downloads are retried on later pulls up to 3 attempts, then wait for a manual Retry (Download button). Manual requests reset the attempt counter.
+- ⚠ A permanently failed episode keeps its banner entry until you retry it, dismiss it, or restart (the banner's failure map is in memory, but the `failed` sidecar persists, so after a restart the episode still shows as failed in its feed page, just without a banner).
+- ⚠ `cleanup_after_days` is measured from the episode's **publish date**, not the download date. A channel that publishes monthly with `cleanup_after_days = 30` would be mostly emptied. Default is off; say so if you'd rather measure from download time.
+- Cleanup never touches manually downloaded episodes (`manual = true`), and keep-last counts only non-manual ones.
+- Bug found by my own test while writing this: concurrent downloads in one feed shared a staging directory, so one finishing job could delete another's in-flight file. Staging is now per-episode (`.tmp/<feed>/<episode>`); empty per-feed folders under `.tmp` are left until the next startup wipe.
+- Self-update: runs `yt-dlp -U` at startup then every 24 h when `download.self_update = true`; a failure is a warning in the banner (it will always fail for package-manager installs, which is expected and the message says so).
