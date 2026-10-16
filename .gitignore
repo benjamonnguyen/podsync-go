@@ -1,0 +1,6 @@
+/data/
+/config.toml
+/podsync-go
+/bin/
+*.test
+.DS_Store
