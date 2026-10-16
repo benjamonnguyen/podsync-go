@@ -147,3 +147,8 @@ You asked for: root package = domain types, subpackages grouped by dependency, m
 - The old all-in-one binary is gone. If you want a "single process, no REST hop" build for simple installs, it's a ~40-line `cmd/podsync` that passes `syncer.Service` directly to `webui.New` (it already takes a `podsync.Syncer`); the proxy would then point at the same process. Not built because you asked for two mains.
 - `mock` is a normal (non-`_test`) package, per the usual standard-layout convention, so syncer, rest and webui tests share one fake source instead of three copies.
 - Dockerfile now has two targets (`syncr`, `webui`); the web UI image is distroless (static binary only). Build/run status is under *Docker* below.
+
+### Docker, after the split
+- **Verified (amd64), the real deployment shape:** built both targets, ran them as two containers on a user network (syncr as uid 1000 with `/config` and `/data` mounted, web UI with only `SYNCR_URL` set), both reached `healthy` via the `-healthcheck` flag. Through the web UI's forms I added a real channel, downloaded a real video as m4a with its jpg thumbnail, and confirmed the RSS feed, the media (including a `Range` request) and the thumbnail are served through the web UI's proxy, with enclosure/image URLs pointing at the local copies, and that `/api/v1/...` is **not** reachable through the web UI port.
+- Image sizes: web UI **12 MB** (distroless static), syncr **686 MB** (unchanged: ffmpeg's dependency tree and deno dominate).
+- ⚠ arm64 runtime is still unverified (now for both images); the web UI base image (`gcr.io/distroless/static-debian12`) is multi-arch, and the Go binaries cross-compile, but nothing arm64 was executed.
