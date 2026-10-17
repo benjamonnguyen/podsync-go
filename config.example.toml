@@ -28,12 +28,9 @@ cookies_file = ""
 [defaults]
 format = "video"            # "video" (mp4) or "audio" (m4a)
 max_resolution = 720        # pixels of height; 0 = no limit
-min_duration = "60s"        # skip videos shorter than this (how YouTube Shorts are skipped); "0s" = download everything
-title_include = ""          # regex: if set, only matching titles are downloaded
-title_exclude = ""          # regex: matching titles are skipped, e.g. "(?i)sponsored|#shorts"
+min_duration = "61s"        # skip videos shorter than this: 61s skips YouTube Shorts (60s or less); "0s" = download everything
 page_size = 10              # only the newest N episodes of a feed are considered per update
 cleanup_keep_last = 50      # keep the newest N downloaded episodes; 0 = keep all
-cleanup_after_days = 0      # delete episodes published more than N days ago; 0 = never
 
 # One [[feeds]] block per channel or playlist. Easiest is to add them from the web UI.
 [[feeds]]
@@ -44,3 +41,6 @@ name = "Linus Tech Tips"
 # Optional per-feed overrides of any [defaults] key:
 format = "audio"
 page_size = 5
+# Title filters exist per feed only (there are no global patterns). Go regular expressions, empty = off:
+title_exclude = "(?i)sponsored|#shorts"   # matching titles are skipped
+# title_include = "(?i)review"             # if set, only matching titles are downloaded

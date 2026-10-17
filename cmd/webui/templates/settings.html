@@ -28,12 +28,9 @@
         <option value="audio"{{if eq .Cfg.Defaults.Format "audio"}} selected{{end}}>Audio only (m4a)</option>
       </select></label>
     <label>Maximum resolution (pixels of height, 0 = no limit) <input type="number" name="max_resolution" min="0" value="{{.Cfg.Defaults.MaxResolution}}" required></label>
-    <label>Skip videos shorter than <input type="text" name="min_duration" value="{{secs .Cfg.Defaults.MinDuration}}" required><small>For example 60s or 2m; 0 downloads everything. This is how YouTube Shorts are skipped.</small></label>
-    <label>Only download titles matching (regex) <input type="text" name="title_include" value="{{.Cfg.Defaults.TitleInclude}}" placeholder="empty = all titles"></label>
-    <label>Skip titles matching (regex) <input type="text" name="title_exclude" value="{{.Cfg.Defaults.TitleExclude}}" placeholder="empty = skip none"></label>
+    <label>Skip videos shorter than <input type="text" name="min_duration" value="{{secs .Cfg.Defaults.MinDuration}}" required><small>For example 61s or 2m; 0 downloads everything. The default of 61s is how YouTube Shorts (60 seconds or less) are skipped.</small></label>
     <label>Episodes checked per update <input type="number" name="page_size" min="1" max="500" value="{{.Cfg.Defaults.PageSize}}" required><small>Only the newest this-many episodes of a feed are considered on each update.</small></label>
     <label>Keep only the newest N downloaded episodes (0 = keep all) <input type="number" name="cleanup_keep_last" min="0" value="{{.Cfg.Defaults.CleanupKeepLast}}" required></label>
-    <label>Delete episodes published more than N days ago (0 = never) <input type="number" name="cleanup_after_days" min="0" value="{{.Cfg.Defaults.CleanupAfterDays}}" required></label>
   </fieldset>
   <div class="actions"><button class="btn primary" type="submit">Save and apply</button></div>
 </form>

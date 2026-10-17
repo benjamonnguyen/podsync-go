@@ -25,7 +25,7 @@ cleanup_keep_last = 3
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Defaults.PageSize != 7 || cfg.Defaults.CleanupKeepLast != 50 || cfg.Defaults.MinDuration.Std() != time.Minute {
+	if cfg.Defaults.PageSize != 7 || cfg.Defaults.CleanupKeepLast != 50 || cfg.Defaults.MinDuration.Std() != 61*time.Second {
 		t.Fatalf("defaults not layered correctly: %+v", cfg.Defaults)
 	}
 	f := cfg.Feeds[0]
@@ -43,7 +43,11 @@ func TestParseRejectsUnknownKeysAndBadValues(t *testing.T) {
 		"unknown key":    "[defaults]\ntitle_filter = \"x\"\n",
 		"old shorts key": "[defaults]\nexclude_shorts = true\n",
 		"neg min dur":    "[defaults]\nmin_duration = \"-5s\"\n",
-		"bad regex":      "[defaults]\ntitle_include = \"(\"\n",
+		"global include": "[defaults]\ntitle_include = \"x\"\n",
+		"global exclude": "[defaults]\ntitle_exclude = \"x\"\n",
+		"old age key":    "[defaults]\ncleanup_after_days = 30\n",
+		"old feed age":   "[[feeds]]\nid=\"a\"\ncleanup_after_days = 30\n",
+		"bad regex":      "[[feeds]]\nid=\"a\"\ntitle_include = \"(\"\n",
 		"bad format":     "[defaults]\nformat = \"gif\"\n",
 		"dup feed":       "[[feeds]]\nid=\"a\"\n[[feeds]]\nid=\"a\"\n",
 		"unsafe id":      "[[feeds]]\nid=\"../x\"\n",
@@ -79,7 +83,7 @@ func TestMinDurationParsesAndRoundTrips(t *testing.T) {
 		t.Fatalf("round trip lost the override (an explicit zero must survive): %v\n%s", err, data)
 	}
 	def, _ := Parse([]byte(""))
-	if def.Defaults.MinDuration.Std() != time.Minute || def.Defaults.MaxResolution != 720 {
+	if def.Defaults.MinDuration.Std() != 61*time.Second || def.Defaults.MaxResolution != 720 {
 		t.Fatalf("defaults: %+v", def.Defaults)
 	}
 }
@@ -88,7 +92,7 @@ func TestRoundTripOmitsNilOverrides(t *testing.T) {
 	cfg := podsync.Default()
 	cfg.Feeds = []podsync.Feed{
 		{ID: "UC1", Name: "One", Kind: "channel", Source: "youtube"},
-		{ID: "UC2", Name: "Two", Kind: "playlist", Source: "youtube", Format: ptr("audio"), PageSize: ptr(25), TitleExclude: ptr("(?i)live")},
+		{ID: "UC2", Name: "Two", Kind: "playlist", Source: "youtube", Format: ptr("audio"), PageSize: ptr(25), TitleExclude: "(?i)live"},
 	}
 	data, err := Marshal(cfg)
 	if err != nil {
@@ -105,8 +109,14 @@ func TestRoundTripOmitsNilOverrides(t *testing.T) {
 	if back.Download.UpdateInterval.Std() != 30*time.Minute {
 		t.Fatalf("duration round trip: %v", back.Download.UpdateInterval)
 	}
-	if got := back.Feeds[1].Effective(back.Defaults); got.Format != "audio" || got.PageSize != 25 || got.TitleExclude != "(?i)live" {
+	if got := back.Feeds[1].Effective(back.Defaults); got.Format != "audio" || got.PageSize != 25 {
 		t.Fatalf("overrides lost: %+v", got)
+	}
+	if back.Feeds[1].TitleExclude != "(?i)live" || back.Feeds[0].TitleExclude != "" || strings.Count(text, "title_exclude") != 1 {
+		t.Fatalf("a feed's title pattern must round-trip and appear only on that feed:\n%s", text)
+	}
+	if strings.Contains(strings.SplitN(text, "[[feeds]]", 2)[0], "title_") {
+		t.Fatalf("[defaults] has no title patterns:\n%s", text)
 	}
 	if back.Feeds[0].HasOverrides() {
 		t.Fatal("feed 0 should have no overrides")

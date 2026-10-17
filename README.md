@@ -8,7 +8,7 @@ It is inspired by [mxpv/podsync](https://github.com/mxpv/podsync); the big diffe
 
 - Web UI: library by channel/playlist, search, "check now", delete feeds, settings, load older episodes on demand
 - Add feeds with one box: paste a channel or playlist link, type an `@handle`, or search YouTube channels by name
-- Per-feed options: audio or video, max resolution (default 720p), minimum video length (skips Shorts), title include/exclude regex, automatic cleanup
+- Per-feed options: audio or video, max resolution (default 720p), minimum video length (skips Shorts), title include/exclude regex, keep-newest-N cleanup
 - A status banner that tells you when yt-dlp, YouTube or a download is misbehaving
 - Two small programs: **syncr** (the sync service: fetches and stores episodes with yt-dlp, and **publishes the podcast feeds and media**) and **webui** (the library management interface, for your own use). They share the config file and the data directory; syncr also has a tiny private control API for the few things that need the running service. Multi-arch (amd64 + arm64) Docker images for both
 - Plain-file storage: no database, just media files with small JSON files next to them, and one `config.toml`
@@ -63,11 +63,11 @@ Playlists are not searched for by name: paste the playlist's link. You get a pre
 
 - **Load more** (at the bottom) looks further back in the channel and lists older episodes that were not downloaded. They appear faded. Click **Download** on any of them to fetch it. Episodes you download this way are marked *kept* and are never removed by automatic cleanup.
 - Episodes removed by cleanup, or that failed to download, also appear faded with **Download again** / **Retry**.
-- **Check now** updates just this feed. **Feed settings** overrides the defaults for this feed. **Delete** removes it.
+- **Check now** updates just this feed. **Feed settings** overrides the defaults for this feed and is the only place for its title include/exclude patterns. **Delete** removes it.
 
 **Deleting a feed** removes it from your configuration (its podcast URL stops working). Downloaded files are kept unless you tick the box; kept folders show up under *Not in config* on the library page with a button to delete them.
 
-**Settings**: simultaneous downloads, how often to check, whether to keep yt-dlp up to date, and the defaults for every feed (format, maximum resolution, minimum video length, title filters, page size, cleanup). **Save and apply** validates the values and applies them immediately. The things that belong to whoever runs the service (the public address, the listen and API addresses, the data directory, the yt-dlp path and the cookies file) are shown there but are only changed in `config.toml`.
+**Settings**: simultaneous downloads, how often to check, whether to keep yt-dlp up to date, and the defaults for every feed (format, maximum resolution, minimum video length, page size, how many episodes to keep). **Save and apply** validates the values and applies them immediately. The things that belong to whoever runs the service (the public address, the listen and API addresses, the data directory, the yt-dlp path and the cookies file) are shown there but are only changed in `config.toml`.
 
 **Status banner**: yt-dlp talks to YouTube, which changes things often and sometimes blocks requests. When something goes wrong (yt-dlp missing, a feed can't be listed, a download fails, search fails, self-update fails) a banner explains it on every page. It clears itself when the problem goes away, and you can dismiss it. While work is running the banner also shows progress.
 
@@ -75,9 +75,9 @@ Playlists are not searched for by name: paste the playlist's link. You get a pre
 
 - A few seconds after start, and then every **Check feeds every** interval (default 30 minutes), each feed is checked.
 - Only the **newest `page_size` episodes** of a feed are considered per check (default 10). Adding a feed therefore downloads at most that many, not the whole back catalogue. Use *Load more* for older ones. If a feed publishes more than `page_size` videos between checks, raise its `page_size`.
-- An episode is downloaded if it is new and passes the feed's filters: videos shorter than `min_duration` (default 60 seconds, which is how YouTube Shorts are skipped) are skipped, `title_include` (if set) must match, and `title_exclude` must not match. Live streams and not-yet-premiered videos are skipped until they are normal videos.
+- An episode is downloaded if it is new and passes the feed's filters: videos shorter than `min_duration` (default 61 seconds, so YouTube Shorts of 60 seconds or less are skipped) are skipped, the feed's `title_include` (if set) must match, and its `title_exclude` must not match. Live streams and not-yet-premiered videos are skipped until they are normal videos.
 - Failed downloads are retried on the next checks, up to 3 attempts, then wait for you to press **Retry**.
-- **Cleanup** runs after each update. `cleanup_keep_last` keeps only the newest N downloaded episodes of a feed; `cleanup_after_days` also removes episodes published more than N days ago. Only the media file is removed: the episode is remembered as "removed by cleanup", so it will not be downloaded again. Episodes you downloaded manually are never cleaned up.
+- **Cleanup** runs after each update. `cleanup_keep_last` keeps only the newest N downloaded episodes of a feed (`0` keeps everything; there is no age-based cleanup). Only the media file is removed: the episode is remembered as "removed by cleanup", so it will not be downloaded again. Episodes you downloaded manually are never cleaned up.
 - Video downloads are mp4 (up to `max_resolution`); audio-only downloads are m4a.
 - Each episode's thumbnail is saved next to it as a jpg (served by the app and used as the episode image in the podcast feed), together with its title, description, publish date, duration, channel, view count and resolution. Cleanup removes only the media; the thumbnail and details are kept.
 
@@ -100,13 +100,12 @@ The web UI rewrites this file when you save changes, so hand-written comments ar
 | `download.cookies_file` | empty | Netscape-format cookies.txt for YouTube sign-in checks |
 | `defaults.format` | `video` | `video` or `audio` |
 | `defaults.max_resolution` | `720` | Max video height in pixels; `0` = no limit |
-| `defaults.min_duration` | `"60s"` | Skip videos shorter than this; this is how Shorts are skipped. `"0s"` downloads everything. Videos whose length is unknown are never skipped |
-| `defaults.title_include` | empty | Regex; if set, only matching titles are downloaded |
-| `defaults.title_exclude` | empty | Regex; matching titles are skipped |
+| `defaults.min_duration` | `"61s"` | Skip videos shorter than this; the default skips YouTube Shorts (60 seconds or less). `"0s"` downloads everything. Videos whose length is unknown are never skipped |
 | `defaults.page_size` | `10` | Newest N episodes considered per update |
 | `defaults.cleanup_keep_last` | `50` | Keep newest N downloaded episodes; `0` = all |
-| `defaults.cleanup_after_days` | `0` | Remove episodes published more than N days ago; `0` = never |
 | `[[feeds]]` | | One block per feed: `id`, `kind` (`channel` or `playlist`), `name`, plus optional overrides of any `defaults` key |
+| `feeds.title_include` | empty | Per feed only: regex; if set, only matching titles are downloaded |
+| `feeds.title_exclude` | empty | Per feed only: regex; matching titles are skipped, e.g. `(?i)sponsored\|#shorts` |
 
 ### The two programs
 
@@ -124,7 +123,7 @@ syncr listens on two addresses: `server.listen_addr` (default `:8080`) for the p
 
 Both programs must see the same config file and the same data directory. If `data_dir` is a relative path (like the default `./data`) they resolve it from their own working directory, so start them from the same directory or use an absolute path. The settings page does not edit the addresses, `server.base_url`, `server.data_dir`, `download.yt_dlp_path` or `download.cookies_file`: change those in the file and restart both programs. (`download.yt_dlp_path` and `download.cookies_file` are only used by syncr.)
 
-Regular expressions use Go's [RE2 syntax](https://pkg.go.dev/regexp/syntax); prefix with `(?i)` for case-insensitive matching.
+Title filters exist on individual feeds only; there are no global patterns. Regular expressions use Go's [RE2 syntax](https://pkg.go.dev/regexp/syntax); prefix with `(?i)` for case-insensitive matching.
 
 `config.toml` is all you need to recreate your list of feeds on a new machine: start with an empty data directory and the feeds are fetched again.
 

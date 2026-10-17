@@ -14,12 +14,11 @@
         <option value="audio"{{if eq .F.Format "audio"}} selected{{end}}>Audio only (m4a)</option>
       </select></label>
     <label>Maximum resolution (0 = no limit) <input type="number" name="max_resolution" min="0" value="{{.F.MaxResolution}}" placeholder="{{.F.Defaults.MaxResolution}}"></label>
-    <label>Skip videos shorter than <input type="text" name="min_duration" value="{{.F.MinDuration}}" placeholder="{{secs .F.Defaults.MinDuration}}"><small>For example 60s or 2m; 0 downloads everything.</small></label>
-    <label>Only download titles matching (regex) <input type="text" name="title_include" value="{{.F.TitleInclude}}" placeholder="{{.F.Defaults.TitleInclude}}"></label>
-    <label>Skip titles matching (regex) <input type="text" name="title_exclude" value="{{.F.TitleExclude}}" placeholder="{{.F.Defaults.TitleExclude}}"></label>
+    <label>Skip videos shorter than <input type="text" name="min_duration" value="{{.F.MinDuration}}" placeholder="{{secs .F.Defaults.MinDuration}}"><small>For example 61s or 2m; 0 downloads everything.</small></label>
+    <label>Only download titles matching (regex) <input type="text" name="title_include" value="{{.F.TitleInclude}}" placeholder="empty = all titles"></label>
+    <label>Skip titles matching (regex) <input type="text" name="title_exclude" value="{{.F.TitleExclude}}" placeholder="empty = skip none"><small>Case-insensitive example: <code>(?i)sponsored|#shorts</code>. These patterns belong to this feed only.</small></label>
     <label>Episodes checked per update <input type="number" name="page_size" min="1" max="500" value="{{.F.PageSize}}" placeholder="{{.F.Defaults.PageSize}}"></label>
     <label>Keep only the newest N downloaded episodes (0 = keep all) <input type="number" name="cleanup_keep_last" min="0" value="{{.F.CleanupKeepLast}}" placeholder="{{.F.Defaults.CleanupKeepLast}}"></label>
-    <label>Delete episodes published more than N days ago (0 = never) <input type="number" name="cleanup_after_days" min="0" value="{{.F.CleanupAfterDays}}" placeholder="{{.F.Defaults.CleanupAfterDays}}"></label>
   </fieldset>
   <div class="actions"><button class="btn primary" type="submit">Save</button></div>
 </form>

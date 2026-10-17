@@ -388,20 +388,20 @@ func TestAddFlow(t *testing.T) {
 
 func TestSettingsSaveValidationAndApply(t *testing.T) {
 	h := newHarness(t)
-	h.mustContain(h.get("/settings"), 200, `name="update_interval" value="30m"`, `name="min_duration" value="60s"`, `name="max_resolution" min="0" value="720"`)
+	h.mustContain(h.get("/settings"), 200, `name="update_interval" value="30m"`, `name="min_duration" value="61s"`, `name="max_resolution" min="0" value="720"`)
 
 	form := func() url.Values {
 		return url.Values{
 			"concurrency": {"3"}, "update_interval": {"15m"},
-			"format": {"audio"}, "max_resolution": {"480"}, "min_duration": {"90s"}, "title_include": {""}, "title_exclude": {"(?i)sponsor"},
-			"page_size": {"4"}, "cleanup_keep_last": {"20"}, "cleanup_after_days": {"0"},
+			"format": {"audio"}, "max_resolution": {"480"}, "min_duration": {"90s"},
+			"page_size": {"4"}, "cleanup_keep_last": {"20"},
 		}
 	}
 	rec := h.do("POST", "/settings", form())
 	h.mustContain(rec, 200, "Saved. Changes are applied.")
 	got := h.cfg.Get()
 	if got.Download.Concurrency != 3 || got.Download.UpdateInterval.Std() != 15*time.Minute || got.Defaults.Format != "audio" || got.Defaults.PageSize != 4 ||
-		got.Defaults.MaxResolution != 480 || got.Defaults.MinDuration.Std() != 90*time.Second || got.Download.SelfUpdate {
+		got.Defaults.CleanupKeepLast != 20 || got.Defaults.MaxResolution != 480 || got.Defaults.MinDuration.Std() != 90*time.Second || got.Download.SelfUpdate {
 		t.Fatalf("not applied: %+v %+v", got.Download, got.Defaults)
 	}
 	h.mustContain(h.get("/settings"), 200, `name="min_duration" value="90s"`)
@@ -420,13 +420,12 @@ func TestSettingsSaveValidationAndApply(t *testing.T) {
 	}
 
 	f = form()
-	f.Set("title_exclude", "(")
 	f.Set("page_size", "0")
 	f.Set("update_interval", "soon")
 	f.Set("min_duration", "short")
 	rec = h.do("POST", "/settings", f)
-	h.mustContain(rec, 200, "Not saved", "title_exclude", "page_size", "update_interval", "min_duration", `name="title_exclude" value="("`)
-	if h.cfg.Get().Defaults.TitleExclude != "(?i)sponsor" {
+	h.mustContain(rec, 200, "Not saved", "page_size", "update_interval", "min_duration", `name="page_size" min="1" max="500" value="0"`)
+	if h.cfg.Get().Defaults.PageSize != 4 {
 		t.Fatal("invalid save must not change config")
 	}
 	f = form()
@@ -434,7 +433,7 @@ func TestSettingsSaveValidationAndApply(t *testing.T) {
 	h.mustContain(h.do("POST", "/settings", f), 200, "Not saved", "min_duration is required")
 
 	// The sync service picked the new values up through Apply.
-	if sc := h.syncrCfg.Get(); sc.Download.Concurrency != 3 || sc.Defaults.PageSize != 4 || sc.Defaults.TitleExclude != "(?i)sponsor" {
+	if sc := h.syncrCfg.Get(); sc.Download.Concurrency != 3 || sc.Defaults.PageSize != 4 {
 		t.Fatalf("the sync service must have applied the web UI's settings: %+v", sc.Download)
 	}
 }
@@ -444,7 +443,7 @@ func TestSettingsPageDoesNotEditOperatorSettings(t *testing.T) {
 	h := newHarness(t)
 	h.cfg.Update(func(c *podsync.Config) error { c.Download.CookiesFile = "/config/cookies.txt"; return nil })
 	page := h.get("/settings").Body.String()
-	for _, field := range []string{"base_url", "yt_dlp_path", "cookies_file", "listen_addr", "api_addr", "data_dir"} {
+	for _, field := range []string{"base_url", "yt_dlp_path", "cookies_file", "listen_addr", "api_addr", "data_dir", "title_include", "title_exclude", "cleanup_after_days"} {
 		if strings.Contains(page, `name="`+field+`"`) {
 			t.Errorf("%s must not be an editable field", field)
 		}
@@ -459,10 +458,13 @@ func TestSettingsPageDoesNotEditOperatorSettings(t *testing.T) {
 	forged := url.Values{
 		"base_url": {"http://evil.example"}, "yt_dlp_path": {"/bin/sh"}, "cookies_file": {"/etc/passwd"},
 		"listen_addr": {":1"}, "api_addr": {":2"}, "data_dir": {"/tmp/elsewhere"},
-		"concurrency": {"2"}, "update_interval": {"30m"}, "format": {"video"}, "max_resolution": {"720"}, "min_duration": {"60s"},
-		"page_size": {"3"}, "cleanup_keep_last": {"0"}, "cleanup_after_days": {"0"},
+		"concurrency": {"2"}, "update_interval": {"30m"}, "format": {"video"}, "max_resolution": {"720"}, "min_duration": {"61s"},
+		"page_size": {"3"}, "cleanup_keep_last": {"0"}, "cleanup_after_days": {"30"}, "title_include": {"x"}, "title_exclude": {"y"},
 	}
 	h.mustContain(h.do("POST", "/settings", forged), 200, "Saved")
+	if raw, _ := os.ReadFile(h.cfgPath); strings.Contains(string(raw), "cleanup_after_days") || strings.Contains(string(raw), "title_") {
+		t.Fatalf("there are no global patterns or age-based cleanup; a forged post must not create them:\n%s", raw)
+	}
 	after := h.cfg.Get()
 	if after.Server != before.Server || after.Download.YtDlpPath != before.Download.YtDlpPath || after.Download.CookiesFile != before.Download.CookiesFile {
 		t.Fatalf("a forged post changed operator settings: %+v -> %+v", before.Server, after.Server)
@@ -479,7 +481,7 @@ func TestSettingsSavedEvenWhenSyncServiceIsDown(t *testing.T) {
 	h = &harness{t: t, h: ui.Handler(), cfg: h.cfg, lib: h.lib}
 	rec := h.do("POST", "/settings", url.Values{
 		"concurrency": {"5"}, "update_interval": {"30m"},
-		"format": {"video"}, "max_resolution": {"720"}, "min_duration": {"60s"}, "page_size": {"3"}, "cleanup_keep_last": {"0"}, "cleanup_after_days": {"0"},
+		"format": {"video"}, "max_resolution": {"720"}, "min_duration": {"60s"}, "page_size": {"3"}, "cleanup_keep_last": {"0"},
 	})
 	h.mustContain(rec, 200, "Saved, but the sync service could not be reached")
 	if h.cfg.Get().Download.Concurrency != 5 {
@@ -489,20 +491,36 @@ func TestSettingsSavedEvenWhenSyncServiceIsDown(t *testing.T) {
 
 func TestFeedSettingsOverridesAndInherit(t *testing.T) {
 	h := newHarness(t)
-	h.mustContain(h.get("/feed/UCone/settings"), 200, "Default (video)", `placeholder="3"`, `name="min_duration" value="" placeholder="60s"`)
-	form := url.Values{"name": {"Renamed"}, "format": {"audio"}, "max_resolution": {""}, "min_duration": {"0"}, "title_include": {""}, "title_exclude": {"live"},
-		"page_size": {"7"}, "cleanup_keep_last": {""}, "cleanup_after_days": {"30"}}
-	h.mustContain(h.do("POST", "/feed/UCone/settings", form), 200, "Saved", `name="min_duration" value="0s"`)
+	page := h.get("/feed/UCone/settings")
+	h.mustContain(page, 200, "Default (video)", `placeholder="3"`, `name="min_duration" value="" placeholder="61s"`, `name="title_include"`, `name="title_exclude"`)
+	if strings.Contains(page.Body.String(), "cleanup_after_days") {
+		t.Fatal("age-based cleanup no longer exists")
+	}
+	form := url.Values{"name": {"Renamed"}, "format": {"audio"}, "max_resolution": {""}, "min_duration": {"0"}, "title_include": {" review "}, "title_exclude": {"(?i)live"},
+		"page_size": {"7"}, "cleanup_keep_last": {""}}
+	h.mustContain(h.do("POST", "/feed/UCone/settings", form), 200, "Saved", `name="min_duration" value="0s"`, `name="title_exclude" value="(?i)live"`)
 	f, _ := h.cfg.Get().Feed("UCone")
 	eff := f.Effective(h.cfg.Get().Defaults)
-	if f.Name != "Renamed" || eff.Format != "audio" || f.MinDuration == nil || eff.MinDuration != 0 || eff.PageSize != 7 || eff.CleanupAfterDays != 30 || eff.MaxResolution != 720 || f.MaxResolution != nil {
+	if f.Name != "Renamed" || eff.Format != "audio" || f.MinDuration == nil || eff.MinDuration != 0 || eff.PageSize != 7 || eff.MaxResolution != 720 || f.MaxResolution != nil ||
+		f.TitleInclude != "review" || f.TitleExclude != "(?i)live" {
 		t.Fatalf("%+v / %+v", f, eff)
 	}
-	// Blank inherits the default again; bare numbers are seconds.
+	// The patterns are the feed's own: they live on the feed entry in the file, never in [defaults].
+	raw, _ := os.ReadFile(h.cfgPath)
+	if before, _, _ := strings.Cut(string(raw), "[[feeds]]"); strings.Contains(before, "title_") || !strings.Contains(string(raw), `title_exclude = "(?i)live"`) {
+		t.Fatalf("title patterns must be written on the feed only:\n%s", raw)
+	}
+	// The sync service applies them.
+	if sf, _ := h.syncrCfg.Get().Feed("UCone"); sf.TitleExclude != "(?i)live" {
+		t.Fatalf("syncr must have applied the feed's patterns: %+v", sf)
+	}
+	// Blank patterns clear them; blank min_duration inherits again; bare numbers are seconds.
 	form.Set("min_duration", "")
+	form.Set("title_include", "")
+	form.Set("title_exclude", "")
 	h.mustContain(h.do("POST", "/feed/UCone/settings", form), 200, "Saved")
-	if f, _ := h.cfg.Get().Feed("UCone"); f.MinDuration != nil {
-		t.Fatalf("blank must inherit: %+v", f.MinDuration)
+	if f, _ := h.cfg.Get().Feed("UCone"); f.MinDuration != nil || f.TitleInclude != "" || f.TitleExclude != "" {
+		t.Fatalf("blank must inherit/clear: %+v", f)
 	}
 	form.Set("min_duration", "45")
 	h.mustContain(h.do("POST", "/feed/UCone/settings", form), 200, "Saved")
@@ -512,7 +530,7 @@ func TestFeedSettingsOverridesAndInherit(t *testing.T) {
 	form.Set("min_duration", "x")
 	h.mustContain(h.do("POST", "/feed/UCone/settings", form), 200, "Not saved", "min_duration")
 	bad := url.Values{"name": {"X"}, "title_include": {"("}}
-	h.mustContain(h.do("POST", "/feed/UCone/settings", bad), 200, "Not saved", "regular expression")
+	h.mustContain(h.do("POST", "/feed/UCone/settings", bad), 200, "Not saved", "title_include", "regular expression")
 	h.mustContain(h.get("/feed/UCnone/settings"), 404)
 }
 

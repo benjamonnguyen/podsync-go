@@ -159,7 +159,7 @@ stay thin.
   to `ListEpisodes`, so each call only touches the requested window; full
   metadata fetch happens lazily per-episode when first downloaded (upload
   date, description, resolution). The flat listing already carries `duration`.
-- Shorts have no special handling: the `min_duration` filter (default 60s)
+- Shorts have no special handling: the `min_duration` filter (default 61s)
   skips anything shorter, using the listing's duration.
 - Resolution cap enforced via yt-dlp format selector
   (e.g. `bestvideo[height<=?720]+bestaudio/best[height<=?720]`); audio-only
@@ -275,10 +275,7 @@ cookies_file = ""            # optional Netscape cookies.txt passed to yt-dlp
 [defaults]                    # template applied to newly-added feeds
 format = "video"              # "video" | "audio"
 max_resolution = 720
-min_duration = "60s"          # skip videos shorter than this (how Shorts are skipped); "0s" = none
-title_include = ""            # regex; only matching titles are downloaded (empty = all)
-title_exclude = ""            # regex; matching titles are skipped (empty = none)
-cleanup_after_days = 0         # 0 = disabled
+min_duration = "61s"          # skip videos shorter than this: 61s skips Shorts (60s or less); "0s" = none
 cleanup_keep_last = 50        # 0 = unlimited, else keep N newest
 page_size = 10                # newest N episodes considered per update — see §6.3
 
@@ -289,8 +286,7 @@ name = "Some Channel"
 format = "audio"              # overrides [defaults]
 max_resolution = 480
 min_duration = "0s"
-title_exclude = "(?i)#shorts|\\bcompilation\\b"
-cleanup_after_days = 60
+title_exclude = "(?i)#shorts|\\bcompilation\\b"   # title filters are per feed only (no global patterns)
 cleanup_keep_last = 20
 page_size = 25
 ```
@@ -303,18 +299,17 @@ inherit the default.
 ### 6.1 Per-feed / global filters
 - Audio vs video output mode.
 - Max resolution cap (video mode).
-- Minimum duration (`min_duration`, default 60s): videos shorter than this are skipped, which is how YouTube Shorts are excluded; `0s` disables it, and videos of unknown length are never skipped.
-- Title filters: two Go `regexp` patterns. `title_include` — if set, only
-  titles that match are downloaded. `title_exclude` — titles that match are
-  skipped. Both apply (include first, then exclude). Patterns are validated
-  on save.
-- Cleanup policy: delete local media older than N days and/or beyond the N
-  most recent per feed (global default `cleanup_keep_last = 50`, overridable
-  per feed); RSS/episode metadata rows can persist or be removed based on a
-  setting (keep history vs. fully forget). Episodes downloaded manually via
-  Load More (`manual = true` in the sidecar) are exempt from both rules —
-  otherwise an old episode the user explicitly asked for would be deleted on
-  the next cycle for being outside the newest-N window.
+- Minimum duration (`min_duration`, default 61s): videos shorter than this are skipped, which is how YouTube Shorts are excluded; `0s` disables it, and videos of unknown length are never skipped.
+- Title filters, per feed only (there are no global patterns): two Go `regexp`
+  patterns on the `[[feeds]]` entry. `title_include` — if set, only titles that match
+  are downloaded. `title_exclude` — titles that match are skipped. Both apply (include
+  first, then exclude). Patterns are validated on save.
+- Cleanup policy: keep only the newest N downloaded episodes per feed (global default
+  `cleanup_keep_last = 50`, overridable per feed, `0` = keep everything). Only the media
+  file is removed; the episode record stays as "cleaned" so it is not downloaded again.
+  There is no age-based rule. Episodes downloaded manually via Load More (`manual = true`
+  in the sidecar) are exempt: otherwise an old episode the user explicitly asked for
+  would be deleted on the next cycle for being outside the newest-N window.
 
 ### 6.2 RSS feeds
 - One RSS document per feed at a stable URL (e.g. `/feeds/{feed_id}.xml`),

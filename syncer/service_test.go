@@ -95,15 +95,15 @@ func TestPullDownloadsNewestPageAndIsIdempotent(t *testing.T) {
 
 func TestFiltersAndSkippedEntries(t *testing.T) {
 	eps := mock.Episodes(7)
-	eps[0].DurationSec = 30 // under the default minimum duration
+	eps[0].DurationSec = 60 // exactly 60s is a Short: the default minimum is 61s
 	eps[1].IsLive = true
 	eps[2].Unavailable = true
 	eps[3].Title = "Sponsored: thing"
 	eps[4].Title = "Keep me"
 	e := setup(t, eps, func(c *podsync.Config) {
 		c.Defaults.PageSize = 7
-		c.Defaults.TitleExclude = "^Sponsored"
-		c.Defaults.TitleInclude = "(?i)keep|episode"
+		c.Feeds[0].TitleExclude = "^Sponsored"
+		c.Feeds[0].TitleInclude = "(?i)keep|episode"
 	})
 	e.svc.PullFeed("UC1")
 	var got []string
@@ -216,17 +216,6 @@ func TestCleanupKeepLastTombstonesAndManualExempt(t *testing.T) {
 	if ep, _ := e.lib.Episode("UC1", "ep04"); ep.Status != podsync.StatusDownloaded || !ep.Manual {
 		t.Fatalf("manual episode must survive cleanup: %+v", ep)
 	}
-}
-
-func TestCleanupAfterDays(t *testing.T) {
-	e := setup(t, mock.Episodes(3), func(c *podsync.Config) { c.Defaults.CleanupAfterDays = 1 })
-	e.svc.now = func() time.Time { return base.AddDate(0, 0, 1).Add(12 * time.Hour) } // ep00 is 1.5d old
-	e.svc.PullFeed("UC1")
-	if ep, _ := e.lib.Episode("UC1", "ep00"); ep.Status != podsync.StatusCleaned {
-		t.Fatalf("ep00: %+v", ep)
-	}
-	e.svc.now = func() time.Time { return base }
-	e.svc.Cleanup("UC1") // not relevant now; everything already cleaned or fresh
 }
 
 func TestConcurrencyCapAndBusy(t *testing.T) {

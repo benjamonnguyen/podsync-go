@@ -12,19 +12,19 @@ func ptr[T any](v T) *T { return &v }
 
 func TestDefaults(t *testing.T) {
 	d := Default().Defaults
-	if d.MaxResolution != 720 || d.MinDuration.Std() != 60*time.Second || d.PageSize != 10 || d.CleanupKeepLast != 50 {
+	if d.MaxResolution != 720 || d.MinDuration.Std() != 61*time.Second || d.PageSize != 10 || d.CleanupKeepLast != 50 {
 		t.Fatalf("%+v", d)
 	}
 }
 
 func TestEffectiveLayersOverridesOverDefaults(t *testing.T) {
 	d := Default().Defaults
-	f := Feed{ID: "UC1", Format: ptr("audio"), CleanupKeepLast: ptr(3), TitleExclude: ptr("x"), MinDuration: ptr(Duration(0))}
+	f := Feed{ID: "UC1", Format: ptr("audio"), CleanupKeepLast: ptr(3), MinDuration: ptr(Duration(0))}
 	got := f.Effective(d)
-	if got.MinDuration != 0 || d.MinDuration == 0 || got.Format != "audio" || got.CleanupKeepLast != 3 || got.TitleExclude != "x" || got.PageSize != d.PageSize || got.MaxResolution != d.MaxResolution {
+	if got.MinDuration != 0 || d.MinDuration == 0 || got.Format != "audio" || got.CleanupKeepLast != 3 || got.PageSize != d.PageSize || got.MaxResolution != d.MaxResolution {
 		t.Fatalf("%+v", got)
 	}
-	if !f.HasOverrides() || (Feed{ID: "UC2"}).HasOverrides() {
+	if !f.HasOverrides() || (Feed{ID: "UC2"}).HasOverrides() || !(Feed{ID: "UC3", TitleExclude: "x"}).HasOverrides() {
 		t.Fatal("HasOverrides")
 	}
 }
@@ -38,7 +38,8 @@ func validConfig() Config {
 
 func TestValidateRejectsBadValues(t *testing.T) {
 	cases := map[string]func(*Config){
-		"bad regex":     func(c *Config) { c.Defaults.TitleInclude = "(" },
+		"bad include":   func(c *Config) { c.Feeds[0].TitleInclude = "(" },
+		"bad exclude":   func(c *Config) { c.Feeds[0].TitleExclude = "(" },
 		"bad format":    func(c *Config) { c.Defaults.Format = "gif" },
 		"dup feed":      func(c *Config) { c.Feeds = append(c.Feeds, c.Feeds[0]) },
 		"unsafe id":     func(c *Config) { c.Feeds[0].ID = "../x" },
@@ -66,7 +67,7 @@ func TestValidateRejectsBadValues(t *testing.T) {
 
 func TestValidateReportsEveryProblem(t *testing.T) {
 	c := validConfig()
-	c.Defaults.TitleExclude = "("
+	c.Feeds[0].TitleExclude = "("
 	c.Defaults.PageSize = 0
 	err := c.Validate()
 	if err == nil || !strings.Contains(err.Error(), "title_exclude") || !strings.Contains(err.Error(), "page_size") {
@@ -112,9 +113,9 @@ func TestErrorKindsMatchWithErrorsIs(t *testing.T) {
 }
 
 func TestEpisodeFilter(t *testing.T) {
-	o := Default().Defaults
-	o.TitleInclude, o.TitleExclude = "(?i)keep|episode", "^Sponsored"
-	f, err := NewEpisodeFilter(o)
+	d := Default().Defaults
+	feed := Feed{ID: "UC1", TitleInclude: "(?i)keep|episode", TitleExclude: "^Sponsored"}
+	f, err := feed.Filter(d)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,8 +124,8 @@ func TestEpisodeFilter(t *testing.T) {
 		want bool
 	}{
 		{EpisodeInfo{Title: "Episode 1"}, true},
-		{EpisodeInfo{Title: "Episode 2", DurationSec: 59}, false}, // under the default 60s minimum
-		{EpisodeInfo{Title: "Episode 3", DurationSec: 60}, true},
+		{EpisodeInfo{Title: "Episode 2", DurationSec: 60}, false}, // Shorts are 60s or less
+		{EpisodeInfo{Title: "Episode 3", DurationSec: 61}, true},
 		{EpisodeInfo{Title: "Episode 4"}, true}, // unknown duration is not held back
 		{EpisodeInfo{Title: "Sponsored: Episode"}, false},
 		{EpisodeInfo{Title: "Random"}, false},
@@ -134,13 +135,16 @@ func TestEpisodeFilter(t *testing.T) {
 			t.Errorf("%+v: got %v want %v", c.ep, got, c.want)
 		}
 	}
-	if _, err := NewEpisodeFilter(Options{TitleInclude: "("}); err == nil {
-		t.Fatal("bad regex must error")
+	if _, err := (Feed{TitleInclude: "("}).Filter(d); err == nil || !strings.Contains(err.Error(), "title_include") {
+		t.Fatalf("bad regex must error: %v", err)
 	}
-	none := Default().Defaults
-	none.MinDuration = 0
-	nf, _ := NewEpisodeFilter(none)
+	// A feed's min_duration override wins; the title patterns are the feed's own and never come from defaults.
+	nf, _ := (Feed{ID: "UC2", MinDuration: ptr(Duration(0))}).Filter(d)
 	if !nf.Allows(EpisodeInfo{Title: "x", DurationSec: 5}) {
 		t.Fatal("min_duration = 0 means no minimum")
+	}
+	plain, _ := (Feed{ID: "UC3"}).Filter(d)
+	if !plain.Allows(EpisodeInfo{Title: "Sponsored: anything", DurationSec: 600}) {
+		t.Fatal("without a feed pattern every title passes")
 	}
 }

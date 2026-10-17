@@ -327,7 +327,7 @@ func (s *Service) listAndEnqueue(id string) []*job {
 		return nil
 	}
 	opts := f.Effective(cfg.Defaults)
-	filter, err := podsync.NewEpisodeFilter(opts)
+	filter, err := f.Filter(cfg.Defaults)
 	if err != nil {
 		s.st.Report(key, podsync.LevelError, fmt.Sprintf("Feed %q has an invalid title filter: %v", f.Name, err))
 		return nil
@@ -558,7 +558,7 @@ func (s *Service) ForgetFeed(feedID string) {
 
 // ---- cleanup ----
 
-// Cleanup removes media beyond the feed's retention settings. Episodes the
+// Cleanup removes media beyond the newest cleanup_keep_last downloaded episodes. Episodes the
 // user downloaded manually are exempt. The sidecar stays (as "cleaned") so
 // the scheduler does not download the episode again.
 func (s *Service) Cleanup(feedID string) {
@@ -568,7 +568,7 @@ func (s *Service) Cleanup(feedID string) {
 		return
 	}
 	opts := f.Effective(cfg.Defaults)
-	if opts.CleanupKeepLast == 0 && opts.CleanupAfterDays == 0 {
+	if opts.CleanupKeepLast == 0 {
 		return
 	}
 	var eligible []podsync.Episode
@@ -581,14 +581,6 @@ func (s *Service) Cleanup(feedID string) {
 	if k := opts.CleanupKeepLast; k > 0 && len(eligible) > k {
 		for _, ep := range eligible[k:] {
 			doomed[ep.ID] = ep
-		}
-	}
-	if d := opts.CleanupAfterDays; d > 0 {
-		cutoff := s.now().AddDate(0, 0, -d)
-		for _, ep := range eligible {
-			if !ep.Published.IsZero() && ep.Published.Before(cutoff) {
-				doomed[ep.ID] = ep
-			}
 		}
 	}
 	ids := make([]string, 0, len(doomed))

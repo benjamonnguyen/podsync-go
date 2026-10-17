@@ -47,15 +47,14 @@ type FeedDetail struct {
 
 // FeedSettings is what UpdateFeed replaces. Nil option fields inherit the defaults.
 type FeedSettings struct {
-	Name             string
-	Format           *string
-	MaxResolution    *int
-	MinDuration      *podsync.Duration
-	TitleInclude     *string
-	TitleExclude     *string
-	CleanupAfterDays *int
-	CleanupKeepLast  *int
-	PageSize         *int
+	Name            string
+	Format          *string
+	MaxResolution   *int
+	MinDuration     *podsync.Duration
+	TitleInclude    string // regex, empty = off (per feed only; there are no global patterns)
+	TitleExclude    string
+	CleanupKeepLast *int
+	PageSize        *int
 }
 
 // Episode states shown to users: the library status plus live and listing-only states.
@@ -295,7 +294,7 @@ func (s *Server) Older(ctx context.Context, feedID string, offset int) (OlderPag
 		return OlderPage{}, err
 	}
 	opts := f.Effective(cfg.Defaults)
-	filter, err := podsync.NewEpisodeFilter(opts)
+	filter, err := f.Filter(cfg.Defaults)
 	if err != nil {
 		return OlderPage{}, err
 	}
@@ -413,7 +412,7 @@ func (s *Server) UpdateFeed(ctx context.Context, id string, upd FeedSettings) (F
 			}
 			f.Format, f.MaxResolution, f.MinDuration = upd.Format, upd.MaxResolution, upd.MinDuration
 			f.TitleInclude, f.TitleExclude = upd.TitleInclude, upd.TitleExclude
-			f.CleanupAfterDays, f.CleanupKeepLast, f.PageSize = upd.CleanupAfterDays, upd.CleanupKeepLast, upd.PageSize
+			f.CleanupKeepLast, f.PageSize = upd.CleanupKeepLast, upd.PageSize
 			return nil
 		}
 		return podsync.NotFound("no such feed %q", id)

@@ -7,10 +7,10 @@ Running log of judgment calls made during unsupervised implementation.
 
 ## Start here: the 12 things I'd most like your eyes on
 1. ⚠ **No authentication** (as scoped). Anyone who can reach the port can delete feeds and download everything. Cheap guards exist (cross-site POST blocking, YouTube-only URL allowlist, CSP) but they are not auth. → *Security*.
-2. **Shorts are now a minimum duration (`min_duration`, default 60s), not a boolean.** It misfired on my first real test (a 19 s channel with the old default looked empty); that is still true by design, since anything under the minimum is skipped, so set `min_duration = "0s"` on tiny or playlist-style feeds. → *Latest round*.
+2. **Shorts are now a minimum duration (`min_duration`, default 61s), not a boolean.** It misfired on my first real test (a 19 s channel with the old default looked empty); that is still true by design, since anything under the minimum is skipped, so set `min_duration = "0s"` on tiny or playlist-style feeds. → *Latest round*.
 3. ⚠ **Name search depends on an undocumented YouTube `sp=` token** and has no fallback; links and @handles are unaffected. → *Latest round*.
 4. ⚠ **Playlists use YouTube's playlist order**, so an oldest-first playlist (a course/series) would only ever pull its first `page_size` episodes. podsync solves this with `playlist_sort`; I didn't. → *yt-dlp / YouTube adapter*.
-5. ⚠ **`cleanup_after_days` counts from the publish date**, so slow-publishing channels can be emptied. Off by default. → *Puller*.
+5. **Age-based cleanup is gone** (`cleanup_after_days` removed); retention is only "keep the newest N" (`cleanup_keep_last`). → *Latest round*.
 6. ⚠ **The UI rewrites `config.toml` and drops hand-written comments/ordering.** `config.example.toml` is the documented reference. → *Config*.
 7. **Flat listings have no upload date**, so Load More rows show no date and dates only exist after download. → *yt-dlp / YouTube adapter*.
 8. ⚠ **Episodes inside the newest window that your filters skip are invisible** (no "filtered" badge, no way to grab one). Open question left in PROJECT.md. → *Web UI*.
@@ -185,3 +185,12 @@ Round 1: root `podsync` package for domain types, subpackages by dependency, `cm
 - README/PROJECT.md cleaned: I found the README carried two stale duplicate API sections from an earlier edit; removed.
 
 **Verified**: unit/HTTP tests (race), the live YouTube test (name search → channel with handle and subscriber count, `@LinusTechTips` and a playlist link resolve correctly), and the browser run (35 checks, now covering the single box, list → select → preview, an unresolvable handle shown inline, and a pasted link going straight to the preview).
+
+
+## Latest round (2): leaner retention and filters
+- **`cleanup_after_days` deleted** from the config (defaults and per feed), the syncer, both settings forms, tests and docs. Cleanup is now only `cleanup_keep_last` (default 50, `0` = keep everything; manual downloads stay exempt). This also retires the "slow-publishing channels get emptied" concern (it was my review item 5).
+- **No global title patterns.** `title_include` / `title_exclude` are removed from `[defaults]` and the global Settings page; they are plain per-feed fields (`TitleInclude`, `TitleExclude`: strings, empty = off) on the `[[feeds]]` entry, edited on the feed's own settings page. They are validated per feed (a bad regex names the feed and the field), and `Feed.Filter(defaults)` builds the episode filter from the feed's effective minimum duration plus its own patterns. Side effect that is a *fix*: the old review item "a blank per-feed field can't override a non-empty default regex" no longer exists, since there is no default regex.
+- **Default `min_duration` is `"61s"`** (was 60s), so videos of exactly 60 s, which YouTube counts as Shorts, are skipped too. It is written as `"1m1s"` by the TOML encoder when the UI saves the file (a Go duration; the forms show `61s`).
+- ⚠ **Old config files fail to load** if they contain `cleanup_after_days`, `[defaults] title_include/title_exclude`, or `exclude_shorts`; strict parsing names the offending key. Nothing was released, so no migration. Tests assert each of these is rejected, and a test that `config.example.toml` and `dev/config.toml` still parse caught my own stale example during this change.
+- Sidecars and feeds written by earlier builds still load: unknown JSON fields in sidecars are ignored.
+- Verified: unit/HTTP tests (race), browser run (35 checks), dev instance restarted on the new build.

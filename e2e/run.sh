@@ -23,7 +23,7 @@ update_interval = "1h"
 [defaults]
 format = "video"
 max_resolution = 720
-min_duration = "1m"
+min_duration = "61s"
 page_size = 4
 cleanup_keep_last = 0
 CFG

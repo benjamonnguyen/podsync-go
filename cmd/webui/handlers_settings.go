@@ -22,7 +22,7 @@ func parseMinDuration(v string) (*podsync.Duration, error) {
 	}
 	d, err := time.ParseDuration(v)
 	if err != nil || d < 0 {
-		return nil, errors.New("min_duration must look like 60s or 2m (0 for no minimum)")
+		return nil, errors.New("min_duration must look like 61s or 2m (0 for no minimum)")
 	}
 	pd := podsync.Duration(d)
 	return &pd, nil
@@ -58,10 +58,7 @@ func applySettingsForm(s *Settings, r *http.Request) error {
 	} else {
 		s.Defaults.MinDuration = *d
 	}
-	s.Defaults.TitleInclude = r.FormValue("title_include")
-	s.Defaults.TitleExclude = r.FormValue("title_exclude")
 	intField(r, "max_resolution", &s.Defaults.MaxResolution, &errs)
-	intField(r, "cleanup_after_days", &s.Defaults.CleanupAfterDays, &errs)
 	intField(r, "cleanup_keep_last", &s.Defaults.CleanupKeepLast, &errs)
 	intField(r, "page_size", &s.Defaults.PageSize, &errs)
 	return errors.Join(errs...)
@@ -103,16 +100,15 @@ func (s *Server) handleSettingsSave(w http.ResponseWriter, r *http.Request) {
 // ---- per-feed overrides ----
 
 type feedSettingsView struct {
-	ID, Name, Kind   string
-	Format           string
-	MaxResolution    string
-	MinDuration      string
-	TitleInclude     string
-	TitleExclude     string
-	CleanupAfterDays string
-	CleanupKeepLast  string
-	PageSize         string
-	Defaults         podsync.Options
+	ID, Name, Kind  string
+	Format          string
+	MaxResolution   string
+	MinDuration     string
+	TitleInclude    string
+	TitleExclude    string
+	CleanupKeepLast string
+	PageSize        string
+	Defaults        podsync.Options
 }
 
 // seconds renders a duration as whole seconds ("60s") for the forms.
@@ -140,8 +136,8 @@ func sval(p *string) string {
 func feedSettingsFrom(id, kind string, fs FeedSettings, d podsync.Options) feedSettingsView {
 	v := feedSettingsView{
 		ID: id, Name: fs.Name, Kind: kind, Format: sval(fs.Format), MaxResolution: itoa(fs.MaxResolution),
-		TitleInclude: sval(fs.TitleInclude), TitleExclude: sval(fs.TitleExclude),
-		CleanupAfterDays: itoa(fs.CleanupAfterDays), CleanupKeepLast: itoa(fs.CleanupKeepLast), PageSize: itoa(fs.PageSize),
+		TitleInclude: fs.TitleInclude, TitleExclude: fs.TitleExclude,
+		CleanupKeepLast: itoa(fs.CleanupKeepLast), PageSize: itoa(fs.PageSize),
 		Defaults: d,
 	}
 	if fs.MinDuration != nil {
@@ -153,7 +149,7 @@ func feedSettingsFrom(id, kind string, fs FeedSettings, d podsync.Options) feedS
 func settingsFromFeed(f podsync.Feed) FeedSettings {
 	return FeedSettings{
 		Name: f.Name, Format: f.Format, MaxResolution: f.MaxResolution, MinDuration: f.MinDuration,
-		TitleInclude: f.TitleInclude, TitleExclude: f.TitleExclude, CleanupAfterDays: f.CleanupAfterDays,
+		TitleInclude: f.TitleInclude, TitleExclude: f.TitleExclude,
 		CleanupKeepLast: f.CleanupKeepLast, PageSize: f.PageSize,
 	}
 }
@@ -193,9 +189,8 @@ func feedSettingsFromForm(r *http.Request, current string) (FeedSettings, error)
 	} else {
 		fs.MinDuration = d
 	}
-	fs.TitleInclude = optString(r, "title_include")
-	fs.TitleExclude = optString(r, "title_exclude")
-	fs.CleanupAfterDays = optInt(r, "cleanup_after_days", &errs)
+	fs.TitleInclude = strings.TrimSpace(r.FormValue("title_include"))
+	fs.TitleExclude = strings.TrimSpace(r.FormValue("title_exclude"))
 	fs.CleanupKeepLast = optInt(r, "cleanup_keep_last", &errs)
 	fs.PageSize = optInt(r, "page_size", &errs)
 	return fs, errors.Join(errs...)

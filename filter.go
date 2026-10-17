@@ -1,6 +1,7 @@
 package podsync
 
 import (
+	"fmt"
 	"regexp"
 	"time"
 )
@@ -12,22 +13,28 @@ type EpisodeFilter struct {
 	exclude     *regexp.Regexp
 }
 
-// NewEpisodeFilter compiles the feed's effective options. Patterns are validated
-// when the config is saved, so an error here means a hand-edited bad file.
-func NewEpisodeFilter(o Options) (*EpisodeFilter, error) {
-	f := &EpisodeFilter{minDuration: o.MinDuration.Std()}
+// NewEpisodeFilter compiles the title patterns (empty = off). Patterns are
+// validated when the config is saved, so an error here means a hand-edited bad file.
+func NewEpisodeFilter(minDuration time.Duration, include, exclude string) (*EpisodeFilter, error) {
+	f := &EpisodeFilter{minDuration: minDuration}
 	var err error
-	if o.TitleInclude != "" {
-		if f.include, err = regexp.Compile(o.TitleInclude); err != nil {
-			return nil, err
+	if include != "" {
+		if f.include, err = regexp.Compile(include); err != nil {
+			return nil, fmt.Errorf("title_include is not a valid regular expression: %v", err)
 		}
 	}
-	if o.TitleExclude != "" {
-		if f.exclude, err = regexp.Compile(o.TitleExclude); err != nil {
-			return nil, err
+	if exclude != "" {
+		if f.exclude, err = regexp.Compile(exclude); err != nil {
+			return nil, fmt.Errorf("title_exclude is not a valid regular expression: %v", err)
 		}
 	}
 	return f, nil
+}
+
+// Filter builds the feed's episode filter: its effective minimum duration and
+// its own title patterns.
+func (f Feed) Filter(defaults Options) (*EpisodeFilter, error) {
+	return NewEpisodeFilter(f.Effective(defaults).MinDuration.Std(), f.TitleInclude, f.TitleExclude)
 }
 
 // Allows applies the minimum duration (which is how YouTube Shorts are
