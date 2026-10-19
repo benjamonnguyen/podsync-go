@@ -1,18 +1,32 @@
 # podsync-go
 
-Turn YouTube channels and playlists into podcast feeds you can play in any podcast app, and manage them from a web page.
+Turn YouTube channels and playlists into podcast feeds.
 
-You pick a channel or playlist, podsync-go downloads new episodes with [yt-dlp](https://github.com/yt-dlp/yt-dlp), stores them on your disk, and publishes a normal podcast RSS feed for each one. Add the feed URL to your podcast app and new videos show up as episodes (as video or audio-only, your choice).
+Manage your library, edit settings, and add new feeds straight from the built-in web UI.
 
-Inspired by [mxpv/podsync](https://github.com/mxpv/podsync); Turn YouTube channels and playlists into podcast feeds the big difference is the built-in web UI for browsing and managing your library.
-
-- Web UI: library by channel/playlist, search, "check now", delete feeds, settings, load older episodes on demand
 - Add feeds with one box: paste a channel or playlist link, type an `@handle`, or search YouTube channels by name
-- Per-feed options: audio or video, max resolution (default 720p), minimum video length (skips Shorts), title include/exclude regex, keep-newest-N cleanup, opt out of the OPML export
-- OPML export of all subscriptions at `/opml.xml`, for importing your whole library into a podcast app at once
-- A status banner that tells you when yt-dlp, YouTube or a download is misbehaving
-- One program, one port: **podsync** fetches and stores episodes with yt-dlp, **publishes the podcast feeds and media**, and serves the management web UI, all on the same listener. Disable the web UI with an environment variable if you only want the feeds. A multi-arch (amd64 + arm64) Docker image
-- Plain-file storage: no database, just media files with small JSON files next to them, and one `config.toml`
+- Per-feed options: audio or video, max resolution, minimum video length, etc.
+- Episode filtering using title include/exclude regex
+- Episode cleanup (keep last X)
+- OPML export
+- Plain-file storage: no database; uses media sidecar data and one `config.toml`
+- Automatic yt-dlp self update.
+
+Inspired by [mxpv/podsync](https://github.com/mxpv/podsync)
+
+## Web UI
+
+**Library** — every feed you're subscribed to, with its episode count, size on disk and last check:
+
+![Library view](docs/img/library.png)
+
+**Feed** — one channel or playlist's episodes, with Load More to look further back than the newest page:
+
+![Feed view](docs/img/feed.png)
+
+**Add a feed** — search channels by name, or paste a link/`@handle`/playlist URL directly:
+
+![Search view](docs/img/search.png)
 
 ## Quick start (Docker)
 
@@ -30,25 +44,15 @@ Inspired by [mxpv/podsync](https://github.com/mxpv/podsync); Turn YouTube channe
    docker buildx build --platform linux/amd64,linux/arm64 -t podsync .
    ```
 
-2. **Edit `compose.yaml`**: set `PODSYNC_BASE_URL` to the address podcast apps (and your browser) will use to reach port 8080, for example `http://192.168.1.10:8080` (the placeholder `<this-host>` only works on the same machine, so feed links would be useless on your phone until you change it; your browser also loads episode thumbnails from this address), and set `PODSYNC_USERNAME`/`PODSYNC_PASSWORD` to your own login for the management UI.
+2. **Edit `compose.yaml`**: set `PODSYNC_BASE_URL`, `PODSYNC_USERNAME`, and `PODSYNC_PASSWORD`.
+
+If you plan on maintaining config.toml by hand, you can set `PODSYNC_WEBUI_DISABLED=true` to turn the web UI off entirely (then `PODSYNC_USERNAME`/`PODSYNC_PASSWORD` are not needed).
 
 3. Start it:
 
    ```sh
    docker compose up -d
    ```
-
-4. Open the management UI at <http://localhost:8080>, and log in with `PODSYNC_USERNAME`/`PODSYNC_PASSWORD`. On first start a default `config/config.toml` is created, holding only feeds and the settings the web UI's Settings page edits.
-
-5. Click **Add feed**, type or paste a channel name, an `@handle` or a link, and add it. The newest episodes start downloading right away.
-
-6. Open the feed in the UI and click its feed URL to copy it (`http://<your-address>:8080/feeds/<id>.xml`) into your podcast app ("add a show by URL"); feed and media requests need no login.
-
-One port, **8080**, serves feeds and media (publish this to podcast apps) and the management UI (behind its Basic login — keep this reachable only from where you'll actually use it). The container mounts `config` and `data` and runs as the user in `compose.yaml` (`1000:1000` in the example); create the folders as that user so it can write to them. Set `PODSYNC_WEBUI_DISABLED=true` to turn the web UI off entirely (then `PODSYNC_USERNAME`/`PODSYNC_PASSWORD` are not needed) — useful if you only maintain `config.toml` by hand.
-
-## Using the web UI
-
-TODO insert screen grabs showing Library and search views
 
 ## Configuration
 
@@ -76,7 +80,7 @@ The feed settings live in one TOML file (default `config.toml` in the working di
 Everything below is set once per deployment and needs a restart to change; none of it is in `config.toml` or editable in the web UI. Almost all of it is an environment variable only. podsync fails to start with a message naming whatever's missing or invalid, rather than falling back to a guess.
 
 | Environment              | Default            | Meaning                                                                                                                                                                                                                                                                                                                                  |
-| ------------------------ | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ------------------------ | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `PODSYNC_CONFIG`         | `config.toml`      | The TOML file holding feeds and defaults                                                                                                                                                                                                                                                                                                 |
 | `PODSYNC_LISTEN_ADDR`    | `:8080`            | Where podsync serves feeds, media and (unless disabled) the web UI — one listener for all of it                                                                                                                                                                                                                                          |
 | `PODSYNC_BASE_URL`       | **required**       | Public address of `PODSYNC_LISTEN_ADDR` as podcast apps and your browser reach it; used in feed links, enclosure URLs and to load thumbnails. There is no default — podsync refuses to start without it, since a wrong guess would silently break feed links                                                                             |
