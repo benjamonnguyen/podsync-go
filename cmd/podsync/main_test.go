@@ -808,4 +808,56 @@ func TestConfigValidate(t *testing.T) {
 	if err := ok.validate(); err != nil {
 		t.Fatalf("unexpected error with the default yt-dlp path: %v", err)
 	}
+
+	bad = ok
+	bad.tlsCertFile = filepath.Join(t.TempDir(), "cert.pem")
+	if err := bad.validate(); err == nil {
+		t.Fatal("expected an error when only the cert is set")
+	}
+	bad = ok
+	bad.tlsKeyFile = filepath.Join(t.TempDir(), "key.pem")
+	if err := bad.validate(); err == nil {
+		t.Fatal("expected an error when only the key is set")
+	}
+	tlsDir := t.TempDir()
+	bad = ok
+	bad.tlsCertFile = filepath.Join(tlsDir, "cert.pem")
+	bad.tlsKeyFile = filepath.Join(tlsDir, "does-not-exist.pem")
+	if err := os.WriteFile(bad.tlsCertFile, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := bad.validate(); err == nil {
+		t.Fatal("expected an error when the key file does not exist")
+	}
+	good = ok
+	good.tlsCertFile = bad.tlsCertFile
+	good.tlsKeyFile = filepath.Join(tlsDir, "key.pem")
+	if err := os.WriteFile(good.tlsKeyFile, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := good.validate(); err != nil {
+		t.Fatalf("existing cert and key files must pass: %v", err)
+	}
+	if !good.tlsEnabled() || ok.tlsEnabled() {
+		t.Fatal("tlsEnabled")
+	}
+}
+
+func TestProbeHTTPAndHTTPS(t *testing.T) {
+	healthz := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprintln(w, "ok") })
+
+	plain := httptest.NewServer(healthz)
+	defer plain.Close()
+	if err := probe(plain.Listener.Addr().String(), false); err != nil {
+		t.Fatalf("plain http probe: %v", err)
+	}
+
+	secure := httptest.NewTLSServer(healthz)
+	defer secure.Close()
+	if err := probe(secure.Listener.Addr().String(), true); err != nil {
+		t.Fatalf("https probe with a self-signed cert must not fail verification (it's a loopback self-check): %v", err)
+	}
+	if err := probe(secure.Listener.Addr().String(), false); err == nil {
+		t.Fatal("speaking plain http to a TLS listener should fail")
+	}
 }

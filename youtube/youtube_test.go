@@ -153,6 +153,11 @@ func fakeYtDlp(args []string) int {
 		start, _ := strconv.Atoi(val("--playlist-start"))
 		end, _ := strconv.Atoi(val("--playlist-end"))
 		all := fakeEntries(12)
+		if has("--playlist-reverse") {
+			for i, j := 0, len(all)-1; i < j; i, j = i+1, j-1 {
+				all[i], all[j] = all[j], all[i]
+			}
+		}
 		if end > len(all) {
 			end = len(all)
 		}
@@ -260,6 +265,25 @@ func TestListEpisodesWindowAndFlags(t *testing.T) {
 	}
 	if past, err := y.ListEpisodes(context.Background(), feed, 50, 5); err != nil || len(past) != 0 {
 		t.Fatalf("past end: %v %d", err, len(past))
+	}
+}
+
+// TestListEpisodesReverseForOldestFirstPlaylists covers playlist_sort =
+// "oldest": a playlist whose natural order is oldest-first must have
+// --playlist-reverse passed so offset 0 is still its newest addition.
+func TestListEpisodesReverseForOldestFirstPlaylists(t *testing.T) {
+	y, _ := newFake(t)
+	oldestFirst := podsync.FeedInfo{Source: Kind, Kind: podsync.FeedPlaylist, ID: "PLsomething", Reverse: true}
+	eps, err := y.ListEpisodes(context.Background(), oldestFirst, 0, 5)
+	if err != nil || len(eps) != 5 {
+		t.Fatalf("%v %d", err, len(eps))
+	}
+	if eps[0].ID != "vid00000012" {
+		t.Fatalf("Reverse should list from the end of the playlist first, got %+v", eps[0])
+	}
+	unreversed, _ := y.ListEpisodes(context.Background(), feed, 0, 5)
+	if unreversed[0].ID != "vid00000001" {
+		t.Fatalf("without Reverse the natural order should stand, got %+v", unreversed[0])
 	}
 }
 

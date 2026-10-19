@@ -27,6 +27,9 @@ func TestEffectiveLayersOverridesOverDefaults(t *testing.T) {
 	if !f.HasOverrides() || (Feed{ID: "UC2"}).HasOverrides() || !(Feed{ID: "UC3", TitleExclude: "x"}).HasOverrides() {
 		t.Fatal("HasOverrides")
 	}
+	if !(Feed{ID: "UC4", PlaylistSort: PlaylistSortOldest}).HasOverrides() {
+		t.Fatal("HasOverrides should count playlist_sort")
+	}
 }
 
 func validConfig() Config {
@@ -38,20 +41,31 @@ func validConfig() Config {
 
 func TestValidateRejectsBadValues(t *testing.T) {
 	cases := map[string]func(*Config){
-		"bad include":   func(c *Config) { c.Feeds[0].TitleInclude = "(" },
-		"bad exclude":   func(c *Config) { c.Feeds[0].TitleExclude = "(" },
-		"bad format":    func(c *Config) { c.Defaults.Format = "gif" },
-		"dup feed":      func(c *Config) { c.Feeds = append(c.Feeds, c.Feeds[0]) },
-		"unsafe id":     func(c *Config) { c.Feeds[0].ID = "../x" },
-		"bad interval":  func(c *Config) { c.Download.UpdateInterval = Duration(5 * time.Second) },
-		"zero page":     func(c *Config) { c.Defaults.PageSize = 0 },
-		"neg min dur":   func(c *Config) { c.Defaults.MinDuration = -1 },
-		"feed bad kind": func(c *Config) { c.Feeds[0].Kind = "user" },
-		"feed override": func(c *Config) { c.Feeds[0].PageSize = ptr(9999) },
-		"concurrency":   func(c *Config) { c.Download.Concurrency = 99 },
+		"bad include":       func(c *Config) { c.Feeds[0].TitleInclude = "(" },
+		"bad exclude":       func(c *Config) { c.Feeds[0].TitleExclude = "(" },
+		"bad format":        func(c *Config) { c.Defaults.Format = "gif" },
+		"dup feed":          func(c *Config) { c.Feeds = append(c.Feeds, c.Feeds[0]) },
+		"unsafe id":         func(c *Config) { c.Feeds[0].ID = "../x" },
+		"bad interval":      func(c *Config) { c.Download.UpdateInterval = Duration(5 * time.Second) },
+		"zero page":         func(c *Config) { c.Defaults.PageSize = 0 },
+		"neg min dur":       func(c *Config) { c.Defaults.MinDuration = -1 },
+		"feed bad kind":     func(c *Config) { c.Feeds[0].Kind = "user" },
+		"feed override":     func(c *Config) { c.Feeds[0].PageSize = ptr(9999) },
+		"concurrency":       func(c *Config) { c.Download.Concurrency = 99 },
+		"bad playlist_sort": func(c *Config) { c.Feeds[0].PlaylistSort = "newest" },
+		"playlist_sort on chan": func(c *Config) {
+			c.Feeds[0].Kind = FeedChannel
+			c.Feeds[0].PlaylistSort = PlaylistSortOldest
+		},
 	}
 	if err := validConfig().Validate(); err != nil {
 		t.Fatalf("valid config rejected: %v", err)
+	}
+	withPlaylist := validConfig()
+	withPlaylist.Feeds[0].Kind = FeedPlaylist
+	withPlaylist.Feeds[0].PlaylistSort = PlaylistSortOldest
+	if err := withPlaylist.Validate(); err != nil {
+		t.Fatalf("playlist_sort=oldest on a playlist feed should be valid: %v", err)
 	}
 	for name, mutate := range cases {
 		c := validConfig()
@@ -145,4 +159,3 @@ func TestEpisodeFilter(t *testing.T) {
 		t.Fatal("without a feed pattern every title passes")
 	}
 }
-

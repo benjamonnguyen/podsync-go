@@ -56,6 +56,7 @@ type FeedSettings struct {
 	TitleExclude    string
 	CleanupKeepLast *int
 	PageSize        *int
+	PlaylistSort    string // "" or "oldest"; only meaningful for playlist feeds
 	OPMLExclude     bool
 }
 
@@ -413,6 +414,7 @@ func (s *Server) UpdateFeed(ctx context.Context, id string, upd FeedSettings) (F
 			f.Format, f.MaxResolution, f.MinDuration = upd.Format, upd.MaxResolution, upd.MinDuration
 			f.TitleInclude, f.TitleExclude = upd.TitleInclude, upd.TitleExclude
 			f.CleanupKeepLast, f.PageSize = upd.CleanupKeepLast, upd.PageSize
+			f.PlaylistSort = upd.PlaylistSort
 			f.OPMLExclude = upd.OPMLExclude
 			return nil
 		}

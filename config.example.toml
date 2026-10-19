@@ -4,9 +4,8 @@
 # comments, so keep this example file for reference instead of annotating your live one.
 #
 # Everything about how the service is deployed (ports, the public address, the data
-# directory, the yt-dlp cookies file) is a flag or environment variable on each binary
-# instead, not part of this file. See compose.example.yaml for the full list, or run
-# `syncr -help` / `webui -help`.
+# directory, the yt-dlp cookies file) is a flag or environment variable instead, not
+# part of this file. See compose.example.yaml for the full list, or run `podsync -help`.
 
 [download]
 # Maximum simultaneous downloads (1-16).
@@ -37,3 +36,12 @@ page_size = 5
 title_exclude = "(?i)sponsored|#shorts"   # matching titles are skipped
 # title_include = "(?i)review"             # if set, only matching titles are downloaded
 # opml_exclude = true                      # leave this feed out of the /opml.xml export; absent/false = included
+
+# [[feeds]]
+# id = "PLsomeCourseSeriesPlaylistId"
+# source = "youtube"
+# kind = "playlist"
+# name = "Some Course"
+# playlist_sort = "oldest" # only valid on playlist feeds: set this when the playlist is ordered
+#                           # oldest first (a course/series), so updates pull its newest additions
+#                           # instead of only ever the first page_size episodes ever added to it

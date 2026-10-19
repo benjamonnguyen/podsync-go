@@ -18,6 +18,10 @@ type FeedInfo struct {
 	// Display extras filled in by lookups (not stored).
 	Handle      string `json:"handle,omitempty"`      // e.g. "@LinusTechTips"
 	Subscribers int64  `json:"subscribers,omitempty"` // when the source reports it
+	// Reverse is set from the feed's playlist_sort = "oldest": the playlist
+	// itself is ordered oldest first, so ListEpisodes must reverse it before
+	// applying offset/limit to still return newest first.
+	Reverse bool `json:"reverse,omitempty"`
 }
 
 // EpisodeInfo describes one episode as reported by a source. Listings are
@@ -70,7 +74,8 @@ type Source interface {
 	// playlist) into its canonical feed; used when a feed's ID is already known.
 	Resolve(ctx context.Context, ref string) (FeedInfo, error)
 	// ListEpisodes returns the window [offset, offset+limit) of a feed's
-	// episodes, newest first. Unavailable entries are included (flagged) so
+	// episodes, newest first (reversing the feed's own order first if
+	// feed.Reverse is set). Unavailable entries are included (flagged) so
 	// callers can tell whether a short page means the end of the feed.
 	ListEpisodes(ctx context.Context, feed FeedInfo, offset, limit int) ([]EpisodeInfo, error)
 	// Download fetches one episode into destDir.

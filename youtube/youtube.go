@@ -457,8 +457,11 @@ func (y *YouTube) ListEpisodes(ctx context.Context, feed podsync.FeedInfo, offse
 	if offset < 0 {
 		offset = 0
 	}
-	args := append(y.baseArgs(), "-J", "--flat-playlist",
-		"--playlist-start", fmt.Sprint(offset+1), "--playlist-end", fmt.Sprint(offset+limit), "--", feedURL(feed))
+	args := append(y.baseArgs(), "-J", "--flat-playlist")
+	if feed.Reverse {
+		args = append(args, "--playlist-reverse")
+	}
+	args = append(args, "--playlist-start", fmt.Sprint(offset+1), "--playlist-end", fmt.Sprint(offset+limit), "--", feedURL(feed))
 	out, err := y.run(ctx, listTimeout, args...)
 	if err != nil {
 		return nil, err

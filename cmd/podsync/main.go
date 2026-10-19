@@ -4,7 +4,9 @@
 // library — all from one process on one listener. The public feed/media
 // endpoints (/feeds, /media, /opml.xml) are unauthenticated, since that's what podcast
 // apps fetch; everything else (the management portal) requires the HTTP
-// Basic credentials set by PODSYNC_USERNAME/PODSYNC_PASSWORD. Almost every
+// Basic credentials set by PODSYNC_USERNAME/PODSYNC_PASSWORD. Basic auth is
+// sent in the clear unless PODSYNC_TLS_CERT_FILE/PODSYNC_TLS_KEY_FILE are set,
+// in which case the one listener speaks HTTPS instead of HTTP. Almost every
 // deployment setting is an environment variable (all prefixed PODSYNC_);
 // -listen and -config also accept a command-line flag, for the common case
 // of running a few instances by hand without Docker. podsync fails fast
@@ -13,6 +15,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"flag"
 	"fmt"
@@ -65,6 +68,8 @@ type config struct {
 	webuiDisabled bool
 	username      string
 	password      string
+	tlsCertFile   string
+	tlsKeyFile    string
 }
 
 func configFromEnv() config {
@@ -81,8 +86,12 @@ func configFromEnv() config {
 		webuiDisabled: envBool("PODSYNC_WEBUI_DISABLED", false),
 		username:      os.Getenv("PODSYNC_USERNAME"),
 		password:      os.Getenv("PODSYNC_PASSWORD"),
+		tlsCertFile:   os.Getenv("PODSYNC_TLS_CERT_FILE"),
+		tlsKeyFile:    os.Getenv("PODSYNC_TLS_KEY_FILE"),
 	}
 }
+
+func (c config) tlsEnabled() bool { return c.tlsCertFile != "" }
 
 // validate checks the deployment settings that Config.Validate used to check
 // before they moved out of the file, and fails fast naming what's missing or
@@ -111,12 +120,24 @@ func (c config) validate() error {
 			return fmt.Errorf("PODSYNC_YTDLP_PATH %q: %w", c.ytdlpPath, err)
 		}
 	}
+	if (c.tlsCertFile == "") != (c.tlsKeyFile == "") {
+		return errors.New("PODSYNC_TLS_CERT_FILE and PODSYNC_TLS_KEY_FILE must be set together")
+	}
+	if c.tlsCertFile != "" {
+		if _, err := os.Stat(c.tlsCertFile); err != nil {
+			return fmt.Errorf("PODSYNC_TLS_CERT_FILE: %w", err)
+		}
+		if _, err := os.Stat(c.tlsKeyFile); err != nil {
+			return fmt.Errorf("PODSYNC_TLS_KEY_FILE: %w", err)
+		}
+	}
 	return nil
 }
 
 func main() {
 	if envBool("PODSYNC_HEALTHCHECK", false) {
-		if err := probe(envOr("PODSYNC_LISTEN_ADDR", ":8080")); err != nil {
+		tlsEnabled := os.Getenv("PODSYNC_TLS_CERT_FILE") != ""
+		if err := probe(envOr("PODSYNC_LISTEN_ADDR", ":8080"), tlsEnabled); err != nil {
 			fmt.Fprintln(os.Stderr, "unhealthy:", err)
 			os.Exit(1)
 		}
@@ -131,14 +152,21 @@ func main() {
 	}
 }
 
-// probe checks that the listener answers /healthz.
-func probe(addr string) error {
+// probe checks that the listener answers /healthz. When TLS is enabled, the
+// certificate is not re-verified: this is a loopback self-check, not a
+// connection to a remote peer, and the cert may not even cover 127.0.0.1.
+func probe(addr string, tlsEnabled bool) error {
 	_, port, err := net.SplitHostPort(addr)
 	if err != nil {
 		return err
 	}
+	scheme := "http"
 	client := http.Client{Timeout: 4 * time.Second}
-	resp, err := client.Get("http://127.0.0.1:" + port + "/healthz")
+	if tlsEnabled {
+		scheme = "https"
+		client.Transport = &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
+	}
+	resp, err := client.Get(scheme + "://127.0.0.1:" + port + "/healthz")
 	if err != nil {
 		return err
 	}
@@ -211,9 +239,15 @@ func run(c config) error {
 		// No write timeout: media downloads to slow podcast clients can take long.
 	}
 	errc := make(chan error, 1)
-	go func() { errc <- srv.ListenAndServe() }()
-	log.Printf("podsync %s listening on %s (%s; config %s, data %s, public address %s, %d feeds)",
-		version, srv.Addr, webuiNote, c.path, c.dataDir, c.baseURL, len(cfg.Get().Feeds))
+	scheme := "http, no TLS"
+	if c.tlsEnabled() {
+		scheme = "https (TLS)"
+		go func() { errc <- srv.ListenAndServeTLS(c.tlsCertFile, c.tlsKeyFile) }()
+	} else {
+		go func() { errc <- srv.ListenAndServe() }()
+	}
+	log.Printf("podsync %s listening on %s (%s, %s; config %s, data %s, public address %s, %d feeds)",
+		version, srv.Addr, scheme, webuiNote, c.path, c.dataDir, c.baseURL, len(cfg.Get().Feeds))
 
 	select {
 	case err := <-errc:

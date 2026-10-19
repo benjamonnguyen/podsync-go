@@ -34,6 +34,11 @@ services:
       # Optional: use a yt-dlp other than the one baked into the image (must exist in the
       # container, e.g. bind-mounted in):
       # PODSYNC_YTDLP_PATH: /config/yt-dlp
+      # Optional: serve HTTPS directly instead of plain HTTP (cert/key must exist in the
+      # container, e.g. bind-mounted in via ./config). Basic auth sends credentials in the
+      # clear otherwise, so set these or put podsync behind a reverse proxy that terminates TLS:
+      # PODSYNC_TLS_CERT_FILE: /config/cert.pem
+      # PODSYNC_TLS_KEY_FILE: /config/key.pem
     ports:
       - "8080:8080" # feeds, media, and the (Basic-auth-protected) web UI
 

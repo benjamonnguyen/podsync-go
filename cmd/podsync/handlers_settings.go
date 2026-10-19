@@ -105,6 +105,7 @@ type feedSettingsView struct {
 	TitleExclude    string
 	CleanupKeepLast string
 	PageSize        string
+	PlaylistSort    string
 	OPMLExclude     bool
 	Defaults        podsync.Options
 }
@@ -136,8 +137,9 @@ func feedSettingsFrom(id, kind string, fs FeedSettings, d podsync.Options) feedS
 		ID: id, Name: fs.Name, Kind: kind, Format: sval(fs.Format), MaxResolution: itoa(fs.MaxResolution),
 		TitleInclude: fs.TitleInclude, TitleExclude: fs.TitleExclude,
 		CleanupKeepLast: itoa(fs.CleanupKeepLast), PageSize: itoa(fs.PageSize),
-		OPMLExclude: fs.OPMLExclude,
-		Defaults:    d,
+		PlaylistSort: fs.PlaylistSort,
+		OPMLExclude:  fs.OPMLExclude,
+		Defaults:     d,
 	}
 	if fs.MinDuration != nil {
 		v.MinDuration = seconds(*fs.MinDuration)
@@ -150,7 +152,8 @@ func settingsFromFeed(f podsync.Feed) FeedSettings {
 		Name: f.Name, Format: f.Format, MaxResolution: f.MaxResolution, MinDuration: f.MinDuration,
 		TitleInclude: f.TitleInclude, TitleExclude: f.TitleExclude,
 		CleanupKeepLast: f.CleanupKeepLast, PageSize: f.PageSize,
-		OPMLExclude: f.OPMLExclude,
+		PlaylistSort: f.PlaylistSort,
+		OPMLExclude:  f.OPMLExclude,
 	}
 }
 
@@ -193,6 +196,9 @@ func feedSettingsFromForm(r *http.Request, current string) (FeedSettings, error)
 	fs.TitleExclude = strings.TrimSpace(r.FormValue("title_exclude"))
 	fs.CleanupKeepLast = optInt(r, "cleanup_keep_last", &errs)
 	fs.PageSize = optInt(r, "page_size", &errs)
+	if r.FormValue("playlist_sort") == "oldest" {
+		fs.PlaylistSort = podsync.PlaylistSortOldest
+	}
 	fs.OPMLExclude = r.FormValue("opml_exclude") == "on"
 	return fs, errors.Join(errs...)
 }

@@ -18,6 +18,7 @@
     <label>Skip titles matching (regex) <input type="text" name="title_exclude" value="{{.F.TitleExclude}}" placeholder="empty = skip none"><small>Case-insensitive example: <code>(?i)sponsored|#shorts</code>. These patterns belong to this feed only.</small></label>
     <label>Episodes checked per update <input type="number" name="page_size" min="1" max="500" value="{{.F.PageSize}}" placeholder="{{.F.Defaults.PageSize}}"></label>
     <label>Keep only the newest N downloaded episodes (0 = keep all) <input type="number" name="cleanup_keep_last" min="0" value="{{.F.CleanupKeepLast}}" placeholder="{{.F.Defaults.CleanupKeepLast}}"></label>
+    {{if eq .F.Kind "playlist"}}<label class="check"><input type="checkbox" name="playlist_sort" value="oldest"{{if eq .F.PlaylistSort "oldest"}} checked{{end}}> Playlist is ordered oldest first<small>A course/series playlist: check this so updates pull the newest additions instead of only ever the first {{.F.PageSize}} episodes ever added.</small></label>{{end}}
     <label class="check"><input type="checkbox" name="opml_exclude"{{if .F.OPMLExclude}} checked{{end}}> Exclude from OPML export<small>Off by default: the feed is included in <code>/opml.xml</code>.</small></label>
   </fieldset>
   <div class="actions"><button class="btn primary" type="submit">Save</button></div>

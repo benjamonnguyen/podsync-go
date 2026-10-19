@@ -76,6 +76,13 @@ type Feed struct {
 	TitleInclude string `toml:"title_include,omitempty" json:"title_include,omitempty"` // only matching titles are downloaded
 	TitleExclude string `toml:"title_exclude,omitempty" json:"title_exclude,omitempty"` // matching titles are skipped
 
+	// PlaylistSort only applies to playlist feeds. Empty assumes YouTube's own
+	// playlist order is newest first, so [offset, offset+limit) is taken from
+	// the start. Set to "oldest" for a playlist ordered oldest first (a
+	// course/series): podsync then reverses it before paging, so the newest
+	// addition is still what offset 0 returns.
+	PlaylistSort string `toml:"playlist_sort,omitempty" json:"playlist_sort,omitempty"`
+
 	// OPMLExclude leaves the feed out of the OPML export at /opml.xml. Zero
 	// value (false) includes it, so existing feeds and newly added ones are
 	// in the export unless a user opts them out.
@@ -98,6 +105,9 @@ const (
 	FeedChannel   = "channel"
 	FeedPlaylist  = "playlist"
 	DefaultSource = "youtube"
+
+	// PlaylistSortOldest is the only non-empty value of Feed.PlaylistSort.
+	PlaylistSortOldest = "oldest"
 )
 
 var idPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
@@ -143,7 +153,8 @@ func (f Feed) Effective(d Options) Options {
 // HasOverrides reports whether the feed overrides any default.
 func (f Feed) HasOverrides() bool {
 	return f.Format != nil || f.MaxResolution != nil || f.MinDuration != nil ||
-		f.TitleInclude != "" || f.TitleExclude != "" || f.CleanupKeepLast != nil || f.PageSize != nil
+		f.TitleInclude != "" || f.TitleExclude != "" || f.CleanupKeepLast != nil || f.PageSize != nil ||
+		f.PlaylistSort != ""
 }
 
 // Feed looks a feed up by ID.
@@ -220,6 +231,13 @@ func (c Config) Validate() error {
 		}
 		if f.Kind != FeedChannel && f.Kind != FeedPlaylist {
 			errs = append(errs, fmt.Errorf("%s: kind must be %q or %q", where, FeedChannel, FeedPlaylist))
+		}
+		if f.PlaylistSort != "" {
+			if f.PlaylistSort != PlaylistSortOldest {
+				errs = append(errs, fmt.Errorf("%s: playlist_sort must be empty or %q", where, PlaylistSortOldest))
+			} else if f.Kind != FeedPlaylist {
+				errs = append(errs, fmt.Errorf("%s: playlist_sort only applies to playlist feeds", where))
+			}
 		}
 		if err := f.Effective(c.Defaults).validate(where); err != nil {
 			errs = append(errs, err)
