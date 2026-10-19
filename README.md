@@ -28,6 +28,10 @@ Inspired by [mxpv/podsync](https://github.com/mxpv/podsync)
 
 ![Search view](docs/img/search.png)
 
+**Settings** — concurrency, check interval and the per-feed defaults (each feed can override any of them):
+
+![Settings view](docs/img/settings.png)
+
 ## Quick start (Docker)
 
 1. Get the code, create the folders and copy the example compose file:
