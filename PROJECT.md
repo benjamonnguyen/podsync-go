@@ -355,8 +355,11 @@ no separate backfill mode.
     returns HTML rows appended before the button (the button re-renders with
     the new offset). Offsets count raw source positions *before* filtering so
     pages stay stable. The feed's filters (minimum duration, title regex) apply to these
-    results as they do to scheduled pulls; whether to show filtered-out ones
-    is an open question (§11).
+    results as they do to scheduled pulls: a filtered episode is dropped before
+    it reaches the template, with no row, badge, or count marking its position.
+    This matches scheduled pulls (which never download it either) and is
+    deliberate, not an oversight — filtering is an explicit per-feed decision,
+    not something to work around from the episode list.
   - Appearance: not-downloaded episodes render **faded** (reduced opacity),
     with title, date, and duration, plus a **Download** button.
   - Download: `POST /feed/{feed_id}/episodes/{episode_id}/download` enqueues
@@ -448,9 +451,3 @@ name search cannot tell playlists apart reliably. A bare word is a name, not a h
 - **`compose.example.yaml`**: one service mounting `./config` (not the single file: the app rewrites
   config.toml and a single-file bind mount can't be replaced atomically) and `./data`, running as the user's
   uid, publishing one port, `8080` (feeds, media, and — behind its Basic login — the web UI).
-
-## 11. Open Questions
-
-- Load More and feed filters: hide episodes the feed's filters would skip
-  (current default), or show them faded with a "filtered" badge so the user
-  can still download one deliberately?
