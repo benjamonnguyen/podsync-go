@@ -1,7 +1,10 @@
 package main
 
 import (
+	"crypto/sha256"
+	"crypto/subtle"
 	"embed"
+	"encoding/hex"
 	"fmt"
 	"html/template"
 	"io/fs"
@@ -13,24 +16,37 @@ import (
 	"time"
 
 	"podsync"
-	"podsync/rest"
 )
 
 //go:embed templates/*.html static/*
 var assets embed.FS
 
+// assetVersion changes whenever an embedded static file does, so browsers
+// refetch CSS and JS after a deploy instead of using the cached copy.
+var assetVersion = func() string {
+	h := sha256.New()
+	files, _ := fs.Glob(assets, "static/*")
+	for _, f := range files {
+		b, _ := assets.ReadFile(f)
+		h.Write(b)
+	}
+	return hex.EncodeToString(h.Sum(nil))[:10]
+}()
+
 // options are the web UI's dependencies, wired together in main.
 type options struct {
-	Config  podsync.ConfigStore // the config file shared with the sync service
-	Library podsync.Library     // the data directory shared with the sync service
-	Syncer  podsync.Syncer      // client of the sync service's control API
+	Config  podsync.ConfigStore // the config file, shared with the sync loop
+	Library podsync.Library     // the data directory, shared with the sync loop
+	Syncer  podsync.Syncer      // the sync service, called in-process
+	BaseURL string              // the public address, for the links and thumbnails the UI shows
 }
 
 type Server struct {
-	cfg  podsync.ConfigStore
-	lib  podsync.Library
-	sync podsync.Syncer
-	now  func() time.Time
+	cfg     podsync.ConfigStore
+	lib     podsync.Library
+	sync    podsync.Syncer
+	baseURL string
+	now     func() time.Time
 
 	pages map[string]*template.Template
 	frag  *template.Template
@@ -52,7 +68,7 @@ var pageNames = []string{"library", "feed", "add", "settings", "feed_settings", 
 
 func newServer(o options) (*Server, error) {
 	s := &Server{
-		cfg: o.Config, lib: o.Library, sync: o.Syncer, now: time.Now,
+		cfg: o.Config, lib: o.Library, sync: o.Syncer, baseURL: o.BaseURL, now: time.Now,
 		previews: map[string]preview{}, dismissed: map[string]time.Time{},
 	}
 	funcs := template.FuncMap{
@@ -64,6 +80,13 @@ func newServer(o options) (*Server, error) {
 		"compact": compactNumber,
 		"secs":    seconds,
 		"count":   func(n int, one, many string) string { return fmt.Sprintf("%d %s", n, plural(n, one, many)) },
+		"dot":     joinDot,
+		"subscribers": func(n int64) string {
+			if n <= 0 {
+				return ""
+			}
+			return compactNumber(n) + " subscribers"
+		},
 	}
 	frag, err := template.New("fragments.html").Funcs(funcs).ParseFS(assets, "templates/fragments.html")
 	if err != nil {
@@ -98,6 +121,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /feed/{id}/pull", s.handlePullFeed)
 	mux.HandleFunc("POST /feed/{id}/episodes/{ep}/download", s.handleDownload)
 	mux.HandleFunc("GET /feed/{id}/episodes/{ep}/row", s.handleRow)
+	mux.HandleFunc("POST /feed/{id}/episodes/delete", s.handleDeleteMedia)
 	mux.HandleFunc("GET /feed/{id}/settings", s.handleFeedSettings)
 	mux.HandleFunc("POST /feed/{id}/settings", s.handleFeedSettingsSave)
 	mux.HandleFunc("GET /feed/{id}/delete", s.handleDeleteConfirm)
@@ -117,9 +141,9 @@ func (s *Server) Handler() http.Handler {
 	return s.secure(s.refresh(mux))
 }
 
-// refresh picks up what the sync service (and hand edits) changed in the
-// shared config file and data directory since the previous request. Both
-// checks are cheap when nothing changed.
+// refresh picks up what the sync loop (and hand edits) changed in the shared
+// config file and data directory since the previous request. Both checks are
+// cheap when nothing changed.
 func (s *Server) refresh(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasPrefix(r.URL.Path, "/static/") && r.URL.Path != "/healthz" {
@@ -136,10 +160,10 @@ func (s *Server) refresh(next http.Handler) http.Handler {
 }
 
 // secure adds security headers and the cross-site write guard. Thumbnails and
-// media are loaded from syncr's public address (server.base_url), so that
-// origin is allowed for images and media.
+// media are loaded from the public address (server.base_url), so that origin
+// is allowed for images and media.
 func (s *Server) secure(next http.Handler) http.Handler {
-	guarded := rest.CrossSiteGuard(next)
+	guarded := crossSiteGuard(next)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
 		h.Set("X-Content-Type-Options", "nosniff")
@@ -151,9 +175,51 @@ func (s *Server) secure(next http.Handler) http.Handler {
 	})
 }
 
-// mediaBase is the public address of syncr, where feeds, media and
-// thumbnails are served.
-func (s *Server) mediaBase() string { return s.cfg.Get().Server.BaseURL }
+// crossSiteGuard rejects state-changing requests that a browser marks as
+// coming from another site. Plain non-browser clients (curl, podcast apps)
+// send neither header and pass.
+func crossSiteGuard(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodOptions {
+			if site := r.Header.Get("Sec-Fetch-Site"); site != "" && site != "same-origin" && site != "none" {
+				http.Error(w, "cross-site request blocked", http.StatusForbidden)
+				return
+			}
+			if origin := r.Header.Get("Origin"); origin != "" {
+				u, err := url.Parse(origin)
+				if err != nil || !strings.EqualFold(u.Host, r.Host) {
+					http.Error(w, "cross-origin request blocked", http.StatusForbidden)
+					return
+				}
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// basicAuth protects the management portal with a single username and
+// password (USERNAME/PASSWORD). Comparisons are constant-time and hash the
+// candidate either way, so neither a missing header nor a wrong guess leaks
+// timing information about the real credentials.
+func basicAuth(user, password string, next http.Handler) http.Handler {
+	wantUser := sha256.Sum256([]byte(user))
+	wantPass := sha256.Sum256([]byte(password))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotUser, gotPass, ok := r.BasicAuth()
+		gu, gp := sha256.Sum256([]byte(gotUser)), sha256.Sum256([]byte(gotPass))
+		userOK := subtle.ConstantTimeCompare(gu[:], wantUser[:]) == 1
+		passOK := subtle.ConstantTimeCompare(gp[:], wantPass[:]) == 1
+		if !ok || !userOK || !passOK {
+			w.Header().Set("WWW-Authenticate", `Basic realm="podsync", charset="UTF-8"`)
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// mediaBase is the public address where feeds, media and thumbnails are served.
+func (s *Server) mediaBase() string { return s.baseURL }
 
 // mediaOrigin is mediaBase reduced to scheme://host[:port] for the CSP.
 func (s *Server) mediaOrigin() string {
@@ -179,6 +245,7 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, page string, dat
 	}
 	data["Status"] = s.statusView(r, "")
 	data["Page"] = page
+	data["AssetV"] = assetVersion
 	var buf strings.Builder
 	if err := s.pages[page].ExecuteTemplate(&buf, "layout", data); err != nil {
 		log.Printf("render %s: %v", page, err)

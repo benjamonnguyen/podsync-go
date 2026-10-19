@@ -1,0 +1,43 @@
+# Copy to compose.yaml and adjust. Then: docker compose up -d
+# One service, one port (8080): fetches episodes with yt-dlp, PUBLISHES the podcast feeds and
+# media, and (unless disabled) serves the management web UI, all behind the same listener.
+# The feed/media endpoints are public (that's what podcast apps fetch); the web UI requires the
+# HTTP Basic login set by PODSYNC_USERNAME/PODSYNC_PASSWORD below.
+# None of this is in config.toml; it's all environment variables (podsync also accepts -listen
+# and -config flags, for running it by hand outside Docker, but the image doesn't use them).
+# podsync fails to start with a message naming whatever's missing or invalid.
+# Set PODSYNC_BASE_URL to http://<this-host>:8080: podcast apps use it, and so does your browser
+# when the web UI shows thumbnails.
+services:
+  podsync:
+    image: podsync:latest
+    # Build it yourself (multi-arch: docker buildx build --platform linux/amd64,linux/arm64 .):
+    build: .
+    container_name: podsync
+    restart: unless-stopped
+    volumes:
+      # Mount the *directory*, not the single file: the app rewrites config.toml when you
+      # change settings in the UI, and a single-file bind mount can't be replaced atomically.
+      - ./config:/config
+      # Downloaded media and metadata. Back this up; config.toml alone is enough to
+      # re-create your feeds, but downloaded state lives here.
+      - ./data:/data
+    # Run as your own user so files in ./config and ./data are yours (create both dirs first).
+    user: "1000:1000"
+    environment:
+      TZ: UTC
+      PODSYNC_BASE_URL: http://100.120.50.37:8080
+      PODSYNC_USERNAME: admin
+      PODSYNC_PASSWORD: password123 # required unless PODSYNC_WEBUI_DISABLED is true
+      # Optional: cookies for YouTube sign-in checks (put cookies.txt in ./config):
+      # PODSYNC_COOKIES_FILE: /config/cookies.txt
+      # Optional: use a yt-dlp other than the one baked into the image (must exist in the
+      # container, e.g. bind-mounted in):
+      # PODSYNC_YTDLP_PATH: /config/yt-dlp
+    ports:
+      - "8080:8080" # feeds, media, and the (Basic-auth-protected) web UI
+
+# ---- no web UI ----
+# If you add feeds by hand-editing config.toml and never run the UI, add this to environment:
+# above (and drop PODSYNC_USERNAME/PODSYNC_PASSWORD, which are then unused):
+#   PODSYNC_WEBUI_DISABLED: "true"

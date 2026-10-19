@@ -1,7 +1,7 @@
 {{define "content"}}
 <div class="toolbar">
   <input type="search" name="q" placeholder="Search feeds and episodes…" autocomplete="off" aria-label="Search" hx-get="/search" hx-trigger="input changed delay:300ms, search" hx-target="#content" hx-swap="innerHTML">
-  <button class="btn" hx-post="/pull" hx-target="#status" hx-swap="outerHTML">Check all feeds now</button>
+  <button class="icon-btn" title="Check all feeds now" aria-label="Check all feeds now" hx-post="/pull" hx-target="#status" hx-swap="outerHTML">{{template "icon_refresh"}}</button>
 </div>
 <div id="content">{{template "library_body" .}}</div>
 {{end}}

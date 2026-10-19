@@ -3,9 +3,8 @@
 <section class="panel">
   <form hx-post="/add/find" hx-target="#found" hx-disabled-elt="find button" hx-indicator="this" class="inline-form">
     <input type="text" name="q" placeholder="Channel name, @handle, or a YouTube channel or playlist link" required autocomplete="off" autofocus>
-    <button class="btn primary" type="submit">Find <span class="indicator spinner"></span></button>
+    <button class="icon-btn primary" type="submit" title="Find" aria-label="Find">{{template "icon_search"}}</button>
   </form>
-  <p class="muted">A link or @handle goes straight to that feed; anything else searches channels by name. Playlists need their link.</p>
 </section>
 <div id="found"></div>
 {{end}}

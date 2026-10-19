@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -55,6 +56,7 @@ type FeedSettings struct {
 	TitleExclude    string
 	CleanupKeepLast *int
 	PageSize        *int
+	OPMLExclude     bool
 }
 
 // Episode states shown to users: the library status plus live and listing-only states.
@@ -99,11 +101,10 @@ type AddFeedRequest struct {
 
 // Settings is the configuration as the settings page shows it. Only some of it
 // is editable there: the concurrency, update interval, self-update switch and
-// the feed defaults. Everything else (addresses, data directory, the public
-// address, the yt-dlp path and the cookies file) belongs to whoever runs the
-// service, so it is shown read-only and changed in config.toml.
+// the feed defaults. Everything belonging to the deployment (the listen
+// address, the public address, the data directory, the yt-dlp cookies file)
+// is an environment variable, not shown or edited here.
 type Settings struct {
-	Server     podsync.Server
 	Download   podsync.Download
 	Defaults   podsync.Options
 	ConfigPath string
@@ -111,7 +112,6 @@ type Settings struct {
 
 type SettingsResult struct {
 	Settings
-	RestartRequired bool
 	// ApplyErr is set when the settings were saved but the sync service could
 	// not be told (it applies them the next time it is asked to, or restarts).
 	ApplyErr error
@@ -123,8 +123,8 @@ var errSyncDown = "Saved, but the sync service could not be reached, so it will 
 
 // ---- feeds ----
 
-func (s *Server) rssURL(cfg podsync.Config, id string) string {
-	return cfg.Server.BaseURL + "/feeds/" + id + ".xml"
+func (s *Server) rssURL(id string) string {
+	return s.baseURL + "/feeds/" + id + ".xml"
 }
 
 func (s *Server) summary(cfg podsync.Config, f podsync.Feed) FeedSummary {
@@ -135,7 +135,7 @@ func (s *Server) summary(cfg podsync.Config, f podsync.Feed) FeedSummary {
 	}
 	return FeedSummary{
 		ID: f.ID, Source: f.Source, Kind: f.Kind, Name: name,
-		Description: lf.Meta.Description, ImageURL: lf.Meta.ImageURL, RSSURL: s.rssURL(cfg, f.ID),
+		Description: lf.Meta.Description, ImageURL: lf.Meta.ImageURL, RSSURL: s.rssURL(f.ID),
 		Episodes: lf.Downloaded, Bytes: lf.Bytes, LastPull: lf.Meta.LastPull, HasOverrides: f.HasOverrides(),
 	}
 }
@@ -413,6 +413,7 @@ func (s *Server) UpdateFeed(ctx context.Context, id string, upd FeedSettings) (F
 			f.Format, f.MaxResolution, f.MinDuration = upd.Format, upd.MaxResolution, upd.MinDuration
 			f.TitleInclude, f.TitleExclude = upd.TitleInclude, upd.TitleExclude
 			f.CleanupKeepLast, f.PageSize = upd.CleanupKeepLast, upd.PageSize
+			f.OPMLExclude = upd.OPMLExclude
 			return nil
 		}
 		return podsync.NotFound("no such feed %q", id)
@@ -450,6 +451,45 @@ func (s *Server) DeleteFeed(ctx context.Context, id string, deleteFiles bool) er
 	return nil
 }
 
+// DeleteMedia removes the downloaded files of the given episodes. Each record
+// stays, as "cleaned", so the episode is not downloaded again. It returns the
+// IDs it removed; episodes that are not downloaded are skipped.
+func (s *Server) DeleteMedia(ctx context.Context, feedID string, ids []string) ([]string, error) {
+	if _, _, err := s.feed(feedID); err != nil {
+		return nil, err
+	}
+	if len(ids) == 0 {
+		return nil, podsync.Invalid("no episodes selected")
+	}
+	var removed []string
+	var errs []error
+	seen := map[string]bool{}
+	for _, id := range ids {
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		ep, ok := s.lib.Episode(feedID, id)
+		if !ok || ep.Status != podsync.StatusDownloaded {
+			continue
+		}
+		if err := s.lib.RemoveMedia(feedID, ep); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", ep.Title, err))
+			continue
+		}
+		ep.Status, ep.File, ep.Size = podsync.StatusCleaned, "", 0
+		if err := s.lib.PutEpisode(feedID, ep); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", ep.Title, err))
+			continue
+		}
+		removed = append(removed, id)
+	}
+	if len(removed) > 0 {
+		_, _ = s.applyBestEffort(ctx)
+	}
+	return removed, errors.Join(errs...)
+}
+
 func (s *Server) DeleteOrphan(ctx context.Context, id string) error {
 	if _, configured := s.cfg.Get().Feed(id); configured {
 		return podsync.Invalid("feed is still configured")
@@ -463,15 +503,15 @@ func (s *Server) DeleteOrphan(ctx context.Context, id string) error {
 // ---- settings ----
 
 func (s *Server) settings(c podsync.Config) Settings {
-	return Settings{Server: c.Server, Download: c.Download, Defaults: c.Defaults, ConfigPath: s.cfg.Path()}
+	return Settings{Download: c.Download, Defaults: c.Defaults, ConfigPath: s.cfg.Path()}
 }
 
 func (s *Server) Settings(ctx context.Context) Settings { return s.settings(s.cfg.Get()) }
 
 // UpdateSettings saves the editable settings (concurrency, update interval,
 // self-update, feed defaults) and tells the sync service to apply them. Anything
-// else in the submitted Settings is ignored, so a form post cannot change the
-// public address, the yt-dlp path or the cookies file.
+// else in the submitted Settings is ignored, so a form post cannot change
+// deployment settings, which are not part of this file at all.
 func (s *Server) UpdateSettings(ctx context.Context, in Settings) (SettingsResult, error) {
 	err := s.cfg.Update(func(c *podsync.Config) error {
 		c.Download.Concurrency = in.Download.Concurrency
@@ -484,8 +524,7 @@ func (s *Server) UpdateSettings(ctx context.Context, in Settings) (SettingsResul
 		return SettingsResult{}, err
 	}
 	res := SettingsResult{Settings: s.settings(s.cfg.Get())}
-	applied, err := s.applyBestEffort(ctx)
-	res.ApplyErr, res.RestartRequired = err, applied.RestartRequired
+	_, res.ApplyErr = s.applyBestEffort(ctx)
 	return res, nil
 }
 

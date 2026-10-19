@@ -1,19 +1,19 @@
 # Copy to compose.yaml and adjust. Then: docker compose up -d
-# Two services that share the config file and the data directory:
-#   syncr - fetches episodes with yt-dlp and PUBLISHES the podcast feeds and media (port 8080).
-#           Its control API (port 8081) is for the web UI only and is not published.
-#   webui - the library management interface, for internal use (port 8090). Do not expose it publicly.
-# Both run as the same user so they can both write ./config and ./data.
-# Set "Public address of the sync service" in the web UI's Settings to http://<this-host>:8080:
-# podcast apps use it, and so does your browser when the web UI shows thumbnails.
+# One service, one port (8080): fetches episodes with yt-dlp, PUBLISHES the podcast feeds and
+# media, and (unless disabled) serves the management web UI, all behind the same listener.
+# The feed/media endpoints are public (that's what podcast apps fetch); the web UI requires the
+# HTTP Basic login set by PODSYNC_USERNAME/PODSYNC_PASSWORD below.
+# None of this is in config.toml; it's all environment variables (podsync also accepts -listen
+# and -config flags, for running it by hand outside Docker, but the image doesn't use them).
+# podsync fails to start with a message naming whatever's missing or invalid.
+# Set PODSYNC_BASE_URL to http://<this-host>:8080: podcast apps use it, and so does your browser
+# when the web UI shows thumbnails.
 services:
-  syncr:
-    image: podsync-syncr:latest
-    # Build it yourself (multi-arch: docker buildx build --platform linux/amd64,linux/arm64 --target syncr .):
-    build:
-      context: .
-      target: syncr
-    container_name: podsync-syncr
+  podsync:
+    image: podsync:latest
+    # Build it yourself (multi-arch: docker buildx build --platform linux/amd64,linux/arm64 .):
+    build: .
+    container_name: podsync
     restart: unless-stopped
     volumes:
       # Mount the *directory*, not the single file: the app rewrites config.toml when you
@@ -26,27 +26,18 @@ services:
     user: "1000:1000"
     environment:
       TZ: UTC
+      PODSYNC_BASE_URL: http://<this-host>:8080
+      PODSYNC_USERNAME: admin
+      PODSYNC_PASSWORD: change-me # required unless PODSYNC_WEBUI_DISABLED is true
+      # Optional: cookies for YouTube sign-in checks (put cookies.txt in ./config):
+      # PODSYNC_COOKIES_FILE: /config/cookies.txt
+      # Optional: use a yt-dlp other than the one baked into the image (must exist in the
+      # container, e.g. bind-mounted in):
+      # PODSYNC_YTDLP_PATH: /config/yt-dlp
     ports:
-      - "8080:8080" # feeds and media, for podcast apps
-    # The control API (8081) is deliberately not published: it has no login.
-    # Optional: cookies for YouTube sign-in checks (then set download.cookies_file = "/config/cookies.txt")
-    #   put cookies.txt in ./config
+      - "8080:8080" # feeds, media, and the (Basic-auth-protected) web UI
 
-  webui:
-    image: podsync-webui:latest
-    build:
-      context: .
-      target: webui
-    container_name: podsync-webui
-    restart: unless-stopped
-    depends_on:
-      - syncr
-    ports:
-      - "8090:8090" # internal management UI
-    volumes:
-      # The same two folders as syncr: the web UI edits config.toml and reads/deletes media directly.
-      - ./config:/config
-      - ./data:/data
-    user: "1000:1000"
-    environment:
-      SYNCR_URL: http://syncr:8081
+# ---- no web UI ----
+# If you add feeds by hand-editing config.toml and never run the UI, add this to environment:
+# above (and drop PODSYNC_USERNAME/PODSYNC_PASSWORD, which are then unused):
+#   PODSYNC_WEBUI_DISABLED: "true"

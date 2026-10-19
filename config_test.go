@@ -44,14 +44,11 @@ func TestValidateRejectsBadValues(t *testing.T) {
 		"dup feed":      func(c *Config) { c.Feeds = append(c.Feeds, c.Feeds[0]) },
 		"unsafe id":     func(c *Config) { c.Feeds[0].ID = "../x" },
 		"bad interval":  func(c *Config) { c.Download.UpdateInterval = Duration(5 * time.Second) },
-		"bad base url":  func(c *Config) { c.Server.BaseURL = "localhost" },
 		"zero page":     func(c *Config) { c.Defaults.PageSize = 0 },
 		"neg min dur":   func(c *Config) { c.Defaults.MinDuration = -1 },
 		"feed bad kind": func(c *Config) { c.Feeds[0].Kind = "user" },
 		"feed override": func(c *Config) { c.Feeds[0].PageSize = ptr(9999) },
 		"concurrency":   func(c *Config) { c.Download.Concurrency = 99 },
-		"no api addr":   func(c *Config) { c.Server.APIAddr = "" },
-		"shared port":   func(c *Config) { c.Server.APIAddr = c.Server.ListenAddr },
 	}
 	if err := validConfig().Validate(); err != nil {
 		t.Fatalf("valid config rejected: %v", err)
@@ -148,3 +145,4 @@ func TestEpisodeFilter(t *testing.T) {
 		t.Fatal("without a feed pattern every title passes")
 	}
 }
+

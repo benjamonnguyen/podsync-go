@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -20,6 +22,7 @@ type rowView struct {
 	FeedID, FeedName string
 	ShowFeed         bool // show the feed name (cross-feed search results)
 	ShowChannel      bool // show the uploader (playlists mix channels)
+	OOB              bool // render as an out-of-band swap that replaces the row with the same id
 }
 
 // Thumb is the local thumbnail (served by syncr) when the episode has one,
@@ -169,6 +172,42 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.renderRow(w, r, detail, hint)
+}
+
+// handleDeleteMedia removes the media of the selected episodes and answers with
+// their updated rows as out-of-band swaps (the rows may sit in either list).
+func (s *Server) handleDeleteMedia(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	detail, err := s.Feed(r.Context(), id)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		s.fail(w, r, podsync.Invalid("bad form"))
+		return
+	}
+	removed, delErr := s.DeleteMedia(r.Context(), id, r.Form["ep"])
+	if len(removed) > 0 {
+		w.Header().Set("HX-Trigger", "episodes-changed")
+	}
+	if delErr != nil {
+		s.fail(w, r, delErr)
+		return
+	}
+	var buf strings.Builder
+	for _, epID := range removed {
+		v, err := s.Episode(r.Context(), id, podsync.EpisodeInfo{ID: epID})
+		if err != nil {
+			continue
+		}
+		row := rowView{EpisodeView: v, base: s.mediaBase(), FeedID: id, FeedName: detail.Name, ShowChannel: detail.Kind == podsync.FeedPlaylist, OOB: true}
+		if err := s.frag.ExecuteTemplate(&buf, "episode_row", row); err != nil {
+			log.Printf("render row: %v", err)
+		}
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	fmt.Fprint(w, buf.String())
 }
 
 func (s *Server) handleRow(w http.ResponseWriter, r *http.Request) {

@@ -36,6 +36,7 @@ type Source struct {
 	Active     int
 	MaxActive  int
 	UpdateRuns int
+	ListCalls  int // number of ListEpisodes calls, for asserting how many pages a test fetched
 }
 
 func NewSource() *Source {
@@ -86,6 +87,7 @@ func (s *Source) Find(_ context.Context, query string) ([]podsync.FeedInfo, erro
 func (s *Source) ListEpisodes(_ context.Context, _ podsync.FeedInfo, offset, limit int) ([]podsync.EpisodeInfo, error) {
 	s.Mu.Lock()
 	defer s.Mu.Unlock()
+	s.ListCalls++
 	if s.ListErr != nil {
 		return nil, s.ListErr
 	}

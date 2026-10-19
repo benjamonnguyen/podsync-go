@@ -7,6 +7,8 @@ const check = (name, cond, extra = '') => { console.log((cond ? 'PASS ' : 'FAIL 
 
 const browser = await puppeteer.launch({ executablePath: process.env.CHROMIUM || '/usr/bin/chromium', headless: true, args: ['--no-sandbox'] });
 const page = await browser.newPage();
+// The management portal is behind HTTP Basic auth; the feed/media endpoints are not.
+await page.authenticate({ username: process.env.E2E_USER, password: process.env.E2E_PASSWORD });
 await page.setViewport({ width: 1000, height: 900 });
 const consoleErrors = [];
 page.on('console', m => { if (['error', 'warning'].includes(m.type())) consoleErrors.push(m.text()); });
@@ -110,6 +112,23 @@ await shot('5-settings-error');
 await page.goto(BASE + '/feed/UCe2eFailChannelBBBBBBBB/delete');
 await Promise.all([page.waitForNavigation({ waitUntil: 'domcontentloaded' }), page.click('button.danger')]);
 check('feed deleted (files kept, shown as orphan)', (await text('#content')).includes('Not in config') && !(await text('#content')).match(/E2E Failing Channel[\s\S]*Check now/));
+
+// 11. Select episodes and delete their files
+page.on('dialog', d => d.accept());
+await page.goto(BASE + '/feed/' + OK);
+const downloadedBefore = Number((await text('#feed-stats')).match(/(\d+) episodes downloaded/)[1]);
+check('checkboxes are hidden until select mode', await page.$$eval('input.sel', cbs => cbs.length > 0 && cbs.every(c => getComputedStyle(c).display === 'none')));
+await page.click('[data-select-toggle]');
+check('select mode shows checkboxes and the bar', await page.$$eval('input.sel', cbs => cbs.every(c => getComputedStyle(c).display !== 'none')) && (await page.$eval('#bulk-delete', f => !f.hidden)));
+check('delete is disabled with nothing selected', await page.$eval('#bulk-delete button[type=submit]', b => b.disabled));
+const picked = await page.$$eval('#episodes input.sel', cbs => cbs.slice(0, 2).map(c => c.value));
+for (const id of picked) await page.click(`input.sel[value="${id}"]`);
+check('count follows the selection', (await text('#sel-count')) === '2 selected' && await page.$eval('#bulk-delete button[type=submit]', b => !b.disabled), await text('#sel-count'));
+await page.click('#bulk-delete button[type=submit]');
+check('deleted rows turn into removed rows', await waitFor(ids => ids.every(id => { const r = document.getElementById('ep-' + id); return r && r.classList.contains('faded') && /removed/.test(r.textContent) && !r.querySelector('input.sel'); }), 10000, picked));
+check('select mode ends after deleting', await page.evaluate(() => !document.body.classList.contains('selecting') && document.getElementById('bulk-delete').hidden));
+check('stats drop by the deleted count', await waitFor(n => new RegExp((n - 2) + ' episodes downloaded').test(document.getElementById('feed-stats').textContent), 10000, downloadedBefore), await text('#feed-stats'));
+await shot('6-selected-deleted');
 
 const realErrors = consoleErrors.filter(e => !/ERR_NAME_NOT_RESOLVED/.test(e));
 check('no console errors / CSP violations', realErrors.length === 0, JSON.stringify(realErrors));

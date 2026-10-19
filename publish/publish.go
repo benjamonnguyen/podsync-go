@@ -11,18 +11,22 @@ import (
 	"time"
 
 	"podsync"
+	"podsync/opml"
 	"podsync/rss"
 )
 
-// Server publishes feeds and media from a Library.
+// Server publishes feeds and media from a Library. baseURL is syncr's public
+// address (how podcast apps and browsers reach it); it is fixed for the
+// process lifetime, set by a flag/environment variable, not the config file.
 type Server struct {
-	cfg podsync.ConfigStore
-	lib podsync.Library
-	now func() time.Time
+	cfg     podsync.ConfigStore
+	lib     podsync.Library
+	baseURL string
+	now     func() time.Time
 }
 
-func NewServer(cfg podsync.ConfigStore, lib podsync.Library) *Server {
-	return &Server{cfg: cfg, lib: lib, now: time.Now}
+func NewServer(cfg podsync.ConfigStore, lib podsync.Library, baseURL string) *Server {
+	return &Server{cfg: cfg, lib: lib, baseURL: baseURL, now: time.Now}
 }
 
 func (s *Server) Handler() http.Handler {
@@ -30,6 +34,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { fmt.Fprintln(w, "ok") })
 	mux.HandleFunc("GET /feeds/{file}", s.serveRSS)
 	mux.HandleFunc("GET /media/{id}/{file}", s.serveMedia)
+	mux.HandleFunc("GET /opml.xml", s.serveOPML)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		mux.ServeHTTP(w, r)
@@ -42,8 +47,7 @@ func (s *Server) serveRSS(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	cfg := s.cfg.Get()
-	f, ok := cfg.Feed(id)
+	f, ok := s.cfg.Get().Feed(id)
 	if !ok {
 		http.NotFound(w, r)
 		return
@@ -53,7 +57,7 @@ func (s *Server) serveRSS(w http.ResponseWriter, r *http.Request) {
 	if title == "" {
 		title = lf.Meta.Name
 	}
-	base := cfg.Server.BaseURL
+	base := s.baseURL
 	out, err := rss.Build(base, rss.Feed{
 		ID: id, Title: title, Description: lf.Meta.Description, ImageURL: lf.Meta.ImageURL,
 		Link: base, Self: base + "/feeds/" + id + ".xml",
@@ -63,6 +67,30 @@ func (s *Server) serveRSS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/rss+xml; charset=utf-8")
+	_, _ = w.Write(out)
+}
+
+func (s *Server) serveOPML(w http.ResponseWriter, r *http.Request) {
+	base := s.baseURL
+	cfg := s.cfg.Get()
+	var feeds []opml.Feed
+	for _, f := range cfg.Feeds {
+		if f.OPMLExclude {
+			continue
+		}
+		lf, _ := s.lib.Feed(f.ID)
+		title := f.Name
+		if title == "" {
+			title = lf.Meta.Name
+		}
+		feeds = append(feeds, opml.Feed{Title: title, XMLURL: base + "/feeds/" + f.ID + ".xml", HTMLURL: base})
+	}
+	out, err := opml.Build("podsync", feeds)
+	if err != nil {
+		http.Error(w, "could not build OPML", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/x-opml; charset=utf-8")
 	_, _ = w.Write(out)
 }
 

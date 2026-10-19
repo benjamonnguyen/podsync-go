@@ -4,16 +4,6 @@
 {{if .Err}}<div class="notice err"><strong>Not saved.</strong><pre>{{.Err}}</pre></div>{{end}}
 <form method="post" action="/settings" class="settings">
   <fieldset>
-    <legend>Server</legend>
-    <p class="muted">These belong to whoever runs the service, so they are changed in <code>config.toml</code> (followed by a restart where needed), not here:</p>
-    <dl class="facts">
-      <dt>Feeds and media published on</dt><dd><code>{{.Cfg.Server.ListenAddr}}</code>, reached by podcast apps at <code>{{.Cfg.Server.BaseURL}}</code></dd>
-      <dt>Control API (private)</dt><dd><code>{{.Cfg.Server.APIAddr}}</code></dd>
-      <dt>Data directory</dt><dd><code>{{.Cfg.Server.DataDir}}</code></dd>
-      <dt>yt-dlp</dt><dd><code>{{.Cfg.Download.YtDlpPath}}</code>{{with .Cfg.Download.CookiesFile}}, cookies file <code>{{.}}</code>{{end}}</dd>
-    </dl>
-  </fieldset>
-  <fieldset>
     <legend>Downloading</legend>
     <label>Simultaneous downloads <input type="number" name="concurrency" min="1" max="16" value="{{.Cfg.Download.Concurrency}}" required></label>
     <label>Check feeds every <input type="text" name="update_interval" value="{{.Cfg.Download.UpdateInterval}}" required><small>For example 30m or 2h. Minimum 1m.</small></label>
@@ -35,4 +25,5 @@
   <div class="actions"><button class="btn primary" type="submit">Save and apply</button></div>
 </form>
 <p class="muted">Config file: <code>{{.ConfigPath}}</code></p>
+<p class="muted">OPML export of all subscriptions: <a href="/opml.xml">/opml.xml</a> (served without login, like feeds and media; each feed can opt out on its own settings page)</p>
 {{end}}

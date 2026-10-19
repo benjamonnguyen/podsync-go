@@ -34,11 +34,7 @@ func (s *Service) Apply(ctx context.Context) (podsync.ApplyResult, error) {
 		return podsync.ApplyResult{}, err
 	}
 	s.Reconcile()
-	cur := s.cfg.Get().Server
-	return podsync.ApplyResult{
-		Changed:         changed,
-		RestartRequired: cur.ListenAddr != s.started.ListenAddr || cur.APIAddr != s.started.APIAddr || cur.DataDir != s.started.DataDir,
-	}, nil
+	return podsync.ApplyResult{Changed: changed}, nil
 }
 
 // Pull queues an update (one feed or all) or a manual episode download.

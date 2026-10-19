@@ -47,68 +47,61 @@ manual refresh, settings, issue banner) instead of config-file-only operation.
 
 ## 4. Architecture
 
-Two programs that share the config file and the data directory. **syncr publishes the feeds; the web UI is
-internal, for library management.**
+One process, one listener, sharing the config file and the data directory with itself. **podsync publishes
+the feeds and serves the management web UI from the same port.**
 
 ```
                       config.toml          data/ (media + JSON sidecars)
                        ▲   ▲                    ▲   ▲
                  writes│   │reads         reads/│   │writes
                        │   │            deletes │   │
- you (browser) ──► webui (:8090) ── control API ──► syncr ──► yt-dlp, ffmpeg, deno
-                   (views, edits)   127.0.0.1:8081   │  scheduler, queue, cleanup
-                                                     └─ public (:8080): /feeds/<id>.xml, /media/...  ◄── podcast apps
+ you (browser) ──► web UI (in-process call) ──► sync loop ──► yt-dlp, ffmpeg, deno
+                   (views, edits)                  │  scheduler, queue, cleanup
+                   Basic auth required              │
+                                                    └─ public, same :8080: /feeds/<id>.xml, /media/...  ◄── podcast apps
 ```
 
-- **syncr** (`cmd/syncr`) runs yt-dlp: it lists feeds, downloads episodes, applies cleanup and writes the library.
-  It only *reads* the config file. It has two listeners: a **public** one (`server.listen_addr`) serving only the RSS
-  feeds, media and thumbnails (package `publish`), and a **private control API** (`server.api_addr`, loopback by
-  default, must differ from the public one) for the web UI (package `rest`).
-- **webui** (`cmd/webui`, everything in its main package) is the htmx interface for managing the library. It
-  reads and edits the config file, reads the library (and deletes feed folders), and renders pages. It does not
-  publish feeds. The feed links and thumbnail/media URLs it shows point at syncr's public address
-  (`server.base_url`), so the browser must be able to reach it. It has no yt-dlp.
-- Each program has its own in-memory view of the shared files and refreshes it: webui re-reads the config file and
-  rescans changed feed folders on every request (cheap when nothing changed); syncr does so on `apply` and at the
-  start of every pull.
-- The config file has one writer (webui); the library has one writer (syncr), with two small exceptions in webui:
-  deleting feed folders and writing a new feed's `_meta.json`.
-
-### 4.0 syncr's control API
-
-Only what needs the running service (it holds the queue and yt-dlp):
-
-| Endpoint | Purpose |
-|---|---|
-| `POST /api/v1/apply` | re-read config + rescan library after webui changed them |
-| `POST /api/v1/pull` | pull all feeds / one feed / download one episode now |
-| `GET /api/v1/status` | activity, issues, in-flight jobs, tool versions |
-| `GET /api/v1/resolve`, `GET /api/v1/search`, `GET /api/v1/feeds/{id}/listing` | source lookups (need yt-dlp) |
+- **cmd/podsync** is the one binary. It runs the sync loop (lists feeds, downloads episodes, applies cleanup,
+  writes the library), publishes the RSS feeds/media/thumbnails (package `publish`), and — unless
+  `PODSYNC_WEBUI_DISABLED` is set — serves the management web UI, all behind one `http.Server` on
+  `PODSYNC_LISTEN_ADDR`. The web UI calls the sync loop's methods directly (it implements `podsync.Syncer`),
+  in-process: no network hop, no second port, no "service unreachable" failure mode. Every deployment
+  setting is a `PODSYNC_`-prefixed environment variable; `-listen`/`-config` also accept a command-line flag
+  (for running instances by hand without Docker), and a flag wins over its environment variable when both
+  are given. podsync fails fast naming whatever's missing or invalid, before listening or touching yt-dlp.
+- Routing on the single mux: `/feeds/`, `/media/` and `/healthz` are always public and unauthenticated (that's
+  what podcast apps and container health checks fetch); everything else is mounted at `/` behind HTTP Basic
+  auth (`PODSYNC_USERNAME`/`PODSYNC_PASSWORD`, required unless the web UI is disabled).
+- The web UI reads and edits the config file, reads the library (and deletes feed folders), and renders pages;
+  it does not itself publish feeds — that's always package `publish`, mounted separately on the same mux. The
+  feed links and thumbnail/media URLs it shows point at the public address (`PODSYNC_BASE_URL`).
+- The web UI re-reads the config file and rescans changed feed folders on every request (cheap when nothing
+  changed), so hand edits to `config.toml` or changes from the sync loop are visible without a restart.
+- The config file has one writer (the web UI); the library has one writer (the sync loop), with two small
+  exceptions in the web UI: deleting feed folders and writing a new feed's `_meta.json`.
 
 ### 4.0.1 Package layout
 
 The root package `podsync` is the domain: types and interfaces only, no dependencies beyond the standard
-library. Subpackages are grouped by what they depend on. `cmd/syncr` wires them together; `cmd/webui` is the web
-UI itself (a main package that holds its handlers, templates and model).
+library. Subpackages are grouped by what they depend on. `cmd/podsync` wires everything together (sync loop,
+publisher, web UI) behind one listener.
 
 | Package | Depends on | Role |
 |---|---|---|
 | `podsync` (root) | stdlib | `Feed`/`Config`, `Episode`, `Source`, `Library`, `ConfigStore`, `StatusTracker`, the small `Syncer` contract, error kinds, `EpisodeFilter`, `Registry` |
 | `youtube` | yt-dlp | implements `podsync.Source` |
-| `fs` | filesystem | implements `podsync.Library` (+ atomic file writes, `Refresh` for multi-process use) |
+| `fs` | filesystem | implements `podsync.Library` (+ atomic file writes, `Refresh` for shared-state use) |
 | `toml` | BurntSushi/toml | implements `podsync.ConfigStore` (+ `Reload`) |
 | `status` | — | implements `podsync.StatusTracker` in memory |
-| `syncer` | root interfaces only | implements `podsync.Syncer`: the update loop, queue, cleanup (linked into syncr only) |
-| `publish` | net/http, rss | syncr's public side: RSS feeds, media, thumbnails |
-| `rest` | net/http | syncr's control API `Server`, and `Client` (implements `podsync.Syncer` over HTTP; used by webui) |
+| `syncer` | root interfaces only | implements `podsync.Syncer`: the update loop, queue, cleanup |
+| `publish` | net/http, rss | the public side: RSS feeds, media, thumbnails |
 | `rss` | encoding/xml | podcast feed rendering |
 | `mock` | — | test doubles |
-| `cmd/syncr` | everything above | wiring + two HTTP listeners |
-| `cmd/webui` | `podsync`, `fs`, `toml`, `rest` | the web UI: templates, handlers, view model |
+| `cmd/podsync` | everything above | wiring, the single HTTP listener, HTTP Basic auth for the web UI, the web UI's templates/handlers/view model |
 
-`podsync.Syncer` is the contract between the two programs: `syncer.Service` implements it inside syncr, and
-`rest.Client` implements it for webui. The webui binary does not link `syncer`, `youtube`, `publish` or `rss`.
-Errors of kind not-found / invalid / busy survive the HTTP boundary (`podsync.ErrNotFound`, `ErrInvalid`, `ErrBusy`).
+`podsync.Syncer` is implemented by `syncer.Service` and called directly by the web UI in the same process —
+there is no RPC boundary left to preserve error kinds across; `podsync.ErrNotFound`/`ErrInvalid`/`ErrBusy` are
+just ordinary Go errors now.
 
 ### 4.1 Source adapter pattern
 
@@ -259,21 +252,18 @@ data_dir/
   episode library state (download status, manual flag) is
   deliberately *not* here — see §4.3. Shape (illustrative):
 
-```toml
-[server]
-listen_addr = ":8080"
-base_url = "http://localhost:8080"   # absolute URL podcast apps use to reach this server (RSS enclosures)
-data_dir = "./data"          # feeds' media + sidecar JSON live here
+Deployment settings (the listen address, `base_url`, `data_dir`, the yt-dlp cookies file, the web
+UI toggle and its login) are environment variables, not in this file (there are no command-line
+flags). config.toml holds only feeds and what the web UI edits:
 
+```toml
 [download]
-yt_dlp_path = "yt-dlp"
 concurrency = 2              # global cap on simultaneous downloads
 update_interval = "30m"      # how often every feed is checked
 self_update = false          # run `yt-dlp -U` at startup and daily
-cookies_file = ""            # optional Netscape cookies.txt passed to yt-dlp
 
 [defaults]                    # template applied to newly-added feeds
-format = "video"              # "video" | "audio"
+format = "audio"              # "audio" | "video"
 max_resolution = 720
 min_duration = "61s"          # skip videos shorter than this: 61s skips Shorts (60s or less); "0s" = none
 cleanup_keep_last = 50        # 0 = unlimited, else keep N newest
@@ -320,22 +310,37 @@ inherit the default.
 ### 6.3 Discovery window (`page_size`)
 
 Modeled on upstream podsync's `page_size`: a single standing knob that caps
-how many of a feed's newest episodes are considered on **every** update
-cycle, including the first one after the feed is added. There is no separate
-backfill mode.
+how many of a feed's newest episodes a check considers by default. There is
+no separate backfill mode.
 
-- `page_size` (default `10`, overridable per feed). Each pull lists the
-  newest `page_size` episodes (`ListEpisodes(feed, 0, page_size)`), applies
-  the feed's filters, and downloads any not already present. Adding a feed
-  therefore downloads at most the newest `page_size` matching episodes — the
-  back-catalog beyond that is not fetched or even listed.
-- Older episodes are reachable on demand through the UI's Load More (§7),
-  which lists further windows (`offset = episodes already shown`) and lets
-  the user download individual ones.
-- Known tradeoff (same as upstream): if the server is down or paused long
-  enough for a feed to publish more than `page_size` episodes, the overflow
-  is skipped by the scheduler. Load More is the recovery path; raising
-  `page_size` for fast-publishing feeds is the preventive one.
+- `page_size` (default `10`, overridable per feed). A feed's first-ever check
+  lists exactly the newest `page_size` episodes (`ListEpisodes(feed, 0,
+  page_size)`), applies the feed's filters, and downloads any that pass.
+  Adding a feed therefore downloads at most the newest `page_size` matching
+  episodes on that first check — the back-catalog beyond that is not fetched
+  or even listed. (First-ever check = the library has no record — downloaded,
+  cleaned or failed — for this feed at all yet.)
+- Older episodes are also reachable on demand through the UI's Load More
+  (§7), which lists further windows (`offset = episodes already shown`) and
+  lets the user download individual ones.
+- **Catch-up on later checks**: unlike upstream, a `page_size`-sized window
+  that turns out to be *entirely* episodes with no library record at all is
+  treated as a signal that a publish burst outran `page_size`, not as "that's
+  just what's new." `listAndEnqueue` (package `syncer`) keeps fetching further
+  pages (`offset += page_size`) until a page contains at least one episode it
+  already has a record for (the boundary with what the previous check saw —
+  a record survives even after the media is deleted, so this works even if
+  the episode was since cleaned up), the feed runs out, or it has fetched
+  `maxCatchUpPages` (10) extra pages, whichever comes first. This never
+  triggers on a feed's first-ever check (nothing can be "known" yet — see
+  above), and it only runs extra `ListEpisodes` calls when the fast path
+  (single page, overlaps with what's known) wasn't enough.
+- Remaining tradeoff: a feed bursty enough to publish more than
+  `page_size * (maxCatchUpPages + 1)` episodes between two checks (or one
+  down/paused long enough to accumulate that many) will still lose the
+  oldest part of the burst to the scheduler — Load More is the manual
+  recovery path; raising `page_size` or shortening `update_interval` is the
+  preventive one.
 
 ## 7. Web UI Requirements
 
@@ -375,12 +380,13 @@ backfill mode.
   globally or per-feed, with visible progress/status.
 - **Settings page**: edits the operational knobs (simultaneous downloads, update
   interval, yt-dlp self-update) and the `[defaults]` for feeds, with an "Apply" action that
-  validates and writes config.toml, then tells syncr to apply it. Everything that belongs
-  to whoever runs the service is shown read-only and only changed in config.toml: the
-  public address (`base_url`), the listen/API addresses, the data directory, `yt_dlp_path`
-  and `cookies_file` (a web form must not be able to repoint the downloader or the
-  published address). Per-feed overrides are edited on the feed's own settings page and
-  written to that feed's entry in `[[feeds]]`.
+  validates and writes config.toml, then applies it to the running sync loop directly (an
+  in-process call, not a network request). Everything that belongs to whoever runs the
+  service — the public address (`base_url`), the listen address, the data directory, the
+  cookies file, the yt-dlp binary to use and the web UI's login — is an environment variable
+  (`-listen`/`-config` also accept a flag), not in config.toml at all, so the page doesn't show it
+  and a forged form post has nothing to repoint. Per-feed overrides are edited on the feed's own
+  settings page and written to that feed's entry in `[[feeds]]`.
 - **Add feed**: one box (§8): a link or @handle resolves to that feed, anything else is a
   channel name search; one match goes straight to a preview, several are listed. Playlists
   are added by link only. Optionally override `page_size` (§6.3); the feed is appended to
@@ -423,7 +429,7 @@ name search cannot tell playlists apart reliably. A bare word is a name, not a h
 - Config: TOML (`github.com/BurntSushi/toml` or `github.com/pelletier/go-toml`).
 - Storage: no database — filesystem + JSON sidecar files per §4.3, with an
   in-memory index built at startup. Standard library `encoding/json`.
-- HTTP: standard library `net/http` (Go 1.22 pattern routing) for both the REST API and the web UI; JSON over HTTP between the two programs.
+- HTTP: standard library `net/http` (Go 1.22 pattern routing) for the one listener (feeds, media and the web UI); the web UI calls the sync loop in-process, no JSON-over-HTTP boundary between them.
 - Web UI: server-rendered Go `html/template` + **htmx** for partial updates
   (triggering a force-pull and polling its status, debounced live search,
   Load More, the status banner), no Alpine.js needed. No Node build step, no SPA
@@ -433,17 +439,15 @@ name search cannot tell playlists apart reliably. A bare word is a name, not a h
 
 ## 10. Deployment
 
-- **Dockerfile**: multi-stage with two final targets. `webui` is a distroless static image holding just the
-  binary. `syncr` is `debian:bookworm-slim` with `ffmpeg`, a pinned `yt-dlp` binary and `deno` (yt-dlp's default
-  JavaScript runtime for YouTube); it sets `SYNCR_API_ADDR=:8081` so the web UI container can reach the control
-  API. Both binaries are built once on the build host's native arch and cross-compiled (no CGO).
-- **Multi-arch (amd64 + arm64)**: `docker buildx build --platform linux/amd64,linux/arm64 --target <syncr|webui> .`
-- **Health checks** use the programs' own `-healthcheck` flag (no curl in the web UI image), so they follow
-  whatever port is configured; syncr's probes both its listeners.
-- **`compose.example.yaml`**: two services mounting the same `./config` directory (not the single file: the app
-  rewrites config.toml and a single-file bind mount can't be replaced atomically) and `./data`, both running as
-  the user's uid. `syncr` publishes `8080` (feeds and media, for podcast apps) and not its API; `webui` publishes
-  `8090` (internal management) and reaches the API at `http://syncr:8081`.
+- **Dockerfile**: single multi-stage build, one final image: `debian:bookworm-slim` with `ffmpeg`, a pinned
+  `yt-dlp` binary and `deno` (yt-dlp's default JavaScript runtime for YouTube), plus the `podsync` binary. Built
+  once on the build host's native arch and cross-compiled (no CGO).
+- **Multi-arch (amd64 + arm64)**: `docker buildx build --platform linux/amd64,linux/arm64 .`
+- **Health checks** re-invoke the binary with `PODSYNC_HEALTHCHECK=1` (no flag — the program has none), which
+  just probes `/healthz` on `PODSYNC_LISTEN_ADDR`, unauthenticated regardless of whether the web UI is enabled.
+- **`compose.example.yaml`**: one service mounting `./config` (not the single file: the app rewrites
+  config.toml and a single-file bind mount can't be replaced atomically) and `./data`, running as the user's
+  uid, publishing one port, `8080` (feeds, media, and — behind its Basic login — the web UI).
 
 ## 11. Open Questions
 

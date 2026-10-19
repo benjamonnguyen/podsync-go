@@ -29,9 +29,15 @@ var (
 
 // Settings are read on every call so UI changes apply without a restart.
 type Settings struct {
-	YtDlpPath   string
 	CookiesFile string
+	// BinPath is the yt-dlp executable to run: a bare name resolved on PATH
+	// (the default, "yt-dlp") or an absolute/relative path. Empty means the default.
+	BinPath string
 }
+
+// DefaultBinPath is the executable name used when Settings.BinPath is empty:
+// resolved on PATH (the Docker image puts its bundled copy there).
+const DefaultBinPath = "yt-dlp"
 
 type YouTube struct {
 	settings func() Settings
@@ -79,16 +85,23 @@ func (y *YouTube) baseArgs() []string {
 	return args
 }
 
+func (y *YouTube) binPath() string {
+	if p := y.settings().BinPath; p != "" {
+		return p
+	}
+	return DefaultBinPath
+}
+
 func (y *YouTube) run(ctx context.Context, timeout time.Duration, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	path := y.settings().YtDlpPath
-	cmd := exec.CommandContext(ctx, path, args...)
+	bin := y.binPath()
+	cmd := exec.CommandContext(ctx, bin, args...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {
 		if errors.Is(err, exec.ErrNotFound) || errors.Is(err, os.ErrNotExist) {
-			return nil, &ytdlpError{Message: fmt.Sprintf("yt-dlp not found at %q (set download.yt_dlp_path)", path), Err: err}
+			return nil, &ytdlpError{Message: fmt.Sprintf("yt-dlp not found at %q", bin), Err: err}
 		}
 		if ctx.Err() != nil {
 			return nil, &ytdlpError{Message: "yt-dlp timed out or was cancelled", Err: ctx.Err()}
@@ -118,7 +131,7 @@ func friendlyError(stderr string, err error) string {
 	low := strings.ToLower(msg)
 	switch {
 	case strings.Contains(low, "sign in to confirm") || strings.Contains(low, "not a bot"):
-		msg += " — YouTube is asking for a login; set download.cookies_file to a cookies.txt exported from a signed-in browser"
+		msg += " — YouTube is asking for a login; set PODSYNC_COOKIES_FILE to a cookies.txt exported from a signed-in browser"
 	case strings.Contains(low, "http error 429") || strings.Contains(low, "too many requests"):
 		msg += " — rate limited by YouTube; it will be retried on the next update"
 	case strings.Contains(low, "unable to extract") || strings.Contains(low, "please report this issue"):

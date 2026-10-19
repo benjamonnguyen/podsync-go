@@ -1,32 +1,24 @@
-# Example podsync-go configuration with every option documented.
+# Example podsync-go configuration: feeds and the settings the web UI edits.
 # If the file doesn't exist the app creates one with these defaults.
 # NOTE: the web UI rewrites this file when you change settings or feeds, which drops
 # comments, so keep this example file for reference instead of annotating your live one.
-
-[server]
-listen_addr = ":8080"
-# syncr's private control API, used by the web UI. Must differ from listen_addr; keep it off untrusted networks.
-api_addr = "127.0.0.1:8081"
-# syncr's public address as podcast apps (and your browser, for thumbnails) reach listen_addr. Must work from your phone.
-base_url = "http://192.168.1.10:8080"
-# Where media files and metadata are stored (/data in the Docker image).
-data_dir = "./data"
+#
+# Everything about how the service is deployed (ports, the public address, the data
+# directory, the yt-dlp cookies file) is a flag or environment variable on each binary
+# instead, not part of this file. See compose.example.yaml for the full list, or run
+# `syncr -help` / `webui -help`.
 
 [download]
-# The next two settings, like the addresses above, are changed here only (the web UI shows but does not edit them).
-yt_dlp_path = "yt-dlp"
 # Maximum simultaneous downloads (1-16).
 concurrency = 2
 # How often every feed is checked for new episodes (minimum 1m).
 update_interval = "30m"
 # Run `yt-dlp -U` at startup and daily. YouTube changes often; keeping yt-dlp current avoids most failures.
 self_update = false
-# Optional cookies.txt (Netscape format) exported from a signed-in browser, for "confirm you're not a bot" errors.
-cookies_file = ""
 
 # Defaults applied to every feed; each feed can override any of them.
 [defaults]
-format = "video"            # "video" (mp4) or "audio" (m4a)
+format = "audio"            # "audio" (m4a) or "video" (mp4)
 max_resolution = 720        # pixels of height; 0 = no limit
 min_duration = "61s"        # skip videos shorter than this: 61s skips YouTube Shorts (60s or less); "0s" = download everything
 page_size = 10              # only the newest N episodes of a feed are considered per update
@@ -44,3 +36,4 @@ page_size = 5
 # Title filters exist per feed only (there are no global patterns). Go regular expressions, empty = off:
 title_exclude = "(?i)sponsored|#shorts"   # matching titles are skipped
 # title_include = "(?i)review"             # if set, only matching titles are downloaded
+# opml_exclude = true                      # leave this feed out of the /opml.xml export; absent/false = included

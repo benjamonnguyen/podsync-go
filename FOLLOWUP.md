@@ -5,8 +5,8 @@
 Running log of judgment calls made during unsupervised implementation.
 **⚠ = I was unsure; worth discussing.** Everything else I'm fairly comfortable with but is listed so you can veto it.
 
-## Start here: the 12 things I'd most like your eyes on
-1. ⚠ **No authentication** (as scoped). Anyone who can reach the port can delete feeds and download everything. Cheap guards exist (cross-site POST blocking, YouTube-only URL allowlist, CSP) but they are not auth. → *Security*.
+## Start here: the things I'd most like your eyes on
+1. ⚠ **HTTP Basic auth only, no TLS** (added in Round 4). Credentials go in the clear unless you put this behind a reverse proxy or a trusted/LAN-only network; `/feeds/` and `/media/` stay deliberately unauthenticated so podcast apps work. → *Security*.
 2. **Shorts are now a minimum duration (`min_duration`, default 61s), not a boolean.** It misfired on my first real test (a 19 s channel with the old default looked empty); that is still true by design, since anything under the minimum is skipped, so set `min_duration = "0s"` on tiny or playlist-style feeds. → *Latest round*.
 3. ⚠ **Name search depends on an undocumented YouTube `sp=` token** and has no fallback; links and @handles are unaffected. → *Latest round*.
 4. ⚠ **Playlists use YouTube's playlist order**, so an oldest-first playlist (a course/series) would only ever pull its first `page_size` episodes. podsync solves this with `playlist_sort`; I didn't. → *yt-dlp / YouTube adapter*.
@@ -14,10 +14,9 @@ Running log of judgment calls made during unsupervised implementation.
 6. ⚠ **The UI rewrites `config.toml` and drops hand-written comments/ordering.** `config.example.toml` is the documented reference. → *Config*.
 7. **Flat listings have no upload date**, so Load More rows show no date and dates only exist after download. → *yt-dlp / YouTube adapter*.
 8. ⚠ **Episodes inside the newest window that your filters skip are invisible** (no "filtered" badge, no way to grab one). Open question left in PROJECT.md. → *Web UI*.
-9. ⚠ **arm64 runtime image was not built** (only the Go cross-compile and the yt-dlp/deno arm64 layers were verified), and the amd64 image is 688 MB. → *Docker*.
-10. Blank per-feed field means "inherit", so you can't override a non-empty default with an empty regex. → *Web UI*.
-11. A permanently failed episode keeps its banner entry until retried/dismissed/restart. → *Puller*.
-12. Module path is now `podsync`; no license file was chosen; I committed at milestones. → *Setup*.
+9. ⚠ **arm64 runtime image was not built** (only the Go cross-compile and the yt-dlp/deno arm64 layers were verified). → *Docker*.
+10. A permanently failed episode keeps its banner entry until retried/dismissed/restart. → *Puller*.
+11. Module path is now `podsync`; no license file was chosen; I committed at milestones. → *Setup*.
 
 Real bugs my own tests/browser run caught along the way (all fixed): shared staging dir between concurrent downloads, UI refresh missing short downloads between polls, duplicated rows after Load More downloads, stale header stats. Details in the sections below.
 
@@ -157,17 +156,64 @@ Round 1: root `podsync` package for domain types, subpackages by dependency, `cm
 - ⚠ `data_dir` must resolve to the same place in both programs (Docker: both `WORKDIR /`; elsewhere run both from one directory or use an absolute path).
 - If syncr is unreachable the web UI keeps working for everything file-based and shows a non-dismissible banner; status calls time out after 3 s. Changes saved meanwhile apply at syncr's next start or pull. Podcast apps are unaffected as long as syncr's public port is up.
 - ⚠ Root types carry both `toml` and `json` tags (no separate DTOs); `syncer` is outside the root package; `toml` imports `fs` for `WriteFileAtomic`.
+
+## Round 4: consolidated into one binary, one port, Basic auth
+
+You asked to merge `cmd/syncr` and `cmd/webui`, run both behind one listener, and add real login for the
+management portal instead of relying on "keep it internal." Round 3's two-process, two-listener design (above)
+is now history, not the current state — see PROJECT.md §4 for what replaced it. Summary of what changed:
+
+- **One binary, `cmd/podsync`.** `cmd/syncr` and `cmd/webui` are gone; the web UI's handlers/templates/model
+  moved into `cmd/podsync` unchanged (they only ever depended on the `podsync.Syncer` interface, not the REST
+  client specifically). `rest.Server`/`rest.Client` and the whole control API are deleted — the web UI calls
+  `*syncer.Service` directly now, since it's the same process. `rest.CrossSiteGuard` was inlined into
+  `cmd/podsync/server.go` as `crossSiteGuard`; package `rest` no longer exists.
+- **One listener.** `PODSYNC_LISTEN_ADDR` (default `:8080`) serves everything: `/feeds/`, `/media/`
+  and `/healthz` are always public (mounted from package `publish`, unauthenticated); `/` is the web UI, wrapped
+  in HTTP Basic auth, unless disabled.
+- **The "sync service unreachable" failure mode is gone.** Since the web UI calls the sync loop in-process,
+  there's no second process to be down. Removed the webui tests that simulated an unreachable `rest.Client`
+  (`TestSettingsSavedEvenWhenSyncServiceIsDown`, `TestSyncServiceOutageIsVisibleButBrowsingStillWorks`) — that
+  scenario can no longer happen.
+- **New env vars**: `PODSYNC_WEBUI_DISABLED` (default `false`) replaces `PODSYNC_API_ENABLED`; `PODSYNC_USERNAME` and
+  `PODSYNC_PASSWORD` are required unless the web UI is disabled (checked in `config.validate`,
+  constant-time-compared in `basicAuth`). `PODSYNC_API_ADDR`, `SYNCR_URL`, `WEBUI_LISTEN` are gone.
+- Dockerfile is single-stage-output now (one image, no `--target syncr|webui`); `compose.example.yaml` is one
+  service on port 8080; `dev/run.sh` and `e2e/run.sh` build and run the one binary (`e2e/run.mjs` now calls
+  `page.authenticate()` with the test credentials before driving the UI).
+- ⚠ Not done: TLS. Basic auth sends credentials in the clear, so the README still tells people to put this
+  behind a reverse proxy or a trusted network if the deployment isn't already LAN-only.
+
+### Round 4.1: dropped command-line flags entirely
+
+You followed up: no command flags at all, environment variables only, fail with a clear message if an
+essential one is missing; rename the web UI's login env vars to the plainer `PODSYNC_USERNAME`/`PODSYNC_PASSWORD` (no
+`PODSYNC_` prefix, no separate OS user to create — it's just the HTTP Basic pair). Changes:
+
+- `cmd/podsync/main.go` lost `parseFlags`/the `flag` import entirely; `configFromEnv()` reads the environment
+  directly. `PODSYNC_WEBUI_USER`/`PODSYNC_WEBUI_PASSWORD` renamed to `PODSYNC_USERNAME`/`PODSYNC_PASSWORD`.
+- `PODSYNC_BASE_URL` is now **required** (previously defaulted to `http://localhost:8080`, which only worked
+  by accident on the same machine); `config.validate()` fails with `"PODSYNC_BASE_URL is required (your
+  address, e.g. http://192.168.1.10:8080)"` if unset, before touching the network or the config file.
+- `-version` and `-healthcheck` (and `showVersion`/`healthcheck` in `main()`) are gone along with the rest of
+  the flags. Health checks now work by re-invoking the same binary with `PODSYNC_HEALTHCHECK=1` set, which
+  just probes `/healthz` and exits 0/1 — see the Dockerfile's `HEALTHCHECK` line (`env PODSYNC_HEALTHCHECK=1
+  /usr/local/bin/podsync`). `-version`'s only use was a human typing it at a shell; not worth keeping a
+  special-case env var for it, so it's gone with no replacement (the version still appears in the startup log
+  line, from the ldflags-injected `main.version`).
+- Updated `Dockerfile`, `compose.example.yaml`, `dev/run.sh`, `e2e/run.sh` and the README/PROJECT.md tables to
+  match; verified by hand (no flags passed, env vars only): missing `PODSYNC_BASE_URL` and missing
+  `PODSYNC_USERNAME`/`PODSYNC_PASSWORD` each fail fast with the expected message and exit 1; a full set of env vars starts the
+  server, `/healthz` and `/feeds/...` answer without credentials, `/` 401s without or with wrong credentials
+  and 200s with the right ones, and `PODSYNC_HEALTHCHECK=1` exits 0 against the running instance.
 - Bug fixed along the way (since the first pass): `html/template` doesn't URL-escape `hx-*` attributes, so a title with `&`, `#` or `+` broke that row's polling. Now `urlquery`-escaped, with a test.
 - Tests: the web UI suite runs a two-program setup in one process (two `ConfigStore`s and `Library`s over one temp config file and data dir, the real syncer behind the real REST server and client). The browser run (`e2e/run.sh`) starts both real binaries on one file and one directory.
 
-### Docker, after the split
-- **Verified (amd64), the real shape:** two containers as uid 1000 on one user network, mounting the same `/config` and `/data`; both `healthy` via `-healthcheck` (syncr's probes both listeners). Through the web UI I set the public address, added a real channel, downloaded a real video as m4a plus its jpg; **syncr's published port** served the RSS feed, the media (including `Range`) and the thumbnail, returned 404 for `/api/...` on that port, the web UI's port returned 404 for feeds, and the UI's thumbnails pointed at syncr's published address.
-- Sizes: web UI ≈ 12 MB (distroless), syncr ≈ 686 MB (ffmpeg's dependency tree and deno).
-- ⚠ arm64 runtime still unverified for both images (Go cross-compile and the arm64 yt-dlp/deno layers were checked earlier).
-- ⚠ The web UI container needs **write** access to `config` and `data`, so both services run as the same user, as in the compose example.
+### Docker, superseded by the Round 4 merge
+(This subsection described the two-container shape from Round 3 — separate `podsync-syncr`/`podsync-webui` images, 12 MB + 686 MB. Round 4 deleted `cmd/syncr`/`cmd/webui` in favor of one `cmd/podsync` binary and one image, so that verification no longer describes reality.) ⚠ **Not re-verified since the merge**: an actual `docker build`/`docker compose up` of the current single-image `Dockerfile`/`compose.example.yaml`, current image size, and arm64 runtime. Covered by the pre-release checklist's "walk the quick start from a clean clone" item — do that before relying on this being tested.
 
 ### The dev instance
-`dev/run.sh` runs both programs on `dev/config.toml`: web UI on **:8090**, feeds on **:8080**, API on loopback **:8081**, `base_url = "http://towhee:8080"`. (Earlier I stopped the dev stack by accident with a `pkill -f` that matched my own shell, which is why `towhee:8080` stopped answering; it's running again.) The host's `ufw` is default-deny with only port 22 open, so other machines can't reach 8090 or 8080 until you allow them; I can't change that without sudo. Needed: 8090 (the UI, your machines only) and 8080 (feeds, for podcast apps); **not** 8081.
+`dev/run.sh` builds and runs the one `cmd/podsync` binary on `dev/config.toml`: everything (feeds, media, web UI) on **:8080**, `PODSYNC_BASE_URL=http://100.120.50.37:8080`, Basic auth `dev`/`dev`. The host's `ufw` is default-deny with only port 22 open, so other machines can't reach 8080 until you allow it; I can't change that without sudo.
 
 
 ## Latest round: lookup, defaults, and what the web UI may edit
@@ -194,3 +240,26 @@ Round 1: root `podsync` package for domain types, subpackages by dependency, `cm
 - ⚠ **Old config files fail to load** if they contain `cleanup_after_days`, `[defaults] title_include/title_exclude`, or `exclude_shorts`; strict parsing names the offending key. Nothing was released, so no migration. Tests assert each of these is rejected, and a test that `config.example.toml` and `dev/config.toml` still parse caught my own stale example during this change.
 - Sidecars and feeds written by earlier builds still load: unknown JSON fields in sidecars are ignored.
 - Verified: unit/HTTP tests (race), browser run (35 checks), dev instance restarted on the new build.
+
+
+## Pre-release checklist (before the first public release)
+Nothing has been released yet, which is why config keys were renamed and removed without migrations. Go through this before tagging and publishing.
+
+**Docker env vars and config setup (review these first)**
+- [ ] **List every environment variable and decide the final set.** Today, one binary/one image: `PODSYNC_CONFIG`, `PODSYNC_DATA_DIR`, `PODSYNC_LISTEN_ADDR`, `PODSYNC_BASE_URL` (required), `PODSYNC_USERNAME`/`PODSYNC_PASSWORD` (required unless `PODSYNC_WEBUI_DISABLED=true`), `PODSYNC_WEBUI_DISABLED`, `PODSYNC_COOKIES_FILE`, `PODSYNC_YTDLP_PATH`, `PODSYNC_HEALTHCHECK` (internal, set by the Dockerfile's `HEALTHCHECK` line, not user-facing), plus `TZ` (compose) and `HOME`/`XDG_CACHE_HOME` (image internals). Check each is in the README table and `compose.example.yaml`, and that env-over-file precedence is documented. (Superseded: the old two-process design's `SYNCR_API_ADDR`, `SYNCR_URL`, `WEBUI_LISTEN` are gone along with that split — see Round 4.)
+- [ ] **First-run experience in Docker.** `PODSYNC_BASE_URL` has no default and podsync now refuses to start without it, which avoids the old "thumbnails break from another machine" trap. Still worth walking the quick start fresh to make sure the failure message is clear enough for someone who hasn't read this file.
+- [ ] **Walk the quick start from a clean clone** on a machine with nothing cached: build or pull the image, `docker compose up -d` with `PODSYNC_BASE_URL`/`PODSYNC_USERNAME`/`PODSYNC_PASSWORD` set, add a feed, play an episode in a podcast app on another device. Also try an arbitrary `--user`, the `config` and `data` folders created by root, and the single-file bind-mount mistake.
+- [ ] **Web-UI-disabled variant:** a compose file with `PODSYNC_WEBUI_DISABLED=true` and no credentials set; check the container healthcheck and what the logs say.
+- [ ] **Image permissions:** `/config`, `/data` and `/opt/yt-dlp` are `chmod 0777` so any `--user` works and yt-dlp can self-update. Confirm that is acceptable for a public image.
+- [ ] **Published image name and tags.** The compose example builds locally. Pick a registry name, push a multi-arch (amd64 + arm64) image, set a real version instead of `dev` (the ldflags-injected `main.version`), and point the quick start at the published image.
+
+**Config format**
+- [ ] **Compatibility policy.** Strict parsing rejects unknown keys, so every removed or renamed key breaks existing files. After the first release that needs either a migration or a documented policy. Decide before tagging, and note the removals so far (`exclude_shorts`, `cleanup_after_days`, global title patterns).
+- [ ] **Defaults sanity check:** media format now defaults to **audio**, max resolution 720, `min_duration` 61s, `page_size` 10, `cleanup_keep_last` 50. Confirm these are what a new user should get, and that the README, `config.example.toml` and PROJECT.md all say the same.
+- [ ] `dev/config.toml` points at a private Tailscale address. `.dockerignore` already excludes `e2e` and the markdown files but **not `dev/`**: confirm it cannot end up in an image (only the built binaries are copied into the final stages today) and decide whether `dev/` belongs in the public repo.
+
+**Docs and housekeeping**
+- [ ] Decide whether FOLLOWUP.md, PROJECT.md and the dev notes ship in the repo at all.
+- [ ] LICENSE and a short security note. There is **no login** anywhere; the README warns about it, but re-read that warning once more from a stranger's point of view before the project is public.
+- [ ] Re-run everything: `go vet ./...`, `go test -race ./...`, the browser suite (`e2e/run.sh`), and the live YouTube test, then run the image on both architectures if possible.
+- [ ] Known scaling limit worth a line in the README or an issue: the sidecar index rescans a whole feed when any file in it changes, and the feed page renders every episode at once (fine to a few thousand episodes per feed).

@@ -2,17 +2,14 @@ package podsync
 
 import "context"
 
-// Syncer is the control surface of the sync service (cmd/syncr), the part of
-// the system that runs yt-dlp and downloads in the background. It is
-// deliberately small: the web UI shares the config file and the data
-// directory with the sync service and reads and writes those directly, so it
-// only needs the sync service for what cannot be done through files.
+// Syncer is the control surface of the sync loop, the part of the system
+// that runs yt-dlp and downloads in the background. It is deliberately
+// small: the web UI shares the config file and the data directory with the
+// sync loop and reads and writes those directly, so it only needs this
+// interface for what cannot be done through files.
 //
-// syncer.Service implements it inside the sync service; rest.Client implements
-// it for the web UI by calling the REST API.
-//
-// Errors of kind ErrNotFound, ErrInvalid and ErrBusy are preserved across the
-// REST boundary.
+// syncer.Service implements it and is called directly by the web UI, in the
+// same process (see cmd/podsync).
 type Syncer interface {
 	// Apply makes the sync service re-read the configuration file (and rescan
 	// the library) after someone else changed them.
@@ -38,9 +35,6 @@ type Syncer interface {
 type ApplyResult struct {
 	// Changed is true when the configuration on disk differed from what was running.
 	Changed bool `json:"changed"`
-	// RestartRequired is true when a changed value only takes effect after a
-	// restart of the sync service (its listen/API address or data directory).
-	RestartRequired bool `json:"restart_required"`
 }
 
 // PullRequest selects what Pull does.

@@ -147,8 +147,8 @@ func TestListWindowValidationAndBanner(t *testing.T) {
 func TestApplyPicksUpConfigAndLibraryChangesMadeByAnotherProcess(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.toml")
+	dataDir := filepath.Join(dir, "data")
 	c := podsync.Default()
-	c.Server.DataDir = filepath.Join(dir, "data")
 	c.Defaults.PageSize = 3
 	c.Defaults.CleanupKeepLast = 0
 	c.Feeds = []podsync.Feed{{ID: "UC1", Name: "One", Kind: "channel", Source: "youtube"}}
@@ -164,7 +164,7 @@ func TestApplyPicksUpConfigAndLibraryChangesMadeByAnotherProcess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	lib := fs.New(c.Server.DataDir)
+	lib := fs.New(dataDir)
 	if err := lib.Load(); err != nil {
 		t.Fatal(err)
 	}
@@ -177,12 +177,12 @@ func TestApplyPicksUpConfigAndLibraryChangesMadeByAnotherProcess(t *testing.T) {
 	svc.Reconcile()
 
 	// Nothing changed yet.
-	if res, err := svc.Apply(bg); err != nil || res.Changed || res.RestartRequired {
+	if res, err := svc.Apply(bg); err != nil || res.Changed {
 		t.Fatalf("%v %+v", err, res)
 	}
 
-	// The web UI adds a feed (and its folder), raises concurrency, and edits the restart-only server settings.
-	webLib := fs.New(c.Server.DataDir)
+	// The web UI adds a feed (and its folder) and raises concurrency.
+	webLib := fs.New(dataDir)
 	webLib.Load()
 	err = web.Update(func(x *podsync.Config) error {
 		x.Feeds = append(x.Feeds, podsync.Feed{ID: "UC2", Name: "Two", Kind: "channel", Source: "youtube"})
@@ -194,7 +194,7 @@ func TestApplyPicksUpConfigAndLibraryChangesMadeByAnotherProcess(t *testing.T) {
 	}
 	webLib.EnsureFeed("youtube", "UC2")
 	res, err := svc.Apply(bg)
-	if err != nil || !res.Changed || res.RestartRequired {
+	if err != nil || !res.Changed {
 		t.Fatalf("%v %+v", err, res)
 	}
 	if got := syncrCfg.Get(); len(got.Feeds) != 2 || got.Download.Concurrency != 4 {
@@ -220,12 +220,6 @@ func TestApplyPicksUpConfigAndLibraryChangesMadeByAnotherProcess(t *testing.T) {
 		if strings.HasSuffix(is.Key, "UC2") {
 			t.Fatalf("issues of a removed feed must be dropped: %+v", is)
 		}
-	}
-
-	// Restart-only settings are flagged.
-	web.Update(func(x *podsync.Config) error { x.Server.APIAddr = "127.0.0.1:9999"; return nil })
-	if res, err := svc.Apply(bg); err != nil || !res.RestartRequired {
-		t.Fatalf("%v %+v", err, res)
 	}
 
 	// A hand-edited, broken file is refused and shown in the banner; the old settings stay.
@@ -256,7 +250,7 @@ func TestApplyPicksUpConfigAndLibraryChangesMadeByAnotherProcess(t *testing.T) {
 	if err := svc.PullAll(); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := syncrCfg.Get().Feed("UC3"); !ok || syncrCfg.Get().Server.APIAddr != "127.0.0.1:9999" {
+	if _, ok := syncrCfg.Get().Feed("UC3"); !ok {
 		t.Fatalf("the scheduled pull must re-read the config file: %+v", syncrCfg.Get().Feeds)
 	}
 	for _, is := range svc.st.Active() {

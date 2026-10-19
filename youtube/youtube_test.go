@@ -64,7 +64,7 @@ func TestThumbsAndAvatar(t *testing.T) {
 
 func TestFriendlyError(t *testing.T) {
 	msg := friendlyError("WARNING: x\nERROR: [youtube] abc: Sign in to confirm you’re not a bot\n", fmt.Errorf("exit 1"))
-	if !strings.Contains(msg, "cookies_file") {
+	if !strings.Contains(msg, "PODSYNC_COOKIES_FILE") {
 		t.Fatalf("expected cookies hint: %s", msg)
 	}
 	if got := friendlyError("", fmt.Errorf("exit status 2")); got != "exit status 2" {
@@ -191,7 +191,10 @@ func fakeYtDlp(args []string) int {
 	return 0
 }
 
-func newFake(t *testing.T, env ...string) *YouTube {
+// newFake puts a fake "yt-dlp" script on PATH (yt-dlp is always run by that
+// name, never a configurable path) and returns the dir it lives in, so tests
+// can find the sentinel files it writes.
+func newFake(t *testing.T, env ...string) (*YouTube, string) {
 	t.Helper()
 	dir := t.TempDir()
 	script := filepath.Join(dir, "yt-dlp")
@@ -203,17 +206,19 @@ func newFake(t *testing.T, env ...string) *YouTube {
 	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	return New(func() Settings { return Settings{YtDlpPath: script} })
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return New(func() Settings { return Settings{} }), dir
 }
 
 var feed = podsync.FeedInfo{Source: Kind, Kind: "channel", ID: "UCXuqSBlHAE6Xw-yeJA0Tunw"}
 
 func TestCheckVersionAndMissingBinary(t *testing.T) {
-	y := newFake(t)
+	y, _ := newFake(t)
 	if h := y.Check(context.Background()); h.Version != "2099.01.01" || len(h.Errors) != 0 {
 		t.Fatalf("%+v", h)
 	}
-	missing := New(func() Settings { return Settings{YtDlpPath: "/nonexistent/yt-dlp"} })
+	t.Setenv("PATH", t.TempDir()) // no yt-dlp on this PATH
+	missing := New(func() Settings { return Settings{} })
 	h := missing.Check(context.Background())
 	if len(h.Errors) != 1 || !strings.Contains(h.Errors[0], "not found") {
 		t.Fatalf("%+v", h)
@@ -221,7 +226,7 @@ func TestCheckVersionAndMissingBinary(t *testing.T) {
 }
 
 func TestResolve(t *testing.T) {
-	y := newFake(t)
+	y, _ := newFake(t)
 	info, err := y.Resolve(context.Background(), "@LinusTechTips")
 	if err != nil {
 		t.Fatal(err)
@@ -235,7 +240,7 @@ func TestResolve(t *testing.T) {
 }
 
 func TestListEpisodesWindowAndFlags(t *testing.T) {
-	y := newFake(t)
+	y, _ := newFake(t)
 	eps, err := y.ListEpisodes(context.Background(), feed, 0, 5)
 	if err != nil || len(eps) != 5 {
 		t.Fatalf("%v %d", err, len(eps))
@@ -258,8 +263,8 @@ func TestListEpisodesWindowAndFlags(t *testing.T) {
 	}
 }
 
-func searched(y *YouTube) bool {
-	_, err := os.Stat(filepath.Join(filepath.Dir(y.settings().YtDlpPath), "count"))
+func searched(dir string) bool {
+	_, err := os.Stat(filepath.Join(dir, "count"))
 	return err == nil
 }
 
@@ -270,22 +275,22 @@ func TestFindUsesHintsToChooseResolveOrSearch(t *testing.T) {
 		"https://www.youtube.com/channel/UCXuqSBlHAE6Xw-yeJA0Tunw", "UCXuqSBlHAE6Xw-yeJA0Tunw",
 		"https://www.youtube.com/playlist?list=PLabcdefghijk", "https://youtu.be/jNQXAC9IVRw",
 	} {
-		y := newFake(t)
+		y, dir := newFake(t)
 		res, err := y.Find(ctx, "  "+direct+"  ")
 		if err != nil || len(res) != 1 || res[0].ID != "UCXuqSBlHAE6Xw-yeJA0Tunw" || res[0].Kind != "channel" {
 			t.Errorf("%q should resolve to one feed: %v %+v", direct, err, res)
 		}
-		if searched(y) {
+		if searched(dir) {
 			t.Errorf("%q is a reference and must not trigger a name search", direct)
 		}
 	}
 	for _, name := range []string{"linus", "Linus Tech Tips", "LinusTechTips", "PLabcdefghijk1", "kotlin @home"} {
-		y := newFake(t)
+		y, dir := newFake(t)
 		res, err := y.Find(ctx, name)
 		if err != nil || len(res) != 1 || res[0].Handle != "@LinusTechTips" || res[0].Kind != "channel" || res[0].Subscribers != 16900000 || res[0].ImageURL != "https://yt3.ggpht.com/a" {
 			t.Errorf("%q should fall back to a channel search: %v %+v", name, err, res)
 		}
-		if !searched(y) {
+		if !searched(dir) {
 			t.Errorf("%q is a name and must be searched", name)
 		}
 	}
@@ -293,7 +298,7 @@ func TestFindUsesHintsToChooseResolveOrSearch(t *testing.T) {
 
 func TestFindErrorsAndSearchBehavior(t *testing.T) {
 	ctx := context.Background()
-	y := newFake(t)
+	y, dir := newFake(t)
 	if _, err := y.Find(ctx, "   "); !errors.Is(err, podsync.ErrInvalid) {
 		t.Fatalf("empty query: %v", err)
 	}
@@ -306,17 +311,16 @@ func TestFindErrorsAndSearchBehavior(t *testing.T) {
 		t.Fatalf("channels only, deduplicated: %+v", res)
 	}
 	// Identical searches are cached.
-	script := y.settings().YtDlpPath
-	os.Remove(filepath.Join(filepath.Dir(script), "count"))
+	os.Remove(filepath.Join(dir, "count"))
 	if _, err := y.Find(ctx, "LINUS"); err != nil {
 		t.Fatal(err)
 	}
-	if searched(y) {
+	if searched(dir) {
 		t.Fatal("second identical search should be served from cache")
 	}
 
 	// A failing reference is the user's input (invalid); a failing search is not, and backs off.
-	bad := newFake(t, "FAKE_FAIL=1")
+	bad, _ := newFake(t, "FAKE_FAIL=1")
 	if _, err := bad.Find(ctx, "x y"); err == nil || errors.Is(err, podsync.ErrInvalid) || !strings.Contains(err.Error(), "boom") {
 		t.Fatalf("a failed search is a service problem, got %v", err)
 	}
@@ -333,7 +337,7 @@ func TestFindErrorsAndSearchBehavior(t *testing.T) {
 }
 
 func TestDownloadSuccessAndFailure(t *testing.T) {
-	y := newFake(t)
+	y, _ := newFake(t)
 	dest := t.TempDir()
 	res, err := y.Download(context.Background(), podsync.EpisodeInfo{ID: "abcdEFGhij1", Title: "placeholder"}, podsync.DownloadOptions{}, dest)
 	if err != nil {
@@ -352,7 +356,7 @@ func TestDownloadSuccessAndFailure(t *testing.T) {
 	if err != nil || audio.File != "abcdEFGhij2.m4a" || audio.Episode.Height != 0 {
 		t.Fatalf("audio downloads have no video height: %v %+v", err, audio)
 	}
-	noThumb := newFake(t, "FAKE_NO_THUMB=1")
+	noThumb, _ := newFake(t, "FAKE_NO_THUMB=1")
 	nt, err := noThumb.Download(context.Background(), podsync.EpisodeInfo{ID: "abcdEFGhij9"}, podsync.DownloadOptions{}, t.TempDir())
 	if err != nil || nt.Thumb != "" || nt.File == "" {
 		t.Fatalf("a missing thumbnail must not fail the download: %v %+v", err, nt)
@@ -361,7 +365,7 @@ func TestDownloadSuccessAndFailure(t *testing.T) {
 		t.Fatal("bad id must be rejected")
 	}
 
-	bad := newFake(t, "FAKE_FAIL=1")
+	bad, _ := newFake(t, "FAKE_FAIL=1")
 	d2 := t.TempDir()
 	_, err = bad.Download(context.Background(), podsync.EpisodeInfo{ID: "abcdEFGhij3"}, podsync.DownloadOptions{}, d2)
 	if err == nil || !strings.Contains(err.Error(), "Video unavailable") {
@@ -381,7 +385,7 @@ func TestLive(t *testing.T) {
 	if _, err := exec.LookPath("yt-dlp"); err != nil {
 		t.Skip("yt-dlp not installed")
 	}
-	y := New(func() Settings { return Settings{YtDlpPath: "yt-dlp"} })
+	y := New(func() Settings { return Settings{} })
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 

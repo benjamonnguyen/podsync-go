@@ -233,8 +233,8 @@ func TestExampleConfigParses(t *testing.T) {
 	if err != nil {
 		t.Fatalf("config.example.toml no longer parses: %v", err)
 	}
-	if cfg.Server.APIAddr == cfg.Server.ListenAddr || len(cfg.Feeds) == 0 {
-		t.Fatalf("%+v", cfg.Server)
+	if len(cfg.Feeds) == 0 {
+		t.Fatalf("%+v", cfg)
 	}
 	dev, err := os.ReadFile("../dev/config.toml")
 	if err != nil {
@@ -244,3 +244,4 @@ func TestExampleConfigParses(t *testing.T) {
 		t.Fatalf("dev/config.toml no longer parses: %v", err)
 	}
 }
+

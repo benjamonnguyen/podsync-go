@@ -3,7 +3,6 @@ package podsync
 import (
 	"errors"
 	"fmt"
-	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -37,23 +36,15 @@ func (d *Duration) UnmarshalText(b []byte) error {
 	return nil
 }
 
-// Server holds the sync service's addresses. ListenAddr is the public side:
-// the podcast feeds and media files podcast apps fetch. APIAddr is the private
-// control API used by the web UI. They are separate listeners on purpose, so
-// publishing the feeds never exposes the (unauthenticated) control API.
-type Server struct {
-	ListenAddr string `toml:"listen_addr" json:"listen_addr"`
-	APIAddr    string `toml:"api_addr" json:"api_addr"`
-	BaseURL    string `toml:"base_url" json:"base_url"` // public address of ListenAddr, as podcast apps and browsers reach it
-	DataDir    string `toml:"data_dir" json:"data_dir"`
-}
-
+// Download holds the feed-independent download settings a user can change in
+// the web UI. Everything that a deployment sets once and never edits again
+// (the listen address, the public base URL, the data directory, the yt-dlp
+// cookies file, the web UI toggle and its login) is a flag/environment
+// variable instead, not part of this file: see cmd/podsync's -help.
 type Download struct {
-	YtDlpPath      string   `toml:"yt_dlp_path" json:"yt_dlp_path"`
 	Concurrency    int      `toml:"concurrency" json:"concurrency"`
 	UpdateInterval Duration `toml:"update_interval" json:"update_interval"`
 	SelfUpdate     bool     `toml:"self_update" json:"self_update"`
-	CookiesFile    string   `toml:"cookies_file" json:"cookies_file"`
 }
 
 // Options are the per-feed settings that have a default. [defaults] holds
@@ -84,10 +75,18 @@ type Feed struct {
 
 	TitleInclude string `toml:"title_include,omitempty" json:"title_include,omitempty"` // only matching titles are downloaded
 	TitleExclude string `toml:"title_exclude,omitempty" json:"title_exclude,omitempty"` // matching titles are skipped
+
+	// OPMLExclude leaves the feed out of the OPML export at /opml.xml. Zero
+	// value (false) includes it, so existing feeds and newly added ones are
+	// in the export unless a user opts them out.
+	OPMLExclude bool `toml:"opml_exclude,omitempty" json:"opml_exclude,omitempty"`
 }
 
+// Config is everything the web UI reads back and rewrites: feed data and the
+// per-feed-overridable defaults. It holds nothing about how the service is
+// deployed (ports, the public URL, the data directory, yt-dlp or its
+// cookies file); those are flags/environment variables on each binary.
 type Config struct {
-	Server   Server   `toml:"server" json:"server"`
 	Download Download `toml:"download" json:"download"`
 	Defaults Options  `toml:"defaults" json:"defaults"`
 	Feeds    []Feed   `toml:"feeds" json:"feeds"`
@@ -106,14 +105,12 @@ var idPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 // Default returns the configuration used when no file exists.
 func Default() Config {
 	return Config{
-		Server: Server{ListenAddr: ":8080", APIAddr: "127.0.0.1:8081", BaseURL: "http://localhost:8080", DataDir: "./data"},
 		Download: Download{
-			YtDlpPath:      "yt-dlp",
 			Concurrency:    2,
 			UpdateInterval: Duration(30 * time.Minute),
 		},
 		Defaults: Options{
-			Format:          FormatVideo,
+			Format:          FormatAudio,
 			MaxResolution:   720,
 			MinDuration:     Duration(61 * time.Second), // Shorts are 60s or less
 			CleanupKeepLast: 50,
@@ -181,12 +178,6 @@ func (o Options) validate(where string) error {
 
 // Normalize fills derived defaults and trims whitespace. It runs before Validate.
 func (c *Config) Normalize() {
-	c.Server.ListenAddr = strings.TrimSpace(c.Server.ListenAddr)
-	c.Server.APIAddr = strings.TrimSpace(c.Server.APIAddr)
-	c.Server.BaseURL = strings.TrimRight(strings.TrimSpace(c.Server.BaseURL), "/")
-	c.Server.DataDir = strings.TrimSpace(c.Server.DataDir)
-	c.Download.YtDlpPath = strings.TrimSpace(c.Download.YtDlpPath)
-	c.Download.CookiesFile = strings.TrimSpace(c.Download.CookiesFile)
 	for i := range c.Feeds {
 		f := &c.Feeds[i]
 		f.ID = strings.TrimSpace(f.ID)
@@ -205,23 +196,6 @@ func (c *Config) Normalize() {
 // Validate checks the whole configuration and returns every problem found.
 func (c Config) Validate() error {
 	var errs []error
-	if c.Server.ListenAddr == "" {
-		errs = append(errs, errors.New("server.listen_addr is required"))
-	}
-	if c.Server.APIAddr == "" {
-		errs = append(errs, errors.New("server.api_addr is required"))
-	} else if c.Server.APIAddr == c.Server.ListenAddr {
-		errs = append(errs, errors.New("server.api_addr must differ from server.listen_addr: the control API must not share the public port"))
-	}
-	if u, err := url.Parse(c.Server.BaseURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		errs = append(errs, errors.New("server.base_url must be an absolute http(s) URL, e.g. http://192.168.1.10:8080"))
-	}
-	if c.Server.DataDir == "" {
-		errs = append(errs, errors.New("server.data_dir is required"))
-	}
-	if c.Download.YtDlpPath == "" {
-		errs = append(errs, errors.New("download.yt_dlp_path is required"))
-	}
 	if c.Download.Concurrency < 1 || c.Download.Concurrency > 16 {
 		errs = append(errs, errors.New("download.concurrency must be between 1 and 16"))
 	}

@@ -10,20 +10,20 @@
 {{- end}}
 </div>{{end}}
 
+{{define "icon_refresh"}}<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>{{end}}
+{{define "icon_settings"}}<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>{{end}}
+{{define "icon_trash"}}<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg>{{end}}
+{{define "icon_select"}}<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>{{end}}
+{{define "icon_search"}}<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg>{{end}}
+{{define "icon_info"}}<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 16v-5"/><path d="M12 8h.01"/></svg>{{end}}
+
 {{define "feed_card"}}<article class="card">
+  {{if .Orphan}}<button class="icon-btn danger" title="Delete files" aria-label="Delete files" hx-post="/orphans/{{.ID}}/delete" hx-confirm="Delete all files stored for this feed? This cannot be undone.">{{template "icon_trash"}}</button>
+  {{else}}<button class="icon-btn" title="Check now" aria-label="Check now" hx-post="/feed/{{.ID}}/pull" hx-target="#status" hx-swap="outerHTML">{{template "icon_refresh"}}</button>{{end}}
   {{if .ImageURL}}<img class="avatar" src="{{.ImageURL}}" alt="" loading="lazy" referrerpolicy="no-referrer">{{else}}<div class="avatar placeholder"></div>{{end}}
   <div class="card-body">
     <h3>{{if .Orphan}}{{.Name}}{{else}}<a href="/feed/{{.ID}}">{{.Name}}</a>{{end}}</h3>
     <p class="muted">{{if .Orphan}}not in config{{else}}{{.Kind}}{{end}} · {{count .Episodes "episode" "episodes"}}{{if .Bytes}} · {{size .Bytes}}{{end}}{{if not .Orphan}} · checked {{ago .LastPull}}{{end}}</p>
-    <div class="actions">
-    {{if .Orphan}}
-      <button class="btn danger" hx-post="/orphans/{{.ID}}/delete" hx-confirm="Delete all files stored for this feed? This cannot be undone.">Delete files</button>
-    {{else}}
-      <a class="btn" href="/feed/{{.ID}}">Open</a>
-      <button class="btn" hx-post="/feed/{{.ID}}/pull" hx-target="#status" hx-swap="outerHTML">Check now</button>
-      <a class="btn danger" href="/feed/{{.ID}}/delete">Delete</a>
-    {{end}}
-    </div>
   </div>
 </article>{{end}}
 
@@ -45,8 +45,9 @@
 {{- else}}<p class="empty">No downloaded episodes match.</p>{{end}}
 {{end}}
 
-{{define "episode_row"}}<div class="row{{if ne .State "downloaded"}} faded{{end}}" id="ep-{{.ID}}"{{if or (eq .State "queued") (eq .State "downloading")}} hx-get="/feed/{{.FeedID}}/episodes/{{.ID}}/row?title={{.Title | urlquery}}&amp;duration={{.DurationSec}}&amp;thumb={{.Thumb | urlquery}}&amp;channel={{.Channel | urlquery}}&amp;views={{.ViewCount}}" hx-trigger="every 2s" hx-swap="outerHTML"{{end}}>
+{{define "episode_row"}}<div class="row{{if ne .State "downloaded"}} faded{{end}}" id="ep-{{.ID}}"{{if .OOB}} hx-swap-oob="true"{{end}}{{if or (eq .State "queued") (eq .State "downloading")}} hx-get="/feed/{{.FeedID}}/episodes/{{.ID}}/row?title={{.Title | urlquery}}&amp;duration={{.DurationSec}}&amp;thumb={{.Thumb | urlquery}}&amp;channel={{.Channel | urlquery}}&amp;views={{.ViewCount}}" hx-trigger="every 2s" hx-swap="outerHTML"{{end}}>
   <input type="hidden" name="title" value="{{.Title}}"><input type="hidden" name="duration" value="{{.DurationSec}}"><input type="hidden" name="thumb" value="{{.Thumb}}"><input type="hidden" name="channel" value="{{.Channel}}"><input type="hidden" name="views" value="{{.ViewCount}}">
+  {{if and (eq .State "downloaded") (not .ShowFeed)}}<input type="checkbox" class="sel" form="bulk-delete" name="ep" value="{{.ID}}" aria-label="Select {{.Title}}">{{end}}
   {{if .Thumb}}<img class="thumb" src="{{.Thumb}}" alt="" loading="lazy" referrerpolicy="no-referrer">{{else}}<div class="thumb placeholder"></div>{{end}}
   <div class="row-main">
     {{if .ShowFeed}}<a class="feedname" href="/feed/{{.FeedID}}">{{.FeedName}}</a>{{end}}
@@ -57,7 +58,7 @@
       {{with dur .DurationSec}}<span>{{.}}</span>{{end}}
       {{if .ViewCount}}<span>{{compact .ViewCount}} views</span>{{end}}
       {{if eq .State "downloaded"}}{{if .Height}}<span>{{.Height}}p</span>{{end}}<span>{{size .Size}}</span>{{if .Manual}}<span class="tag">kept</span>{{end}}{{end}}
-      {{if eq .State "cleaned"}}<span>removed by cleanup</span>{{end}}
+      {{if eq .State "cleaned"}}<span>removed</span>{{end}}
       {{if eq .State "queued"}}<span>queued…</span>{{end}}
       {{if eq .State "downloading"}}<span><span class="spinner" aria-hidden="true"></span> downloading…</span>{{end}}
       {{if eq .State "failed"}}<span class="error">failed: {{.LastError}}</span>{{end}}
@@ -99,8 +100,7 @@
   <li>
     {{if .ImageURL}}<img class="avatar small" src="{{.ImageURL}}" alt="" loading="lazy" referrerpolicy="no-referrer">{{else}}<div class="avatar small placeholder"></div>{{end}}
     <div class="grow"><strong>{{.Name}}</strong>
-      <div class="muted">{{if .Handle}}{{.Handle}}{{end}}{{if .Subscribers}} · {{compact .Subscribers}} subscribers{{end}}</div>
-      {{with .Description}}<div class="muted clip">{{.}}</div>{{end}}</div>
+      {{with dot .Handle (subscribers .Subscribers)}}<div class="muted">{{.}}</div>{{end}}</div>
     <form hx-post="/add/find" hx-target="#found"><input type="hidden" name="q" value="{{.ID}}"><button class="btn" type="submit">Select</button></form>
   </li>
 {{- end}}
@@ -114,17 +114,19 @@
   {{if .ImageURL}}<img class="avatar" src="{{.ImageURL}}" alt="" referrerpolicy="no-referrer">{{else}}<div class="avatar placeholder"></div>{{end}}
   <div class="card-body">
     <h3>{{.Name}}</h3>
-    <p class="muted">{{.Kind}}{{if .Handle}} · {{.Handle}}{{end}}{{if .Subscribers}} · {{compact .Subscribers}} subscribers{{end}} · {{.ID}}</p>
+    <p class="muted">{{dot .Kind .Handle (subscribers .Subscribers) .ID}}</p>
     {{with .Description}}<p class="clip">{{.}}</p>{{end}}
     {{if $.Exists}}
       <p class="muted">Already in your library.</p><a class="btn" href="/feed/{{.ID}}">Open</a>
     {{else}}
       <form hx-post="/add" hx-target="#found" hx-disabled-elt="find button" class="inline-form">
         <input type="hidden" name="id" value="{{.ID}}">
-        <label>Episodes per update <input type="number" name="page_size" min="1" max="500" placeholder="{{$.DefaultPageSize}}"></label>
-        <button class="btn primary" type="submit">Add feed</button>
+        <label for="page-size-{{.ID}}">Newest episodes to fetch</label>
+        <button type="button" class="icon-btn" data-toggle-info="#pagesize-info-{{.ID}}" aria-expanded="false" aria-label="More info">{{template "icon_info"}}</button>
+        <input type="number" id="page-size-{{.ID}}" name="page_size" min="1" max="500" placeholder="{{$.DefaultPageSize}}">
+        <button class="btn primary full-line" type="submit">Add feed</button>
       </form>
-      <p class="muted">Only the newest episodes (per the setting above) are downloaded at first; older ones can be fetched from the feed page with “Load more”.</p>
+      <p id="pagesize-info-{{.ID}}" class="muted" hidden>Only this many of the newest episodes are downloaded at first; older ones can be fetched later from the feed page with “Load more”.</p>
     {{end}}
   </div>
 </article>

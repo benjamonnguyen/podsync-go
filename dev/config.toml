@@ -1,22 +1,14 @@
-# Development/test configuration; use dev/run.sh (starts syncr and the web UI) from anywhere.
-# syncr publishes feeds and media on :8080 and keeps its control API on 127.0.0.1:8081; the web UI is on :8090.
-# Media goes to dev/data (git-ignored). Note: the web UI rewrites this file when you change settings.
-
-[server]
-listen_addr = ":8080"
-api_addr = "127.0.0.1:8081"
-base_url = "http://towhee:8080"
-data_dir = "./dev/data"
+# Development/test feed data; use dev/run.sh (starts syncr and the web UI) from anywhere.
+# Ports, addresses and the data directory are flags in dev/run.sh now, not here.
+# Note: the web UI rewrites this file when you change settings.
 
 [download]
-yt_dlp_path = "yt-dlp"
 concurrency = 2
 update_interval = "30m"
 self_update = false
-cookies_file = ""
 
 [defaults]
-format = "video"
+format = "audio"
 max_resolution = 480
 min_duration = "61s"
 cleanup_keep_last = 50

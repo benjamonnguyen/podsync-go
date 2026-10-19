@@ -22,6 +22,12 @@ const (
 	// before leaving it for a manual retry.
 	MaxAttempts  = 3
 	startupDelay = 3 * time.Second
+
+	// maxCatchUpPages bounds how far listAndEnqueue will page back looking for
+	// an episode it already has a record of (see catchUpPages). Without a cap,
+	// a feed whose episodes never get a library record (every one filtered
+	// out, never attempted) would page back this far on every single check.
+	maxCatchUpPages = 10
 )
 
 type job struct {
@@ -40,8 +46,6 @@ type Service struct {
 	st  podsync.StatusTracker
 	now func() time.Time
 
-	started podsync.Server // server settings at startup, to tell when a restart is needed
-
 	pullMu sync.Mutex // held for the duration of a pull
 
 	mu       sync.Mutex
@@ -56,7 +60,7 @@ type Service struct {
 
 func New(ctx context.Context, cfg podsync.ConfigStore, lib podsync.Library, reg *podsync.Registry, st podsync.StatusTracker) *Service {
 	s := &Service{
-		ctx: ctx, cfg: cfg, lib: lib, reg: reg, st: st, now: time.Now, started: cfg.Get().Server,
+		ctx: ctx, cfg: cfg, lib: lib, reg: reg, st: st, now: time.Now,
 		jobs:     map[string]*job{},
 		failures: map[string]map[string]string{},
 		versions: map[string]string{},
@@ -343,8 +347,41 @@ func (s *Service) listAndEnqueue(id string) []*job {
 	s.st.Clear(key)
 	s.refreshMeta(id, src, info)
 
+	// If the page we just got is entirely episodes we've never seen, a
+	// publish burst may have pushed older-but-still-unseen episodes past
+	// page_size: on a fixed-size, offset-0 window, those would otherwise be
+	// skipped forever (never downloaded, and never looked at again, since
+	// every future check re-samples the same "newest page_size" window).
+	// Keep paging back until a page contains an episode we already have a
+	// record for (the boundary with what the previous check already saw),
+	// the feed runs out, or maxCatchUpPages caps the extra queries.
+	//
+	// Skipped entirely on a feed's very first check (nothing downloaded yet,
+	// so nothing can be "known"): otherwise this would walk back through the
+	// whole back catalogue on every brand-new feed, which page_size exists
+	// to prevent in the first place.
+	all := eps
+	everPulled := len(s.lib.Episodes(id)) > 0
+	for pages, offset := 1, opts.PageSize; everPulled && len(eps) == opts.PageSize && !s.hasKnownEpisode(id, eps) && pages <= maxCatchUpPages; pages, offset = pages+1, offset+opts.PageSize {
+		if s.ctx.Err() != nil {
+			return nil
+		}
+		more, err := src.ListEpisodes(s.ctx, info, offset, opts.PageSize)
+		if err != nil {
+			if s.ctx.Err() == nil {
+				s.st.Report(key, podsync.LevelWarning, fmt.Sprintf("Could not fully check %q for missed episodes: %v", f.Name, err))
+			}
+			break
+		}
+		if len(more) == 0 {
+			break
+		}
+		all = append(all, more...)
+		eps = more
+	}
+
 	var jobs []*job
-	for _, ep := range eps {
+	for _, ep := range all {
 		if ep.Unavailable || ep.IsLive || !filter.Allows(ep) {
 			continue
 		}
@@ -359,6 +396,19 @@ func (s *Service) listAndEnqueue(id string) []*job {
 		}
 	}
 	return jobs
+}
+
+// hasKnownEpisode reports whether the library already has a record for any
+// of eps — downloaded, cleaned or failed all count, since the sidecar JSON
+// survives even after the media file is deleted. Used by listAndEnqueue to
+// find where a previous check's listing left off.
+func (s *Service) hasKnownEpisode(feedID string, eps []podsync.EpisodeInfo) bool {
+	for _, ep := range eps {
+		if _, ok := s.lib.Episode(feedID, ep.ID); ok {
+			return true
+		}
+	}
+	return false
 }
 
 // refreshMeta stamps the last pull time and fills in missing image/description once.

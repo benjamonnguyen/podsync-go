@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -57,6 +58,18 @@ func plural(n int, one, many string) string {
 		return one
 	}
 	return many
+}
+
+// joinDot joins the non-empty parts with " · ", so an empty one (e.g. a
+// channel with no handle) doesn't leave a stray leading or doubled separator.
+func joinDot(parts ...string) string {
+	var out []string
+	for _, p := range parts {
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return strings.Join(out, " · ")
 }
 
 func compactNumber(n int64) string {

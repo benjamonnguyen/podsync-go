@@ -3,6 +3,7 @@ package syncer
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -90,6 +91,80 @@ func TestPullDownloadsNewestPageAndIsIdempotent(t *testing.T) {
 		if n := e.src.DownloadCount(ep.ID); n != 1 {
 			t.Fatalf("%s downloaded %d times", ep.ID, n)
 		}
+	}
+}
+
+// TestPullCatchesUpOnPublishBurst covers the case where more than page_size
+// episodes were published between two checks: the first page after the burst
+// is entirely new, which must not mean the older half of the burst (still
+// outside page_size) is silently skipped forever.
+func TestPullCatchesUpOnPublishBurst(t *testing.T) {
+	e := setup(t, mock.Episodes(8), nil) // page_size=5
+	if err := e.svc.PullFeed("UC1"); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(e.lib.Episodes("UC1")); n != 5 {
+		t.Fatalf("first pull: want 5, got %d", n)
+	}
+
+	// A burst of 10 new episodes lands in front of everything already known.
+	var burst []podsync.EpisodeInfo
+	for i := 0; i < 10; i++ {
+		burst = append(burst, podsync.EpisodeInfo{ID: fmt.Sprintf("new%02d", i), Title: fmt.Sprintf("New %d", i), DurationSec: 600})
+	}
+	e.src.With(func(s *mock.Source) { s.Episodes = append(burst, s.Episodes...) })
+	e.src.ListCalls = 0
+	if err := e.svc.PullFeed("UC1"); err != nil {
+		t.Fatal(err)
+	}
+
+	got := e.lib.Episodes("UC1")
+	if len(got) != 15 { // the original 5 + all 10 from the burst
+		t.Fatalf("want 15 episodes after catch-up, got %d: %+v", len(got), got)
+	}
+	for _, ep := range burst {
+		if _, ok := e.lib.Episode("UC1", ep.ID); !ok {
+			t.Fatalf("%s from the burst was never downloaded: catch-up did not reach it", ep.ID)
+		}
+	}
+	// 10 new / page_size 5 = 2 full unseen pages before the 3rd page (offset
+	// 10) reaches ep00..ep04, which are already known: 1 initial + 2 extra.
+	if e.src.ListCalls != 3 {
+		t.Fatalf("want 3 ListEpisodes calls (1 initial + 2 catch-up), got %d", e.src.ListCalls)
+	}
+}
+
+// TestPullCatchUpIsCappedAndSkippedOnFirstPull covers the two safety rails:
+// catch-up never runs on a feed's very first check (nothing can be "known"
+// yet, so it would otherwise walk the entire back catalogue every time), and
+// even on a later check it stops after maxCatchUpPages extra queries rather
+// than paging forever through a feed where nothing ever matches.
+func TestPullCatchUpIsCappedAndSkippedOnFirstPull(t *testing.T) {
+	e := setup(t, mock.Episodes(500), func(c *podsync.Config) { c.Defaults.PageSize = 5 })
+	if err := e.svc.PullFeed("UC1"); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(e.lib.Episodes("UC1")); n != 5 {
+		t.Fatalf("first pull must still be capped at page_size, got %d", n)
+	}
+	if e.src.ListCalls != 1 {
+		t.Fatalf("no catch-up on a feed's first pull, got %d ListEpisodes calls", e.src.ListCalls)
+	}
+
+	// Replace the whole catalogue with episodes that will never match anything known.
+	e.src.With(func(s *mock.Source) {
+		s.Episodes = nil
+		for i := 0; i < 500; i++ {
+			s.Episodes = append(s.Episodes, podsync.EpisodeInfo{ID: fmt.Sprintf("zz%03d", i), Title: fmt.Sprintf("Z %d", i), DurationSec: 600})
+		}
+	})
+	e.src.ListCalls = 0
+	if err := e.svc.PullFeed("UC1"); err != nil {
+		t.Fatal(err)
+	}
+	// 1 initial page + maxCatchUpPages (10) extra, never finding a known episode.
+	if e.src.ListCalls != 11 {
+		t.Fatalf("want catch-up capped at 11 ListEpisodes calls, got %d", e.src.ListCalls)
 	}
 }
 

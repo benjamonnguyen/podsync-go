@@ -17,40 +17,35 @@ import (
 	"podsync"
 	"podsync/fs"
 	"podsync/mock"
-	"podsync/rest"
 	"podsync/status"
 	"podsync/syncer"
 	"podsync/toml"
 )
 
-// harness models the real deployment: the sync service and the web UI are
-// separate programs, each with its own ConfigStore and Library over one
-// shared config file and data directory, talking over the REST API.
 var bg = context.Background()
 
+// harness wires the sync service and the web UI exactly as the single
+// process does: one ConfigStore and one Library shared in-process, the web
+// UI calling the sync service's methods directly (no network hop).
 type harness struct {
-	t        *testing.T
-	h        http.Handler // the web UI
-	cfg      *toml.Store  // the web UI's view of the config file
-	lib      *fs.Library  // the web UI's view of the data directory
-	cfgPath  string
-	syncrCfg *toml.Store // the sync service's view
-	syncrLib *fs.Library // the sync service's view
-	svc      *syncer.Service
-	src      *mock.Source
-	st       *status.Tracker
-	sync     *rest.Client
+	t       *testing.T
+	h       http.Handler // the web UI
+	cfg     *toml.Store
+	lib     *fs.Library
+	cfgPath string
+	svc     *syncer.Service
+	src     *mock.Source
+	st      *status.Tracker
 }
 
 func newHarness(t *testing.T) *harness {
 	t.Helper()
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.toml")
+	dataDir := filepath.Join(dir, "data")
 	c := podsync.Default()
-	c.Server.DataDir = filepath.Join(dir, "data")
 	c.Defaults.PageSize = 3
 	c.Defaults.CleanupKeepLast = 0
-	c.Server.BaseURL = "http://pod.example:8080"
 	c.Feeds = []podsync.Feed{{ID: "UCone", Name: "Channel One", Kind: "channel", Source: "youtube"}}
 	c.Normalize()
 	cfg, err := toml.Open(cfgPath)
@@ -60,15 +55,9 @@ func newHarness(t *testing.T) *harness {
 	if err := cfg.Update(func(x *podsync.Config) error { *x = c; return nil }); err != nil {
 		t.Fatal(err)
 	}
-	syncrCfg, err := toml.Open(cfgPath)
-	if err != nil {
+	lib := fs.New(dataDir)
+	if err := lib.Load(); err != nil {
 		t.Fatal(err)
-	}
-	lib, syncrLib := fs.New(c.Server.DataDir), fs.New(c.Server.DataDir)
-	for _, l := range []*fs.Library{lib, syncrLib} {
-		if err := l.Load(); err != nil {
-			t.Fatal(err)
-		}
 	}
 	src := mock.NewSource()
 	for i := 0; i < 8; i++ {
@@ -93,6 +82,11 @@ func newHarness(t *testing.T) *harness {
 				{Source: "youtube", Kind: "channel", ID: "UCnew", Name: "Found One", Handle: "@found", Subscribers: 1500000},
 				{Source: "youtube", Kind: "channel", ID: "UCtwo", Name: "Found Two", Handle: "@two", Subscribers: 2000},
 			}, nil
+		case "nohandle":
+			return []podsync.FeedInfo{
+				{Source: "youtube", Kind: "channel", ID: "UCnohandle", Name: "No Handle Channel", Subscribers: 2200},
+				{Source: "youtube", Kind: "channel", ID: "UChandle", Name: "Handled Channel", Handle: "@handled", Subscribers: 3000},
+			}, nil
 		case "lonely":
 			return []podsync.FeedInfo{newInfo}, nil
 		}
@@ -101,17 +95,14 @@ func newHarness(t *testing.T) *harness {
 	st := status.New()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	svc := syncer.New(ctx, syncrCfg, syncrLib, podsync.NewRegistry(src), st)
-	syncrCfg.OnChange(svc.ConfigChanged)
+	svc := syncer.New(ctx, cfg, lib, podsync.NewRegistry(src), st)
+	cfg.OnChange(svc.ConfigChanged)
 	svc.Reconcile()
-	api := httptest.NewServer(rest.NewServer(svc).Handler())
-	t.Cleanup(api.Close)
-	client := rest.NewClient(api.URL, nil)
-	ui, err := newServer(options{Config: cfg, Library: lib, Syncer: client})
+	ui, err := newServer(options{Config: cfg, Library: lib, Syncer: svc, BaseURL: "http://pod.example:8080"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &harness{t, ui.Handler(), cfg, lib, cfgPath, syncrCfg, syncrLib, svc, src, st, client}
+	return &harness{t, ui.Handler(), cfg, lib, cfgPath, svc, src, st}
 }
 
 func (h *harness) do(method, path string, form url.Values, hdr ...string) *httptest.ResponseRecorder {
@@ -215,12 +206,60 @@ func TestPullFeedThenBrowseEpisodes(t *testing.T) {
 		t.Fatalf("empty filter: %s", body)
 	}
 
-	// Media and thumbnails live on syncr's public address; the UI links to them there.
+	// Media and thumbnails live at the public address; the UI links to them there.
 	h.mustContain(rec, 200, `href="http://pod.example:8080/media/UCone/vid0000000.mp4"`, `src="http://pod.example:8080/media/UCone/vid0000000.jpg"`)
 
 	h.mustContain(h.get("/search?q=0000002"), 200, "Title vid0000002", "Episodes matching")
 	h.mustContain(h.get("/search?q=channel+one"), 200, "Channel One")
 	h.mustContain(h.get("/search?q="), 200, "Channel One")
+}
+
+func TestDeleteSelectedMedia(t *testing.T) {
+	h := newHarness(t)
+	h.svc.PullFeed("UCone")
+	page := h.get("/feed/UCone")
+	h.mustContain(page, 200, `data-select-toggle`, `id="bulk-delete"`, `hx-post="/feed/UCone/episodes/delete"`,
+		`class="sel" form="bulk-delete" name="ep" value="vid0000000"`, `value="vid0000001"`, `value="vid0000002"`)
+
+	ep, _ := h.lib.Episode("UCone", "vid0000001")
+	path := filepath.Join(h.lib.Root(), "youtube", "UCone", ep.File)
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("media should exist before deleting: %v", err)
+	}
+
+	// An unknown id and an already-removed one are skipped; the rest are removed.
+	rec := h.do("POST", "/feed/UCone/episodes/delete", url.Values{"ep": {"vid0000001", "vid0000001", "nope", "vid0000002"}})
+	h.mustContain(rec, 200, `id="ep-vid0000001"`, `id="ep-vid0000002"`, `hx-swap-oob="true"`, "<span>removed</span>")
+	if rec.Header().Get("HX-Trigger") != "episodes-changed" {
+		t.Fatalf("stats and list should refresh: %v", rec.Header())
+	}
+	if strings.Contains(rec.Body.String(), "vid0000000") || strings.Contains(rec.Body.String(), `id="ep-nope"`) {
+		t.Fatalf("only the removed episodes are returned:\n%s", rec.Body.String())
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("media should be gone: %v", err)
+	}
+	for id, want := range map[string]podsync.EpisodeStatus{"vid0000000": podsync.StatusDownloaded, "vid0000001": podsync.StatusCleaned, "vid0000002": podsync.StatusCleaned} {
+		if got, _ := h.lib.Episode("UCone", id); got.Status != want || (want == podsync.StatusCleaned && (got.File != "" || got.Size != 0)) {
+			t.Errorf("%s: status %q file %q size %d, want %q", id, got.Status, got.File, got.Size, want)
+		}
+	}
+	// Removed episodes lose their checkbox, and cleaned records are not downloaded again by the next update.
+	after := h.get("/feed/UCone").Body.String()
+	if strings.Contains(after, `value="vid0000001"`) || !strings.Contains(after, `value="vid0000000"`) {
+		t.Fatalf("checkboxes only for downloaded episodes:\n%s", after)
+	}
+	h.svc.PullFeed("UCone")
+	if got, _ := h.lib.Episode("UCone", "vid0000001"); got.Status != podsync.StatusCleaned {
+		t.Fatalf("removed episode came back: %+v", got)
+	}
+
+	h.mustContain(h.do("POST", "/feed/UCone/episodes/delete", url.Values{}), 400, "no episodes selected")
+	h.mustContain(h.do("POST", "/feed/UCnope/episodes/delete", url.Values{"ep": {"x"}}), 404)
+	h.mustContain(h.get("/search?q=Title"), 200)
+	if strings.Contains(h.get("/search?q=0000000").Body.String(), `name="ep"`) {
+		t.Fatal("search results have no select mode")
+	}
 }
 
 func TestThumbnailsAndMetadataInUI(t *testing.T) {
@@ -233,12 +272,12 @@ func TestThumbnailsAndMetadataInUI(t *testing.T) {
 
 	// Thumbnails survive cleanup; the media does not.
 	h.cfg.Update(func(c *podsync.Config) error { c.Defaults.CleanupKeepLast = 1; return nil })
-	if _, err := h.sync.Apply(bg); err != nil { // the sync service re-reads the config the web UI wrote
+	if _, err := h.svc.Apply(bg); err != nil { // the sync loop re-reads the config the web UI wrote
 		t.Fatal(err)
 	}
 	h.svc.Cleanup("UCone")
 	cleaned := h.get("/feed/UCone").Body.String()
-	if !strings.Contains(cleaned, `src="http://pod.example:8080/media/UCone/vid0000002.jpg"`) || !strings.Contains(cleaned, "removed by cleanup") {
+	if !strings.Contains(cleaned, `src="http://pod.example:8080/media/UCone/vid0000002.jpg"`) || !strings.Contains(cleaned, "removed") {
 		t.Fatalf("cleaned row should keep its thumbnail:\n%s", cleaned)
 	}
 	// Load More rows show the remote thumbnail, views and channel metadata; downloading keeps the hint.
@@ -309,7 +348,7 @@ func TestStatusBannerDismissAndBusy(t *testing.T) {
 
 func TestStatusTriggersRefreshOnlyWhenLibraryChanged(t *testing.T) {
 	h := newHarness(t)
-	h.get("/status") // let the web UI's library catch up with the sync service's startup
+	h.get("/status") // let the web UI's library catch up with the sync loop's startup
 	cur := h.lib.Version()
 	rec := h.get(fmt.Sprintf("/status?v=%d", cur))
 	if rec.Header().Get("HX-Trigger") != "" {
@@ -329,7 +368,7 @@ func TestStatusTriggersRefreshOnlyWhenLibraryChanged(t *testing.T) {
 
 func TestAddFlow(t *testing.T) {
 	h := newHarness(t)
-	h.mustContain(h.get("/add"), 200, `name="q"`, "Playlists need their link")
+	h.mustContain(h.get("/add"), 200, `name="q"`, `aria-label="Find"`)
 	if page := h.get("/add").Body.String(); strings.Contains(page, `name="kind"`) || strings.Contains(page, "/add/search") || strings.Contains(page, "/add/preview") {
 		t.Fatalf("there is one lookup box now:\n%s", page)
 	}
@@ -340,6 +379,14 @@ func TestAddFlow(t *testing.T) {
 	if strings.Contains(list.Body.String(), `name="id" value=`) {
 		t.Fatal("a list is not a preview")
 	}
+
+	// A channel with no handle must not leave a stray leading "·" before its subscriber count.
+	noHandle := h.do("POST", "/add/find", url.Values{"q": {"nohandle"}})
+	h.mustContain(noHandle, 200, "No Handle Channel", "2.2K subscribers", "Handled Channel", "@handled · 3.0K subscribers")
+	if strings.Contains(noHandle.Body.String(), "· 2.2K subscribers") || strings.Contains(noHandle.Body.String(), "> · 2.2K subscribers") {
+		t.Fatalf("no-handle channel should not have a leading separator:\n%s", noHandle.Body.String())
+	}
+
 	// One match goes straight to the preview, whether it came from a reference or a name search.
 	for _, q := range []string{"@new", "UCnew", "lonely"} {
 		h.mustContain(h.do("POST", "/add/find", url.Values{"q": {q}}), 200, "New &lt;Channel&gt;", "@new · 1.5M subscribers", `name="id" value="UCnew"`, "Add feed")
@@ -375,10 +422,10 @@ func TestAddFlow(t *testing.T) {
 		t.Fatalf("saved feed: %+v ok=%v", f, ok)
 	}
 	h.waitIdle()
-	if n := len(h.syncrLib.Episodes("UCnew")); n != 2 {
+	if n := len(h.lib.Episodes("UCnew")); n != 2 {
 		t.Fatalf("first pull should fetch page_size=2 episodes, got %d", n)
 	}
-	sum, _ := h.syncrLib.Feed("UCnew")
+	sum, _ := h.lib.Feed("UCnew")
 	if sum.Meta.ImageURL != "https://img/x.jpg" || sum.Meta.Description != "about" {
 		t.Fatalf("meta: %+v", sum.Meta)
 	}
@@ -432,29 +479,24 @@ func TestSettingsSaveValidationAndApply(t *testing.T) {
 	f.Del("min_duration")
 	h.mustContain(h.do("POST", "/settings", f), 200, "Not saved", "min_duration is required")
 
-	// The sync service picked the new values up through Apply.
-	if sc := h.syncrCfg.Get(); sc.Download.Concurrency != 3 || sc.Defaults.PageSize != 4 {
-		t.Fatalf("the sync service must have applied the web UI's settings: %+v", sc.Download)
+	// The sync loop picked the new values up through Apply.
+	if sc := h.cfg.Get(); sc.Download.Concurrency != 3 || sc.Defaults.PageSize != 4 {
+		t.Fatalf("the sync loop must have applied the web UI's settings: %+v", sc.Download)
 	}
 }
 
-// What belongs to whoever runs the service is shown, never editable: not by form, not by a forged post.
+// Deployment settings (the listen address, the public address, the data
+// directory, the cookies file) are environment variables, not part of this
+// file at all, so there is nothing for the settings page or a forged post to touch.
 func TestSettingsPageDoesNotEditOperatorSettings(t *testing.T) {
 	h := newHarness(t)
-	h.cfg.Update(func(c *podsync.Config) error { c.Download.CookiesFile = "/config/cookies.txt"; return nil })
 	page := h.get("/settings").Body.String()
 	for _, field := range []string{"base_url", "yt_dlp_path", "cookies_file", "listen_addr", "api_addr", "data_dir", "title_include", "title_exclude", "cleanup_after_days"} {
 		if strings.Contains(page, `name="`+field+`"`) {
 			t.Errorf("%s must not be an editable field", field)
 		}
 	}
-	for _, shown := range []string{"<code>:8080</code>", "<code>127.0.0.1:8081</code>", "<code>http://pod.example:8080</code>", "<code>yt-dlp</code>", "<code>/config/cookies.txt</code>"} {
-		if !strings.Contains(page, shown) {
-			t.Errorf("settings page should show %s read-only:\n%s", shown, page)
-		}
-	}
 
-	before := h.cfg.Get()
 	forged := url.Values{
 		"base_url": {"http://evil.example"}, "yt_dlp_path": {"/bin/sh"}, "cookies_file": {"/etc/passwd"},
 		"listen_addr": {":1"}, "api_addr": {":2"}, "data_dir": {"/tmp/elsewhere"},
@@ -462,37 +504,24 @@ func TestSettingsPageDoesNotEditOperatorSettings(t *testing.T) {
 		"page_size": {"3"}, "cleanup_keep_last": {"0"}, "cleanup_after_days": {"30"}, "title_include": {"x"}, "title_exclude": {"y"},
 	}
 	h.mustContain(h.do("POST", "/settings", forged), 200, "Saved")
-	if raw, _ := os.ReadFile(h.cfgPath); strings.Contains(string(raw), "cleanup_after_days") || strings.Contains(string(raw), "title_") {
+	raw, _ := os.ReadFile(h.cfgPath)
+	if strings.Contains(string(raw), "cleanup_after_days") || strings.Contains(string(raw), "title_") {
 		t.Fatalf("there are no global patterns or age-based cleanup; a forged post must not create them:\n%s", raw)
 	}
-	after := h.cfg.Get()
-	if after.Server != before.Server || after.Download.YtDlpPath != before.Download.YtDlpPath || after.Download.CookiesFile != before.Download.CookiesFile {
-		t.Fatalf("a forged post changed operator settings: %+v -> %+v", before.Server, after.Server)
+	for _, field := range []string{"server", "base_url", "yt_dlp_path", "cookies_file", "listen_addr", "api_addr", "data_dir"} {
+		if strings.Contains(string(raw), field) {
+			t.Fatalf("deployment settings must never reach the config file: found %q in\n%s", field, raw)
+		}
 	}
-}
-
-func TestSettingsSavedEvenWhenSyncServiceIsDown(t *testing.T) {
-	h := newHarness(t)
-	dead := rest.NewClient("http://127.0.0.1:1", nil)
-	ui, err := newServer(options{Config: h.cfg, Library: h.lib, Syncer: dead})
-	if err != nil {
-		t.Fatal(err)
-	}
-	h = &harness{t: t, h: ui.Handler(), cfg: h.cfg, lib: h.lib}
-	rec := h.do("POST", "/settings", url.Values{
-		"concurrency": {"5"}, "update_interval": {"30m"},
-		"format": {"video"}, "max_resolution": {"720"}, "min_duration": {"60s"}, "page_size": {"3"}, "cleanup_keep_last": {"0"},
-	})
-	h.mustContain(rec, 200, "Saved, but the sync service could not be reached")
-	if h.cfg.Get().Download.Concurrency != 5 {
-		t.Fatal("the change must be saved even though the sync service could not be told")
+	if after := h.cfg.Get(); after.Download.Concurrency != 2 {
+		t.Fatalf("a forged post must still apply the legitimate fields: %+v", after.Download)
 	}
 }
 
 func TestFeedSettingsOverridesAndInherit(t *testing.T) {
 	h := newHarness(t)
 	page := h.get("/feed/UCone/settings")
-	h.mustContain(page, 200, "Default (video)", `placeholder="3"`, `name="min_duration" value="" placeholder="61s"`, `name="title_include"`, `name="title_exclude"`)
+	h.mustContain(page, 200, "Default (audio)", `placeholder="3"`, `name="min_duration" value="" placeholder="61s"`, `name="title_include"`, `name="title_exclude"`)
 	if strings.Contains(page.Body.String(), "cleanup_after_days") {
 		t.Fatal("age-based cleanup no longer exists")
 	}
@@ -509,10 +538,6 @@ func TestFeedSettingsOverridesAndInherit(t *testing.T) {
 	raw, _ := os.ReadFile(h.cfgPath)
 	if before, _, _ := strings.Cut(string(raw), "[[feeds]]"); strings.Contains(before, "title_") || !strings.Contains(string(raw), `title_exclude = "(?i)live"`) {
 		t.Fatalf("title patterns must be written on the feed only:\n%s", raw)
-	}
-	// The sync service applies them.
-	if sf, _ := h.syncrCfg.Get().Feed("UCone"); sf.TitleExclude != "(?i)live" {
-		t.Fatalf("syncr must have applied the feed's patterns: %+v", sf)
 	}
 	// Blank patterns clear them; blank min_duration inherits again; bare numbers are seconds.
 	form.Set("min_duration", "")
@@ -544,7 +569,7 @@ func TestDeleteFeedKeepsOrDeletesFiles(t *testing.T) {
 	}
 	// Files remain and show as orphaned.
 	h.mustContain(h.get("/"), 200, "Not in config", "Delete files")
-	dir, _ := h.syncrLib.FeedDir("UCone")
+	dir, _ := h.lib.FeedDir("UCone")
 	if _, err := os.Stat(dir); err != nil {
 		t.Fatal("files should remain")
 	}
@@ -555,7 +580,7 @@ func TestDeleteFeedKeepsOrDeletesFiles(t *testing.T) {
 
 	h2 := newHarness(t)
 	h2.svc.PullFeed("UCone")
-	dir2, _ := h2.syncrLib.FeedDir("UCone")
+	dir2, _ := h2.lib.FeedDir("UCone")
 	h2.do("POST", "/feed/UCone/delete", url.Values{"delete_files": {"on"}})
 	if _, err := os.Stat(dir2); !os.IsNotExist(err) {
 		t.Fatal("files should be deleted with the checkbox")
@@ -572,65 +597,34 @@ func TestForcePullNotices(t *testing.T) {
 	h.mustContain(h.do("POST", "/feed/UCnone/pull", nil), 404)
 }
 
-func TestSyncServiceOutageIsVisibleButBrowsingStillWorks(t *testing.T) {
-	h := newHarness(t)
-	h.svc.PullFeed("UCone")
-	dead := rest.NewClient("http://127.0.0.1:1", nil)
-	ui, err := newServer(options{Config: h.cfg, Library: h.lib, Syncer: dead})
-	if err != nil {
-		t.Fatal(err)
-	}
-	d := &harness{t: t, h: ui.Handler()}
-	// The library and feeds come from the shared files, so they keep working...
-	d.mustContain(d.get("/"), 200, "Channel One", "Cannot reach the sync service")
-	d.mustContain(d.get("/feed/UCone"), 200, "Title vid0000000")
-	// ...the banner explains why nothing new arrives, and cannot be dismissed...
-	rec := d.get("/status")
-	d.mustContain(rec, 200, `class="banner error"`, "Cannot reach the sync service")
-	if strings.Contains(rec.Body.String(), "/status/dismiss") {
-		t.Fatal("an outage banner must not offer Dismiss")
-	}
-	// ...and actions that need the service say so instead of failing silently.
-	d.mustContain(d.do("POST", "/pull", nil), 200, "unreachable")
-	d.mustContain(d.get("/feed/UCone/older?offset=3"), 200, "Could not load more", "unreachable")
-	d.mustContain(d.do("POST", "/add/find", url.Values{"q": {"@x"}}), 200, "unreachable")
-}
-
-// The web UI is for managing the library; syncr publishes the feeds and media.
+// The web UI is for managing the library; feeds and media are published
+// separately (see TestSingleListenerRoutesAndAuth), not by the UI's own mux.
 func TestWebUIDoesNotPublishFeedsOrMedia(t *testing.T) {
 	h := newHarness(t)
 	h.svc.PullFeed("UCone")
-	for _, p := range []string{"/feeds/UCone.xml", "/media/UCone/vid0000000.mp4", "/media/UCone/vid0000000.jpg", "/api/v1/status", "/api/v1/apply"} {
+	for _, p := range []string{"/feeds/UCone.xml", "/media/UCone/vid0000000.mp4", "/media/UCone/vid0000000.jpg"} {
 		if rec := h.get(p); rec.Code != 404 {
 			t.Errorf("%s must not be served by the web UI, got %d", p, rec.Code)
 		}
 	}
-	// What it shows points at syncr's public address (server.base_url), and the CSP allows loading from there.
+	// What it shows points at the public address (PODSYNC_BASE_URL, fixed for the process's life), and
+	// the CSP allows loading from there.
 	rec := h.get("/feed/UCone")
 	h.mustContain(rec, 200, `value="http://pod.example:8080/feeds/UCone.xml"`)
 	csp := rec.Header().Get("Content-Security-Policy")
 	if !strings.Contains(csp, "img-src 'self' https: data: http://pod.example:8080") || !strings.Contains(csp, "media-src 'self' http://pod.example:8080") {
-		t.Fatalf("CSP must allow images and media from syncr's public address: %s", csp)
-	}
-	// Changing the public address (by editing config.toml; Settings doesn't) moves the links and the CSP with it.
-	if err := h.cfg.Update(func(c *podsync.Config) error { c.Server.BaseURL = "http://towhee:8080"; return nil }); err != nil {
-		t.Fatal(err)
-	}
-	page := h.get("/feed/UCone")
-	h.mustContain(page, 200, `src="http://towhee:8080/media/UCone/vid0000000.jpg"`, `value="http://towhee:8080/feeds/UCone.xml"`)
-	if !strings.Contains(page.Header().Get("Content-Security-Policy"), "http://towhee:8080") {
-		t.Fatal("CSP should follow the public address")
+		t.Fatalf("CSP must allow images and media from the public address: %s", csp)
 	}
 }
 
-func TestChangesFromTheOtherProgramAreSeenWithoutRestart(t *testing.T) {
+func TestChangesFromTheSyncLoopAreSeenWithoutRestart(t *testing.T) {
 	h := newHarness(t)
 	h.mustContain(h.get("/feed/UCone"), 200, "No episodes yet")
-	h.svc.PullFeed("UCone") // the sync service downloads while the web UI keeps running
+	h.svc.PullFeed("UCone") // the sync loop downloads while the web UI keeps running
 	h.mustContain(h.get("/feed/UCone"), 200, "Title vid0000000", "Title vid0000002")
 	h.mustContain(h.get("/"), 200, "3 episodes")
 
-	// Someone edits config.toml by hand (or the web UI's other tab/instance does).
+	// Someone edits config.toml by hand.
 	hand := h.cfg.Get()
 	hand.Feeds = append(hand.Feeds, podsync.Feed{ID: "UChand", Name: "Hand Added", Kind: "channel", Source: "youtube"})
 	raw, err := toml.Marshal(hand)
@@ -669,4 +663,149 @@ func TestDismissedIssueReturnsWhenReportedAgain(t *testing.T) {
 	}
 	h.st.Report("k", podsync.LevelWarning, "second")
 	h.mustContain(h.get("/status"), 200, "second")
+}
+
+// ---- single listener: routing and auth ----
+
+func newTestConfig(t *testing.T, webuiDisabled bool) (config, podsync.ConfigStore, podsync.Library) {
+	t.Helper()
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.toml")
+	cfg, err := toml.Open(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := podsync.Default()
+	c.Feeds = []podsync.Feed{{ID: "UCone", Name: "Channel One", Kind: "channel", Source: "youtube"}}
+	c.Normalize()
+	if err := cfg.Update(func(x *podsync.Config) error { *x = c; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	lib := fs.New(filepath.Join(dir, "data"))
+	if err := lib.Load(); err != nil {
+		t.Fatal(err)
+	}
+	return config{
+		baseURL: "http://pod.example:8080", webuiDisabled: webuiDisabled,
+		username: "admin", password: "secret",
+	}, cfg, lib
+}
+
+func TestSingleListenerRoutesAndAuth(t *testing.T) {
+	c, cfg, lib := newTestConfig(t, false)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	svc := syncer.New(ctx, cfg, lib, podsync.NewRegistry(mock.NewSource()), status.New())
+	mux, note, err := newHandler(c, cfg, lib, svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(note, "Basic auth") {
+		t.Fatalf("expected a note about Basic auth, got %q", note)
+	}
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/healthz", nil))
+	if rec.Code != 200 {
+		t.Fatalf("healthz must not require auth, got %d", rec.Code)
+	}
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/feeds/UCone.xml", nil))
+	if rec.Code != 200 {
+		t.Fatalf("feeds must not require auth, got %d: %s", rec.Code, rec.Body)
+	}
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/", nil))
+	if rec.Code != 401 || rec.Header().Get("WWW-Authenticate") == "" {
+		t.Fatalf("the management portal must require auth, got %d %v", rec.Code, rec.Header())
+	}
+	req := httptest.NewRequest("GET", "/", nil)
+	req.SetBasicAuth("admin", "wrong")
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != 401 {
+		t.Fatalf("a wrong password must be rejected, got %d", rec.Code)
+	}
+	req = httptest.NewRequest("GET", "/", nil)
+	req.SetBasicAuth("admin", "secret")
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "Channel One") {
+		t.Fatalf("correct credentials must reach the portal, got %d", rec.Code)
+	}
+}
+
+func TestWebUIDisabledOnlyServesFeedsAndMedia(t *testing.T) {
+	c, cfg, lib := newTestConfig(t, true)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	svc := syncer.New(ctx, cfg, lib, podsync.NewRegistry(mock.NewSource()), status.New())
+	mux, note, err := newHandler(c, cfg, lib, svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(note, "Basic auth") {
+		t.Fatalf("web UI should be off, got note %q", note)
+	}
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/", nil))
+	if rec.Code != 404 {
+		t.Fatalf("the portal must not be mounted when disabled, got %d", rec.Code)
+	}
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/feeds/UCone.xml", nil))
+	if rec.Code != 200 {
+		t.Fatalf("feeds must still be served, got %d", rec.Code)
+	}
+}
+
+func TestConfigValidate(t *testing.T) {
+	ok := config{baseURL: "http://localhost:8080", username: "a", password: "b"}
+	if err := ok.validate(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	bad := ok
+	bad.baseURL = ""
+	if err := bad.validate(); err == nil {
+		t.Fatal("expected an error for a missing base URL")
+	}
+	bad = ok
+	bad.baseURL = "not a url"
+	if err := bad.validate(); err == nil {
+		t.Fatal("expected an error for a non-absolute base URL")
+	}
+	bad = ok
+	bad.password = ""
+	if err := bad.validate(); err == nil {
+		t.Fatal("expected an error for a missing web UI password when enabled")
+	}
+	noUI := config{baseURL: "http://localhost:8080", webuiDisabled: true}
+	if err := noUI.validate(); err != nil {
+		t.Fatalf("no credentials required when the web UI is disabled: %v", err)
+	}
+
+	bad = ok
+	bad.cookies = filepath.Join(t.TempDir(), "does-not-exist.txt")
+	if err := bad.validate(); err == nil {
+		t.Fatal("expected an error for a cookies file that does not exist")
+	}
+	cookiesFile := filepath.Join(t.TempDir(), "cookies.txt")
+	if err := os.WriteFile(cookiesFile, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	good := ok
+	good.cookies = cookiesFile
+	if err := good.validate(); err != nil {
+		t.Fatalf("an existing cookies file must pass: %v", err)
+	}
+
+	bad = ok
+	bad.ytdlpPath = "/no/such/yt-dlp-binary"
+	if err := bad.validate(); err == nil {
+		t.Fatal("expected an error for a yt-dlp path that does not resolve")
+	}
+	// The default ("yt-dlp" on PATH) is not checked: a missing yt-dlp is a runtime
+	// status-banner issue, not a reason to refuse to start.
+	if err := ok.validate(); err != nil {
+		t.Fatalf("unexpected error with the default yt-dlp path: %v", err)
+	}
 }

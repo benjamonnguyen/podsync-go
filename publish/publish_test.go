@@ -19,7 +19,6 @@ import (
 func setup(t *testing.T) (*httptest.Server, *fs.Library) {
 	t.Helper()
 	c := podsync.Default()
-	c.Server.BaseURL = "http://pod.example:8080"
 	c.Feeds = []podsync.Feed{{ID: "UCone", Name: "Channel One", Kind: "channel", Source: "youtube"}}
 	c.Normalize()
 	lib := fs.New(t.TempDir())
@@ -36,7 +35,7 @@ func setup(t *testing.T) (*httptest.Server, *fs.Library) {
 	lib.PutEpisode("UCone", podsync.Episode{ID: "ep1", Title: "One", Status: podsync.StatusDownloaded, File: "ep1.mp4", ThumbFile: "ep1.jpg", Size: 10, Published: pub, DurationSec: 75})
 	lib.PutEpisode("UCone", podsync.Episode{ID: "ep2", Title: "Two (cleaned)", Status: podsync.StatusCleaned, ThumbFile: "ep2.jpg", Published: pub.Add(-time.Hour)})
 	lib.PutEpisode("UCone", podsync.Episode{ID: "ep3", Title: "Three (failed)", Status: podsync.StatusFailed})
-	srv := httptest.NewServer(publish.NewServer(toml.NewMemoryStore(c), lib).Handler())
+	srv := httptest.NewServer(publish.NewServer(toml.NewMemoryStore(c), lib, "http://pod.example:8080").Handler())
 	t.Cleanup(srv.Close)
 	return srv, lib
 }
@@ -95,6 +94,32 @@ func TestMediaThumbnailsAndRanges(t *testing.T) {
 	}
 }
 
+func TestOPML(t *testing.T) {
+	c := podsync.Default()
+	c.Feeds = []podsync.Feed{
+		{ID: "UCone", Name: "Channel One", Kind: "channel", Source: "youtube"},
+		{ID: "UCtwo", Name: "Channel Two", Kind: "channel", Source: "youtube", OPMLExclude: true},
+	}
+	c.Normalize()
+	lib := fs.New(t.TempDir())
+	if err := lib.Load(); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(publish.NewServer(toml.NewMemoryStore(c), lib, "http://pod.example:8080").Handler())
+	t.Cleanup(srv.Close)
+
+	resp, body := get(t, srv.URL+"/opml.xml")
+	if resp.StatusCode != 200 || !strings.HasPrefix(resp.Header.Get("Content-Type"), "text/x-opml") {
+		t.Fatalf("%d %v", resp.StatusCode, resp.Header)
+	}
+	if !strings.Contains(body, `xmlUrl="http://pod.example:8080/feeds/UCone.xml"`) {
+		t.Errorf("missing included feed in\n%s", body)
+	}
+	if strings.Contains(body, "UCtwo") {
+		t.Errorf("excluded feed should not appear in\n%s", body)
+	}
+}
+
 func TestNothingElseIsPublished(t *testing.T) {
 	srv, _ := setup(t)
 	for _, bad := range []string{
@@ -112,7 +137,7 @@ func TestNothingElseIsPublished(t *testing.T) {
 	// Feeds that are only on disk (not configured) are not published.
 	_, lib := setup(t)
 	lib.EnsureFeed("youtube", "UCorphan")
-	srv2 := httptest.NewServer(publish.NewServer(toml.NewMemoryStore(podsync.Default()), lib).Handler())
+	srv2 := httptest.NewServer(publish.NewServer(toml.NewMemoryStore(podsync.Default()), lib, "http://pod.example:8080").Handler())
 	defer srv2.Close()
 	if resp, _ := get(t, srv2.URL+"/feeds/UCorphan.xml"); resp.StatusCode != 404 {
 		t.Fatal("orphaned folders must not be published")

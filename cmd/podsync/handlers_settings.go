@@ -88,11 +88,8 @@ func (s *Server) handleSettingsSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	flash := "Saved. Changes are applied."
-	switch {
-	case res.ApplyErr != nil:
+	if res.ApplyErr != nil {
 		flash = res.ApplyErr.Error()
-	case res.RestartRequired:
-		flash = "Saved. The sync service's listen address or data directory changed in the config file and only take effect after a restart."
 	}
 	s.renderSettings(w, r, res.Settings, flash, "")
 }
@@ -108,6 +105,7 @@ type feedSettingsView struct {
 	TitleExclude    string
 	CleanupKeepLast string
 	PageSize        string
+	OPMLExclude     bool
 	Defaults        podsync.Options
 }
 
@@ -138,7 +136,8 @@ func feedSettingsFrom(id, kind string, fs FeedSettings, d podsync.Options) feedS
 		ID: id, Name: fs.Name, Kind: kind, Format: sval(fs.Format), MaxResolution: itoa(fs.MaxResolution),
 		TitleInclude: fs.TitleInclude, TitleExclude: fs.TitleExclude,
 		CleanupKeepLast: itoa(fs.CleanupKeepLast), PageSize: itoa(fs.PageSize),
-		Defaults: d,
+		OPMLExclude: fs.OPMLExclude,
+		Defaults:    d,
 	}
 	if fs.MinDuration != nil {
 		v.MinDuration = seconds(*fs.MinDuration)
@@ -151,6 +150,7 @@ func settingsFromFeed(f podsync.Feed) FeedSettings {
 		Name: f.Name, Format: f.Format, MaxResolution: f.MaxResolution, MinDuration: f.MinDuration,
 		TitleInclude: f.TitleInclude, TitleExclude: f.TitleExclude,
 		CleanupKeepLast: f.CleanupKeepLast, PageSize: f.PageSize,
+		OPMLExclude: f.OPMLExclude,
 	}
 }
 
@@ -193,6 +193,7 @@ func feedSettingsFromForm(r *http.Request, current string) (FeedSettings, error)
 	fs.TitleExclude = strings.TrimSpace(r.FormValue("title_exclude"))
 	fs.CleanupKeepLast = optInt(r, "cleanup_keep_last", &errs)
 	fs.PageSize = optInt(r, "page_size", &errs)
+	fs.OPMLExclude = r.FormValue("opml_exclude") == "on"
 	return fs, errors.Join(errs...)
 }
 
