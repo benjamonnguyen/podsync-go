@@ -18,30 +18,30 @@ func isKind(err error, target error) bool { return errors.Is(err, target) }
 // context the template needs.
 type rowView struct {
 	EpisodeView
-	base             string // syncr's public address, where media and thumbnails live
-	FeedID, FeedName string
-	ShowFeed         bool // show the feed name (cross-feed search results)
-	ShowChannel      bool // show the uploader (playlists mix channels)
-	OOB              bool // render as an out-of-band swap that replaces the row with the same id
+	base                     string // syncr's public address, where media and thumbnails live
+	FeedID, Format, FeedName string
+	ShowFeed                 bool // show the feed name (cross-feed search results)
+	ShowChannel              bool // show the uploader (playlists mix channels)
+	OOB                      bool // render as an out-of-band swap that replaces the row with the same id
 }
 
 // Thumb is the local thumbnail (served by syncr) when the episode has one,
 // else the remote URL.
 func (r rowView) Thumb() string {
 	if r.ThumbFile != "" {
-		return r.base + "/media/" + r.FeedID + "/" + r.ThumbFile
+		return r.base + "/media/" + r.FeedID + "/" + r.Format + "/" + r.ThumbFile
 	}
 	return r.Thumbnail
 }
 
 // MediaURL is where the downloaded media file is served (by syncr).
-func (r rowView) MediaURL() string { return r.base + "/media/" + r.FeedID + "/" + r.File }
+func (r rowView) MediaURL() string { return r.base + "/media/" + r.FeedID + "/" + r.Format + "/" + r.File }
 
-func (s *Server) makeRows(feedID, feedName string, playlist bool, views []EpisodeView) []rowView {
+func (s *Server) makeRows(feedID, format, feedName string, playlist bool, views []EpisodeView) []rowView {
 	base := s.mediaBase()
 	rows := make([]rowView, 0, len(views))
 	for _, v := range views {
-		rows = append(rows, rowView{EpisodeView: v, base: base, FeedID: feedID, FeedName: feedName, ShowChannel: playlist})
+		rows = append(rows, rowView{EpisodeView: v, base: base, FeedID: feedID, Format: format, FeedName: feedName, ShowChannel: playlist})
 	}
 	return rows
 }
@@ -83,7 +83,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	hits := s.SearchLibrary(r.Context(), q)
 	rows := make([]rowView, 0, len(hits.Episodes))
 	for _, h := range hits.Episodes {
-		rows = append(rows, rowView{EpisodeView: h.EpisodeView, base: s.mediaBase(), FeedID: h.FeedID, FeedName: h.FeedName, ShowFeed: true})
+		rows = append(rows, rowView{EpisodeView: h.EpisodeView, base: s.mediaBase(), FeedID: h.FeedID, Format: h.FeedFormat, FeedName: h.FeedName, ShowFeed: true})
 	}
 	s.fragment(w, "search_results", map[string]any{"Q": q, "Feeds": hits.Feeds, "Rows": rows, "Truncated": hits.Truncated})
 }
@@ -91,26 +91,26 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 // ---- feed detail ----
 
 func (s *Server) handleFeed(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	detail, err := s.Feed(r.Context(), id)
+	id, format := r.PathValue("id"), r.PathValue("format")
+	detail, err := s.Feed(r.Context(), id, format)
 	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
-	views, err := s.Episodes(r.Context(), id, "")
+	views, err := s.Episodes(r.Context(), id, format, "")
 	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
 	s.render(w, r, "feed", map[string]any{
 		"Title": detail.Name, "Card": detail.FeedSummary, "Stats": map[string]any{"Card": detail.FeedSummary, "Format": detail.Effective.Format},
-		"Rows":     s.makeRows(id, detail.Name, detail.Kind == podsync.FeedPlaylist, views),
+		"Rows":     s.makeRows(id, format, detail.Name, detail.Kind == podsync.FeedPlaylist, views),
 		"PageSize": detail.Effective.PageSize, "Offset": detail.Effective.PageSize, "Format": detail.Effective.Format, "FeedID": id, "Q": "",
 	})
 }
 
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
-	detail, err := s.Feed(r.Context(), r.PathValue("id"))
+	detail, err := s.Feed(r.Context(), r.PathValue("id"), r.PathValue("format"))
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -119,24 +119,24 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleEpisodes(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
+	id, format := r.PathValue("id"), r.PathValue("format")
 	q := strings.TrimSpace(r.URL.Query().Get("q"))
-	detail, err := s.Feed(r.Context(), id)
+	detail, err := s.Feed(r.Context(), id, format)
 	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
-	views, err := s.Episodes(r.Context(), id, q)
+	views, err := s.Episodes(r.Context(), id, format, q)
 	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
-	s.fragment(w, "episode_list", map[string]any{"FeedID": id, "Rows": s.makeRows(id, detail.Name, detail.Kind == podsync.FeedPlaylist, views), "Q": q})
+	s.fragment(w, "episode_list", map[string]any{"FeedID": id, "Format": format, "Rows": s.makeRows(id, format, detail.Name, detail.Kind == podsync.FeedPlaylist, views), "Q": q})
 }
 
 func (s *Server) handleOlder(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	detail, err := s.Feed(r.Context(), id)
+	id, format := r.PathValue("id"), r.PathValue("format")
+	detail, err := s.Feed(r.Context(), id, format)
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -145,29 +145,29 @@ func (s *Server) handleOlder(w http.ResponseWriter, r *http.Request) {
 	if err != nil || offset < 0 || offset > 100000 {
 		offset = 0
 	}
-	page, err := s.Older(r.Context(), id, offset)
+	page, err := s.Older(r.Context(), id, format, offset)
 	if err != nil {
 		if r.Context().Err() != nil {
 			return
 		}
-		s.fragment(w, "older", map[string]any{"FeedID": id, "Err": err.Error(), "More": true, "NextOffset": offset})
+		s.fragment(w, "older", map[string]any{"FeedID": id, "Format": format, "Err": err.Error(), "More": true, "NextOffset": offset})
 		return
 	}
-	rows := s.makeRows(id, detail.Name, detail.Kind == podsync.FeedPlaylist, page.Episodes)
+	rows := s.makeRows(id, format, detail.Name, detail.Kind == podsync.FeedPlaylist, page.Episodes)
 	s.fragment(w, "older", map[string]any{
-		"FeedID": id, "Rows": rows, "More": page.More, "NextOffset": page.NextOffset, "Empty": len(rows) == 0 && !page.More,
+		"FeedID": id, "Format": format, "Rows": rows, "More": page.More, "NextOffset": page.NextOffset, "Empty": len(rows) == 0 && !page.More,
 	})
 }
 
 func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
-	id, epID := r.PathValue("id"), r.PathValue("ep")
-	detail, err := s.Feed(r.Context(), id)
+	id, format, epID := r.PathValue("id"), r.PathValue("format"), r.PathValue("ep")
+	detail, err := s.Feed(r.Context(), id, format)
 	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
 	hint := hintFromRequest(r, epID)
-	if err := s.DownloadEpisode(r.Context(), id, hint); err != nil {
+	if err := s.DownloadEpisode(r.Context(), id, format, hint); err != nil {
 		s.fail(w, r, err)
 		return
 	}
@@ -177,8 +177,8 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 // handleDeleteMedia removes the media of the selected episodes and answers with
 // their updated rows as out-of-band swaps (the rows may sit in either list).
 func (s *Server) handleDeleteMedia(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	detail, err := s.Feed(r.Context(), id)
+	id, format := r.PathValue("id"), r.PathValue("format")
+	detail, err := s.Feed(r.Context(), id, format)
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -187,7 +187,7 @@ func (s *Server) handleDeleteMedia(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, podsync.Invalid("bad form"))
 		return
 	}
-	removed, delErr := s.DeleteMedia(r.Context(), id, r.Form["ep"])
+	removed, delErr := s.DeleteMedia(r.Context(), id, format, r.Form["ep"])
 	if len(removed) > 0 {
 		w.Header().Set("HX-Trigger", "episodes-changed")
 	}
@@ -197,11 +197,11 @@ func (s *Server) handleDeleteMedia(w http.ResponseWriter, r *http.Request) {
 	}
 	var buf strings.Builder
 	for _, epID := range removed {
-		v, err := s.Episode(r.Context(), id, podsync.EpisodeInfo{ID: epID})
+		v, err := s.Episode(r.Context(), id, format, podsync.EpisodeInfo{ID: epID})
 		if err != nil {
 			continue
 		}
-		row := rowView{EpisodeView: v, base: s.mediaBase(), FeedID: id, FeedName: detail.Name, ShowChannel: detail.Kind == podsync.FeedPlaylist, OOB: true}
+		row := rowView{EpisodeView: v, base: s.mediaBase(), FeedID: id, Format: format, FeedName: detail.Name, ShowChannel: detail.Kind == podsync.FeedPlaylist, OOB: true}
 		if err := s.frag.ExecuteTemplate(&buf, "episode_row", row); err != nil {
 			log.Printf("render row: %v", err)
 		}
@@ -211,7 +211,8 @@ func (s *Server) handleDeleteMedia(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleRow(w http.ResponseWriter, r *http.Request) {
-	detail, err := s.Feed(r.Context(), r.PathValue("id"))
+	id, format := r.PathValue("id"), r.PathValue("format")
+	detail, err := s.Feed(r.Context(), id, format)
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -220,12 +221,12 @@ func (s *Server) handleRow(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) renderRow(w http.ResponseWriter, r *http.Request, detail FeedDetail, hint podsync.EpisodeInfo) {
-	v, err := s.Episode(r.Context(), detail.ID, hint)
+	v, err := s.Episode(r.Context(), detail.ID, detail.Format, hint)
 	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
-	s.fragment(w, "episode_row", rowView{EpisodeView: v, base: s.mediaBase(), FeedID: detail.ID, FeedName: detail.Name, ShowChannel: detail.Kind == podsync.FeedPlaylist})
+	s.fragment(w, "episode_row", rowView{EpisodeView: v, base: s.mediaBase(), FeedID: detail.ID, Format: detail.Format, FeedName: detail.Name, ShowChannel: detail.Kind == podsync.FeedPlaylist})
 }
 
 // ---- pulling & status ----
@@ -318,17 +319,17 @@ func pullNotice(err error, started string) string {
 }
 
 func (s *Server) handlePullAll(w http.ResponseWriter, r *http.Request) {
-	err := s.Pull(r.Context(), "")
+	err := s.Pull(r.Context(), "", "")
 	s.fragment(w, "status", s.statusView(r, pullNotice(err, "Checking all feeds for new episodes…")))
 }
 
 func (s *Server) handlePullFeed(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	detail, err := s.Feed(r.Context(), id)
+	id, format := r.PathValue("id"), r.PathValue("format")
+	detail, err := s.Feed(r.Context(), id, format)
 	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
-	err = s.Pull(r.Context(), id)
+	err = s.Pull(r.Context(), id, format)
 	s.fragment(w, "status", s.statusView(r, pullNotice(err, "Checking "+detail.Name+" for new episodes…")))
 }

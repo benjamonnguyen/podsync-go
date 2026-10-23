@@ -33,7 +33,7 @@ cleanup_keep_last = 3
 		t.Fatalf("feed defaults: %+v", f)
 	}
 	eff := f.Effective(cfg.Defaults)
-	if eff.Format != "audio" || eff.CleanupKeepLast != 3 || eff.PageSize != 7 || eff.MaxResolution != 720 {
+	if eff.Format != "audio" || eff.CleanupKeepLast != 3 || eff.PageSize != 7 || eff.MaxVideoHeight != 720 || eff.AudioQuality != "high" {
 		t.Fatalf("effective: %+v", eff)
 	}
 }
@@ -53,6 +53,8 @@ func TestParseRejectsUnknownKeysAndBadValues(t *testing.T) {
 		"old feed name key":   "[[feeds]]\n" + validFeed + "name = \"Chan\"\n",
 		"bad regex":           "[[feeds]]\n" + validFeed + "title_include = \"(\"\n",
 		"bad format":          "[defaults]\nformat = \"gif\"\n",
+		"bad audio_quality":   "[defaults]\naudio_quality = \"medium\"\n",
+		"old resolution key":  "[defaults]\nmax_resolution = 720\n",
 		"dup feed id":         "[[feeds]]\n" + validFeed + "[[feeds]]\nid=\"a\"\nurl=\"https://www.youtube.com/channel/UCb/videos\"\n",
 		"dup feed url":        "[[feeds]]\n" + validFeed + "[[feeds]]\nid=\"b\"\nurl=\"https://www.youtube.com/channel/UCa/videos\"\n",
 		"unsafe id":           "[[feeds]]\nid=\"../x\"\nurl=\"https://www.youtube.com/channel/UCa/videos\"\n",
@@ -66,6 +68,48 @@ func TestParseRejectsUnknownKeysAndBadValues(t *testing.T) {
 		if _, err := Parse([]byte(in)); err == nil {
 			t.Errorf("%s: expected error", name)
 		}
+	}
+}
+
+// A channel can be configured twice, under different ids, to get both an
+// audio and a video feed out of it: the duplicate-url check only fires when
+// two feeds at the same url would also produce the same effective format.
+func TestSameURLAllowedWithDifferentFormat(t *testing.T) {
+	cfg, err := Parse([]byte(`
+[[feeds]]
+id = "adamragusea-mp3"
+url = "https://www.youtube.com/channel/UC9_p50tH3WmMslWRWKnM7dQ/videos"
+
+[[feeds]]
+id = "adamragusea"
+url = "https://www.youtube.com/channel/UC9_p50tH3WmMslWRWKnM7dQ/videos"
+format = "video"
+`))
+	if err != nil {
+		t.Fatalf("audio (default) + video feed of the same channel should be valid: %v", err)
+	}
+	if len(cfg.Feeds) != 2 {
+		t.Fatalf("%+v", cfg.Feeds)
+	}
+	if got := cfg.Feeds[0].Effective(cfg.Defaults).Format; got != "audio" {
+		t.Fatalf("first feed should inherit the default format: %q", got)
+	}
+	if got := cfg.Feeds[1].Effective(cfg.Defaults).Format; got != "video" {
+		t.Fatalf("second feed should keep its override: %q", got)
+	}
+
+	// A third feed at the same url and the same (default) format as the first is a real duplicate.
+	_, err = Parse([]byte(`
+[[feeds]]
+id = "adamragusea-mp3"
+url = "https://www.youtube.com/channel/UC9_p50tH3WmMslWRWKnM7dQ/videos"
+
+[[feeds]]
+id = "adamragusea-mp3-2"
+url = "https://www.youtube.com/channel/UC9_p50tH3WmMslWRWKnM7dQ/videos"
+`))
+	if err == nil {
+		t.Fatal("same url and same effective format should still be rejected as a duplicate")
 	}
 }
 
@@ -89,7 +133,7 @@ func TestMinDurationParsesAndRoundTrips(t *testing.T) {
 		t.Fatalf("round trip lost the override (an explicit zero must survive): %v\n%s", err, data)
 	}
 	def, _ := Parse([]byte(""))
-	if def.Defaults.MinDuration.Std() != 61*time.Second || def.Defaults.MaxResolution != 720 {
+	if def.Defaults.MinDuration.Std() != 61*time.Second || def.Defaults.MaxVideoHeight != 720 || def.Defaults.AudioQuality != "high" {
 		t.Fatalf("defaults: %+v", def.Defaults)
 	}
 }

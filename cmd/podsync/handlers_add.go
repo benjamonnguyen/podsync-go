@@ -2,7 +2,6 @@ package main
 
 import (
 	"net/http"
-	"strconv"
 	"strings"
 
 	"podsync"
@@ -11,8 +10,6 @@ import (
 func (s *Server) handleAdd(w http.ResponseWriter, r *http.Request) {
 	s.render(w, r, "add", map[string]any{"Title": "Add feed", "DefaultPageSize": s.cfg.Get().Defaults.PageSize})
 }
-
-func (s *Server) defaultPageSize(r *http.Request) int { return s.cfg.Get().Defaults.PageSize }
 
 // handleAddFind is the one lookup behind the Add page. The sync service decides
 // from hints what was typed: a link or @handle resolves to that feed, anything
@@ -33,8 +30,7 @@ func (s *Server) handleAddFind(w http.ResponseWriter, r *http.Request) {
 		s.fragment(w, "add_results", map[string]any{"Empty": true, "Q": q})
 	case 1:
 		s.remember(feeds[0])
-		_, exists := s.cfg.Get().Feed(feeds[0].ID)
-		s.fragment(w, "add_preview", map[string]any{"Info": feeds[0], "Exists": exists, "DefaultPageSize": s.defaultPageSize(r)})
+		s.renderAddPreview(w, r, feeds[0], FeedSettings{}, "")
 	default:
 		s.fragment(w, "add_results", map[string]any{"Results": feeds, "Q": q})
 	}
@@ -53,6 +49,27 @@ func (s *Server) remember(info podsync.FeedInfo) {
 	s.previews[info.ID] = preview{info: info, at: s.now()}
 }
 
+// renderAddPreview shows the found feed with its full set of per-feed options
+// (the same fields the feed settings page edits), prefilled with fs — empty
+// on first preview, or whatever the user just submitted if it failed to add.
+// A feed id may be reused across formats (see config.go's duplicate check),
+// so "already in your library" only reflects the format currently selected
+// and does not block adding a different one.
+func (s *Server) renderAddPreview(w http.ResponseWriter, r *http.Request, info podsync.FeedInfo, fs FeedSettings, errText string) {
+	cfg := s.cfg.Get()
+	format := cfg.Defaults.Format
+	if fs.Format != nil {
+		format = *fs.Format
+	}
+	_, exists := cfg.Feed(info.ID, format)
+	s.fragment(w, "add_preview", map[string]any{
+		"Info": info, "Err": errText,
+		"F":            feedSettingsFrom(info.ID, info.Name, info.Kind, "", fs, cfg.Defaults),
+		"Exists":       exists,
+		"ExistsFormat": format,
+	})
+}
+
 // handleAddCommit only adds feeds that were just previewed, so a forged form
 // post cannot add arbitrary IDs or names.
 func (s *Server) handleAddCommit(w http.ResponseWriter, r *http.Request) {
@@ -64,19 +81,15 @@ func (s *Server) handleAddCommit(w http.ResponseWriter, r *http.Request) {
 		s.fragment(w, "add_preview", map[string]any{"Err": "That preview expired — find the feed again."})
 		return
 	}
-	var pageSize *int
-	if v := strings.TrimSpace(r.FormValue("page_size")); v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil {
-			s.fragment(w, "add_preview", map[string]any{"Info": pv.info, "DefaultPageSize": s.defaultPageSize(r), "Err": "Episodes per update must be a number."})
-			return
-		}
-		pageSize = &n
-	}
-	sum, err := s.AddFeed(r.Context(), AddFeedRequest{Info: pv.info, PageSize: pageSize})
-	if err != nil {
-		s.fragment(w, "add_preview", map[string]any{"Info": pv.info, "DefaultPageSize": s.defaultPageSize(r), "Err": err.Error()})
+	fs, parseErr := feedSettingsFromForm(r)
+	if parseErr != nil {
+		s.renderAddPreview(w, r, pv.info, fs, parseErr.Error())
 		return
 	}
-	redirect(w, r, "/feed/"+sum.ID)
+	sum, err := s.AddFeed(r.Context(), AddFeedRequest{Info: pv.info, Settings: fs})
+	if err != nil {
+		s.renderAddPreview(w, r, pv.info, fs, err.Error())
+		return
+	}
+	redirect(w, r, "/feed/"+sum.ID+"/"+sum.Format)
 }

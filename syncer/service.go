@@ -30,8 +30,17 @@ const (
 	maxCatchUpPages = 10
 )
 
+// feedRef identifies one configured feed: the same id may be configured
+// twice, once per format, so id alone is ambiguous.
+type feedRef struct{ id, format string }
+
+// refKey is the internal map/status key for a feedRef (ids cannot contain
+// "/", so this cannot collide).
+func refKey(id, format string) string { return id + "/" + format }
+
 type job struct {
 	feedID string
+	format string
 	ep     podsync.EpisodeInfo
 	manual bool
 	state  string // "queued" | "downloading"
@@ -49,11 +58,11 @@ type Service struct {
 	pullMu sync.Mutex // held for the duration of a pull
 
 	mu       sync.Mutex
-	jobs     map[string]*job // key feedID/epID, queued or running
+	jobs     map[string]*job // key refKey(feedID,format)/epID, queued or running
 	queue    []*job
 	active   int
 	pulling  bool
-	failures map[string]map[string]string // feedID -> epID -> message
+	failures map[string]map[string]string // refKey(feedID,format) -> epID -> message
 	versions map[string]string
 	wake     chan struct{}
 }
@@ -70,7 +79,7 @@ func New(ctx context.Context, cfg podsync.ConfigStore, lib podsync.Library, reg 
 	return s
 }
 
-func jobKey(feedID, epID string) string { return feedID + "/" + epID }
+func jobKey(feedID, format, epID string) string { return refKey(feedID, format) + "/" + epID }
 
 // Activity reports live background work for the status banner.
 func (s *Service) Activity() podsync.Activity {
@@ -91,10 +100,10 @@ func (s *Service) Versions() map[string]string {
 }
 
 // JobState reports whether an episode is queued or downloading ("" if not).
-func (s *Service) JobState(feedID, epID string) string {
+func (s *Service) JobState(feedID, format, epID string) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if j, ok := s.jobs[jobKey(feedID, epID)]; ok {
+	if j, ok := s.jobs[jobKey(feedID, format, epID)]; ok {
 		return j.state
 	}
 	return ""
@@ -102,13 +111,25 @@ func (s *Service) JobState(feedID, epID string) string {
 
 // ---- scheduler ----
 
+// configuredRefs lists every feed currently configured, as (id, effective format) pairs.
+func configuredRefs(cfg podsync.Config) []feedRef {
+	refs := make([]feedRef, 0, len(cfg.Feeds))
+	for _, f := range cfg.Feeds {
+		refs = append(refs, feedRef{f.ID, f.Effective(cfg.Defaults).Format})
+	}
+	return refs
+}
+
 // Reconcile makes sure every configured feed has a directory in the library.
 func (s *Service) Reconcile() {
-	for _, f := range s.cfg.Get().Feeds {
-		if err := s.lib.EnsureFeed(f.Source, f.ID); err != nil {
-			s.st.Report("library:"+f.ID, podsync.LevelError, fmt.Sprintf("Cannot create storage for %q: %v", f.ID, err))
+	cfg := s.cfg.Get()
+	for _, f := range cfg.Feeds {
+		format := f.Effective(cfg.Defaults).Format
+		key := refKey(f.ID, format)
+		if err := s.lib.EnsureFeed(f.Source, f.ID, format); err != nil {
+			s.st.Report("library:"+key, podsync.LevelError, fmt.Sprintf("Cannot create storage for %q: %v", f.ID, err))
 		} else {
-			s.st.Clear("library:" + f.ID)
+			s.st.Clear("library:" + key)
 		}
 	}
 }
@@ -116,8 +137,13 @@ func (s *Service) Reconcile() {
 // ConfigChanged should be called after the configuration is updated.
 func (s *Service) ConfigChanged(old, cur podsync.Config) {
 	for _, f := range old.Feeds {
-		if _, still := cur.Feed(f.ID); !still {
-			s.ForgetFeed(f.ID)
+		oldFormat := f.Effective(old.Defaults).Format
+		if _, still := cur.Feed(f.ID, oldFormat); !still {
+			// Removed from config, or its format changed: either way this
+			// (id, format) identity is no longer configured. The library
+			// directory is left as an orphan; only the status banners for it
+			// are cleared here.
+			s.ForgetFeed(f.ID, oldFormat)
 		}
 	}
 	s.Reconcile()
@@ -228,8 +254,8 @@ func (s *Service) TriggerAll() error {
 }
 
 // TriggerFeed starts an update of one feed in the background.
-func (s *Service) TriggerFeed(id string) error {
-	if _, ok := s.cfg.Get().Feed(id); !ok {
+func (s *Service) TriggerFeed(id, format string) error {
+	if _, ok := s.cfg.Get().Feed(id, format); !ok {
 		return podsync.NotFound("no such feed %q", id)
 	}
 	if !s.pullMu.TryLock() {
@@ -238,7 +264,7 @@ func (s *Service) TriggerFeed(id string) error {
 	s.setPulling(true)
 	go func() {
 		defer s.pullMu.Unlock()
-		s.pullFeedsLocked([]string{id})
+		s.pullFeedsLocked([]feedRef{{id, format}})
 	}()
 	return nil
 }
@@ -254,26 +280,23 @@ func (s *Service) PullAll() error {
 }
 
 // PullFeed updates one feed and waits for its downloads to finish.
-func (s *Service) PullFeed(id string) error {
-	if _, ok := s.cfg.Get().Feed(id); !ok {
+func (s *Service) PullFeed(id, format string) error {
+	if _, ok := s.cfg.Get().Feed(id, format); !ok {
 		return podsync.NotFound("no such feed %q", id)
 	}
 	if !s.pullMu.TryLock() {
 		return podsync.Busy()
 	}
 	defer s.pullMu.Unlock()
-	s.pullFeedsLocked([]string{id})
+	s.pullFeedsLocked([]feedRef{{id, format}})
 	return nil
 }
 
 func (s *Service) pullAllLocked() {
 	s.reloadFromDisk()
-	var ids []string
-	for _, f := range s.cfg.Get().Feeds {
-		ids = append(ids, f.ID)
-	}
+	refs := configuredRefs(s.cfg.Get())
 	s.CheckHealth()
-	s.pullFeedsLocked(ids)
+	s.pullFeedsLocked(refs)
 }
 
 func (s *Service) setPulling(v bool) {
@@ -282,16 +305,16 @@ func (s *Service) setPulling(v bool) {
 	s.mu.Unlock()
 }
 
-func (s *Service) pullFeedsLocked(ids []string) {
+func (s *Service) pullFeedsLocked(refs []feedRef) {
 	s.setPulling(true)
 	defer s.setPulling(false)
 	_, _ = s.lib.Refresh() // the web UI may have added or deleted feeds
 	var all []*job
-	for _, id := range ids {
+	for _, ref := range refs {
 		if s.ctx.Err() != nil {
 			return
 		}
-		all = append(all, s.listAndEnqueue(id)...)
+		all = append(all, s.listAndEnqueue(ref)...)
 	}
 	for _, j := range all {
 		select {
@@ -300,8 +323,8 @@ func (s *Service) pullFeedsLocked(ids []string) {
 			return
 		}
 	}
-	for _, id := range ids {
-		s.Cleanup(id)
+	for _, ref := range refs {
+		s.Cleanup(ref.id, ref.format)
 	}
 }
 
@@ -318,13 +341,13 @@ func (s *Service) reloadFromDisk() {
 
 // listAndEnqueue lists a feed's newest page_size episodes and enqueues the
 // ones that are new and pass the feed's filters.
-func (s *Service) listAndEnqueue(id string) []*job {
+func (s *Service) listAndEnqueue(ref feedRef) []*job {
 	cfg := s.cfg.Get()
-	f, ok := cfg.Feed(id)
+	f, ok := cfg.Feed(ref.id, ref.format)
 	if !ok {
 		return nil
 	}
-	key := "list:" + id
+	key := "list:" + refKey(ref.id, ref.format)
 	src, err := s.reg.Get(f.Source)
 	if err != nil {
 		s.st.Report(key, podsync.LevelError, fmt.Sprintf("Feed %q: %v", f.ID, err))
@@ -345,7 +368,7 @@ func (s *Service) listAndEnqueue(id string) []*job {
 		return nil
 	}
 	s.st.Clear(key)
-	s.refreshMeta(id, src, info)
+	s.refreshMeta(ref, src, info)
 
 	// If the page we just got is entirely episodes we've never seen, a
 	// publish burst may have pushed older-but-still-unseen episodes past
@@ -361,8 +384,8 @@ func (s *Service) listAndEnqueue(id string) []*job {
 	// whole back catalogue on every brand-new feed, which page_size exists
 	// to prevent in the first place.
 	all := eps
-	everPulled := len(s.lib.Episodes(id)) > 0
-	for pages, offset := 1, opts.PageSize; everPulled && len(eps) == opts.PageSize && !s.hasKnownEpisode(id, eps) && pages <= maxCatchUpPages; pages, offset = pages+1, offset+opts.PageSize {
+	everPulled := len(s.lib.Episodes(ref.id, ref.format)) > 0
+	for pages, offset := 1, opts.PageSize; everPulled && len(eps) == opts.PageSize && !s.hasKnownEpisode(ref, eps) && pages <= maxCatchUpPages; pages, offset = pages+1, offset+opts.PageSize {
 		if s.ctx.Err() != nil {
 			return nil
 		}
@@ -385,13 +408,13 @@ func (s *Service) listAndEnqueue(id string) []*job {
 		if ep.Unavailable || ep.IsLive || !filter.Allows(ep) {
 			continue
 		}
-		if known, ok := s.lib.Episode(id, ep.ID); ok {
+		if known, ok := s.lib.Episode(ref.id, ref.format, ep.ID); ok {
 			retry := known.Status == podsync.StatusFailed && known.Attempts < MaxAttempts
 			if !retry {
 				continue
 			}
 		}
-		if j := s.enqueue(id, ep, false); j != nil {
+		if j := s.enqueue(ref, ep, false); j != nil {
 			jobs = append(jobs, j)
 		}
 	}
@@ -402,9 +425,9 @@ func (s *Service) listAndEnqueue(id string) []*job {
 // of eps — downloaded, cleaned or failed all count, since the sidecar JSON
 // survives even after the media file is deleted. Used by listAndEnqueue to
 // find where a previous check's listing left off.
-func (s *Service) hasKnownEpisode(feedID string, eps []podsync.EpisodeInfo) bool {
+func (s *Service) hasKnownEpisode(ref feedRef, eps []podsync.EpisodeInfo) bool {
 	for _, ep := range eps {
-		if _, ok := s.lib.Episode(feedID, ep.ID); ok {
+		if _, ok := s.lib.Episode(ref.id, ref.format, ep.ID); ok {
 			return true
 		}
 	}
@@ -412,15 +435,15 @@ func (s *Service) hasKnownEpisode(feedID string, eps []podsync.EpisodeInfo) bool
 }
 
 // refreshMeta stamps the last pull time and fills in missing image/description once.
-func (s *Service) refreshMeta(id string, src podsync.Source, info podsync.FeedInfo) {
-	sum, _ := s.lib.Feed(id)
+func (s *Service) refreshMeta(ref feedRef, src podsync.Source, info podsync.FeedInfo) {
+	sum, _ := s.lib.Feed(ref.id, ref.format)
 	var fresh podsync.FeedInfo
 	if sum.Meta.ImageURL == "" {
 		if r, err := src.Resolve(s.ctx, info.URL); err == nil {
 			fresh = r
 		}
 	}
-	_ = s.lib.UpdateMeta(id, func(m *podsync.FeedMeta) {
+	_ = s.lib.UpdateMeta(ref.id, ref.format, func(m *podsync.FeedMeta) {
 		m.LastPull = s.now().UTC()
 		if fresh.ID != "" {
 			m.Name, m.ImageURL, m.Description = fresh.Name, fresh.ImageURL, fresh.Description
@@ -431,28 +454,28 @@ func (s *Service) refreshMeta(id string, src podsync.Source, info podsync.FeedIn
 // ---- download queue ----
 
 // RequestDownload queues a user-requested download (Load More / Retry).
-func (s *Service) RequestDownload(feedID string, ep podsync.EpisodeInfo) error {
-	if _, ok := s.cfg.Get().Feed(feedID); !ok {
+func (s *Service) RequestDownload(feedID, format string, ep podsync.EpisodeInfo) error {
+	if _, ok := s.cfg.Get().Feed(feedID, format); !ok {
 		return podsync.NotFound("no such feed %q", feedID)
 	}
-	if known, ok := s.lib.Episode(feedID, ep.ID); ok && known.Status == podsync.StatusDownloaded {
+	if known, ok := s.lib.Episode(feedID, format, ep.ID); ok && known.Status == podsync.StatusDownloaded {
 		return nil
 	}
-	s.enqueue(feedID, ep, true)
+	s.enqueue(feedRef{feedID, format}, ep, true)
 	return nil
 }
 
-func (s *Service) enqueue(feedID string, ep podsync.EpisodeInfo, manual bool) *job {
+func (s *Service) enqueue(ref feedRef, ep podsync.EpisodeInfo, manual bool) *job {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	key := jobKey(feedID, ep.ID)
+	key := jobKey(ref.id, ref.format, ep.ID)
 	if j, ok := s.jobs[key]; ok {
 		if manual {
 			j.manual = true
 		}
 		return j
 	}
-	j := &job{feedID: feedID, ep: ep, manual: manual, state: "queued", done: make(chan struct{})}
+	j := &job{feedID: ref.id, format: ref.format, ep: ep, manual: manual, state: "queued", done: make(chan struct{})}
 	s.jobs[key] = j
 	s.queue = append(s.queue, j)
 	s.scheduleLocked()
@@ -474,7 +497,7 @@ func (s *Service) runJob(j *job) {
 	s.download(j)
 	s.mu.Lock()
 	s.active--
-	delete(s.jobs, jobKey(j.feedID, j.ep.ID))
+	delete(s.jobs, jobKey(j.feedID, j.format, j.ep.ID))
 	s.scheduleLocked()
 	s.mu.Unlock()
 	close(j.done)
@@ -482,7 +505,7 @@ func (s *Service) runJob(j *job) {
 
 func (s *Service) download(j *job) {
 	cfg := s.cfg.Get()
-	f, ok := cfg.Feed(j.feedID)
+	f, ok := cfg.Feed(j.feedID, j.format)
 	if !ok {
 		return // feed was deleted while queued
 	}
@@ -495,17 +518,18 @@ func (s *Service) download(j *job) {
 	manual := j.manual
 	s.mu.Unlock()
 	opts := f.Effective(cfg.Defaults)
-	tmp := filepath.Join(s.lib.TempDir(), j.feedID, j.ep.ID) // per-episode: concurrent jobs must not share a staging dir
+	tmp := filepath.Join(s.lib.TempDir(), refKey(j.feedID, j.format), j.ep.ID) // per-episode: concurrent jobs must not share a staging dir
 	res, err := src.Download(s.ctx, j.ep, podsync.DownloadOptions{
-		Audio:     opts.Format == podsync.FormatAudio,
-		MaxHeight: opts.MaxResolution,
+		Audio:          opts.Format == podsync.FormatAudio,
+		MaxVideoHeight: opts.MaxVideoHeight,
+		AudioQuality:   opts.AudioQuality,
 	}, tmp)
 	if err != nil {
 		_ = os.RemoveAll(tmp)
 		s.recordFailure(j, f, err)
 		return
 	}
-	feedDir, ok := s.lib.FeedDir(j.feedID)
+	feedDir, ok := s.lib.FeedDir(j.feedID, j.format)
 	if !ok {
 		_ = os.RemoveAll(tmp)
 		return // feed deleted mid-download
@@ -523,7 +547,7 @@ func (s *Service) download(j *job) {
 		if err := os.Rename(filepath.Join(tmp, res.Thumb), filepath.Join(feedDir, res.Thumb)); err == nil {
 			thumb = res.Thumb
 		} else {
-			log.Printf("keeping %s/%s without thumbnail: %v", j.feedID, j.ep.ID, err)
+			log.Printf("keeping %s/%s without thumbnail: %v", refKey(j.feedID, j.format), j.ep.ID, err)
 		}
 	}
 	_ = os.RemoveAll(tmp)
@@ -539,68 +563,72 @@ func (s *Service) download(j *job) {
 	if ep.Published.IsZero() {
 		ep.Published = now
 	}
-	if prev, ok := s.lib.Episode(j.feedID, j.ep.ID); ok && prev.Manual {
+	if prev, ok := s.lib.Episode(j.feedID, j.format, j.ep.ID); ok && prev.Manual {
 		ep.Manual = true
 	}
-	if err := s.lib.PutEpisode(j.feedID, ep); err != nil {
+	if err := s.lib.PutEpisode(j.feedID, j.format, ep); err != nil {
 		s.recordFailure(j, f, err)
 		return
 	}
-	s.clearFailure(j.feedID, j.ep.ID)
+	s.clearFailure(j.feedID, j.format, j.ep.ID)
 }
 
 func (s *Service) recordFailure(j *job, f podsync.Feed, err error) {
 	if s.ctx.Err() != nil {
 		return // shutting down; do not poison the episode
 	}
-	prev, _ := s.lib.Episode(j.feedID, j.ep.ID)
+	prev, _ := s.lib.Episode(j.feedID, j.format, j.ep.ID)
 	attempts := prev.Attempts + 1
 	if j.manual {
 		attempts = 1
 	}
 	title := firstNonEmpty(prev.Title, j.ep.Title, j.ep.ID)
-	_ = s.lib.PutEpisode(j.feedID, podsync.Episode{
+	_ = s.lib.PutEpisode(j.feedID, j.format, podsync.Episode{
 		ID: j.ep.ID, Title: title, URL: firstNonEmpty(prev.URL, j.ep.URL), Thumbnail: firstNonEmpty(prev.Thumbnail, j.ep.Thumbnail),
 		Channel: firstNonEmpty(prev.Channel, j.ep.Channel), ViewCount: maxInt64(prev.ViewCount, j.ep.ViewCount),
 		Published: prev.Published, DurationSec: maxInt(prev.DurationSec, j.ep.DurationSec),
 		Status: podsync.StatusFailed, Attempts: attempts, LastError: err.Error(), Manual: j.manual || prev.Manual,
 	})
+	key := refKey(j.feedID, j.format)
 	s.mu.Lock()
-	if s.failures[j.feedID] == nil {
-		s.failures[j.feedID] = map[string]string{}
+	if s.failures[key] == nil {
+		s.failures[key] = map[string]string{}
 	}
-	s.failures[j.feedID][j.ep.ID] = fmt.Sprintf("%q: %v", title, err)
-	n, msg := len(s.failures[j.feedID]), s.failures[j.feedID][j.ep.ID]
+	s.failures[key][j.ep.ID] = fmt.Sprintf("%q: %v", title, err)
+	n, msg := len(s.failures[key]), s.failures[key][j.ep.ID]
 	s.mu.Unlock()
 	text := fmt.Sprintf("Download failed in %q — %s", f.ID, msg)
 	if n > 1 {
 		text = fmt.Sprintf("%d downloads failed in %q; latest: %s", n, f.ID, msg)
 	}
-	s.st.Report("download:"+j.feedID, podsync.LevelError, text)
+	s.st.Report("download:"+key, podsync.LevelError, text)
 }
 
-func (s *Service) clearFailure(feedID, epID string) {
+func (s *Service) clearFailure(feedID, format, epID string) {
+	key := refKey(feedID, format)
 	s.mu.Lock()
-	delete(s.failures[feedID], epID)
-	empty := len(s.failures[feedID]) == 0
+	delete(s.failures[key], epID)
+	empty := len(s.failures[key]) == 0
 	if empty {
-		delete(s.failures, feedID)
+		delete(s.failures, key)
 	}
 	s.mu.Unlock()
 	if empty {
-		s.st.Clear("download:" + feedID)
+		s.st.Clear("download:" + key)
 	}
 }
 
-// ForgetFeed drops in-memory state for a deleted feed.
-func (s *Service) ForgetFeed(feedID string) {
+// ForgetFeed drops in-memory state for a feed no longer configured under
+// this (id, format) identity.
+func (s *Service) ForgetFeed(feedID, format string) {
+	key := refKey(feedID, format)
 	s.mu.Lock()
-	delete(s.failures, feedID)
+	delete(s.failures, key)
 	s.mu.Unlock()
-	s.st.ClearPrefix("download:" + feedID)
-	s.st.ClearPrefix("list:" + feedID)
-	s.st.ClearPrefix("cleanup:" + feedID)
-	s.st.ClearPrefix("library:" + feedID)
+	s.st.ClearPrefix("download:" + key)
+	s.st.ClearPrefix("list:" + key)
+	s.st.ClearPrefix("cleanup:" + key)
+	s.st.ClearPrefix("library:" + key)
 }
 
 // ---- cleanup ----
@@ -608,9 +636,9 @@ func (s *Service) ForgetFeed(feedID string) {
 // Cleanup removes media beyond the newest cleanup_keep_last downloaded episodes. Episodes the
 // user downloaded manually are exempt. The sidecar stays (as "cleaned") so
 // the scheduler does not download the episode again.
-func (s *Service) Cleanup(feedID string) {
+func (s *Service) Cleanup(feedID, format string) {
 	cfg := s.cfg.Get()
-	f, ok := cfg.Feed(feedID)
+	f, ok := cfg.Feed(feedID, format)
 	if !ok {
 		return
 	}
@@ -619,7 +647,7 @@ func (s *Service) Cleanup(feedID string) {
 		return
 	}
 	var eligible []podsync.Episode
-	for _, ep := range s.lib.Episodes(feedID) {
+	for _, ep := range s.lib.Episodes(feedID, format) {
 		if ep.Status == podsync.StatusDownloaded && !ep.Manual {
 			eligible = append(eligible, ep) // already newest first
 		}
@@ -635,17 +663,17 @@ func (s *Service) Cleanup(feedID string) {
 		ids = append(ids, id)
 	}
 	sort.Strings(ids)
-	key := "cleanup:" + feedID
+	key := "cleanup:" + refKey(feedID, format)
 	failed := false
 	for _, id := range ids {
 		ep := doomed[id]
-		if err := s.lib.RemoveMedia(feedID, ep); err != nil {
+		if err := s.lib.RemoveMedia(feedID, format, ep); err != nil {
 			s.st.Report(key, podsync.LevelWarning, fmt.Sprintf("Cleanup of %q failed: %v", f.ID, err))
 			failed = true
 			continue
 		}
 		ep.Status, ep.File, ep.Size = podsync.StatusCleaned, "", 0
-		if err := s.lib.PutEpisode(feedID, ep); err != nil {
+		if err := s.lib.PutEpisode(feedID, format, ep); err != nil {
 			s.st.Report(key, podsync.LevelWarning, fmt.Sprintf("Cleanup of %q failed: %v", f.ID, err))
 			failed = true
 		}

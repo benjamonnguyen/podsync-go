@@ -33,6 +33,8 @@ type Settings struct {
 	// BinPath is the yt-dlp executable to run: a bare name resolved on PATH
 	// (the default, "yt-dlp") or an absolute/relative path. Empty means the default.
 	BinPath string
+	// MP3Encoding re-encodes audio downloads to mp3 instead of the default m4a.
+	MP3Encoding bool
 }
 
 // DefaultBinPath is the executable name used when Settings.BinPath is empty:
@@ -279,15 +281,23 @@ func playlistURL(id string) string { return "https://www.youtube.com/playlist?li
 
 // feedURL is what gets passed to yt-dlp: a configured feed's stored URL when
 // it has one, else reconstructed from its ID and Kind (Resolve's own results,
-// and callers that never had a URL to begin with).
+// and callers that never had a URL to begin with). A channel URL is forced
+// onto its "/videos" tab even if the stored URL lacks it (e.g. a bare
+// youtube.com/channel/<id> or youtube.com/@handle pasted by hand): without
+// that tab, --flat-playlist lists the channel's own playlists/tabs instead of
+// its uploads, so every entry is filtered out as not a video id and the feed
+// silently never finds anything to download.
 func feedURL(f podsync.FeedInfo) string {
-	if f.URL != "" {
-		return f.URL
+	if f.URL == "" {
+		if f.Kind == podsync.FeedPlaylist {
+			return playlistURL(f.ID)
+		}
+		return channelURL(f.ID)
 	}
 	if f.Kind == podsync.FeedPlaylist {
-		return playlistURL(f.ID)
+		return f.URL
 	}
-	return channelURL(f.ID)
+	return strings.TrimSuffix(strings.TrimRight(f.URL, "/"), "/videos") + "/videos"
 }
 
 // ---- JSON shapes ----
@@ -611,13 +621,21 @@ func parseSearch(entries []ytEntry) []podsync.FeedInfo {
 
 var mediaIgnore = []string{".json", ".part", ".ytdl", ".temp", ".jpg", ".jpeg", ".png", ".webp", ".vtt", ".srt"}
 
-func formatArgs(opts podsync.DownloadOptions) []string {
+func formatArgs(opts podsync.DownloadOptions, mp3Encoding bool) []string {
 	if opts.Audio {
-		return []string{"-f", "bestaudio[ext=m4a]/bestaudio/best", "-x", "--audio-format", "m4a"}
+		format := "bestaudio[ext=m4a]/bestaudio/best"
+		if opts.AudioQuality == podsync.AudioQualityLow {
+			format = "worstaudio[ext=m4a]/worstaudio/worst"
+		}
+		ext := "m4a"
+		if mp3Encoding {
+			ext = "mp3"
+		}
+		return []string{"-f", format, "-x", "--audio-format", ext}
 	}
 	h := ""
-	if opts.MaxHeight > 0 {
-		h = fmt.Sprintf("[height<=?%d]", opts.MaxHeight)
+	if opts.MaxVideoHeight > 0 {
+		h = fmt.Sprintf("[height<=?%d]", opts.MaxVideoHeight)
 	}
 	f := fmt.Sprintf("bv*%[1]s[ext=mp4]+ba[ext=m4a]/b%[1]s[ext=mp4]/bv*%[1]s+ba/b%[1]s", h)
 	return []string{"-f", f, "--merge-output-format", "mp4"}
@@ -634,7 +652,7 @@ func (y *YouTube) Download(ctx context.Context, ep podsync.EpisodeInfo, opts pod
 		"--write-thumbnail", "--convert-thumbnails", "jpg",
 		"--retries", "3", "--fragment-retries", "3",
 		"-P", destDir, "-o", ep.ID+".%(ext)s")
-	args = append(args, formatArgs(opts)...)
+	args = append(args, formatArgs(opts, y.settings().MP3Encoding)...)
 	args = append(args, "--", "https://www.youtube.com/watch?v="+ep.ID)
 	if _, err := y.run(ctx, downloadTimeout, args...); err != nil {
 		cleanupPartials(destDir, ep.ID)

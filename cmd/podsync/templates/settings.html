@@ -17,7 +17,12 @@
         <option value="video"{{if eq .Cfg.Defaults.Format "video"}} selected{{end}}>Video (mp4)</option>
         <option value="audio"{{if eq .Cfg.Defaults.Format "audio"}} selected{{end}}>Audio only (m4a)</option>
       </select></label>
-    <label>Maximum resolution (pixels of height, 0 = no limit) <input type="number" name="max_resolution" min="0" value="{{.Cfg.Defaults.MaxResolution}}" required></label>
+    <label>Maximum video height (pixels, 0 = no limit) <input type="number" name="max_video_height" min="0" value="{{.Cfg.Defaults.MaxVideoHeight}}" required></label>
+    <label>Audio quality
+      <select name="audio_quality">
+        <option value="high"{{if eq .Cfg.Defaults.AudioQuality "high"}} selected{{end}}>High</option>
+        <option value="low"{{if eq .Cfg.Defaults.AudioQuality "low"}} selected{{end}}>Low</option>
+      </select></label>
     <label>Skip videos shorter than <input type="text" name="min_duration" value="{{secs .Cfg.Defaults.MinDuration}}" required><small>For example 61s or 2m; 0 downloads everything. The default of 61s is how YouTube Shorts (60 seconds or less) are skipped.</small></label>
     <label>Episodes checked per update <input type="number" name="page_size" min="1" max="500" value="{{.Cfg.Defaults.PageSize}}" required><small>Only the newest this-many episodes of a feed are considered on each update.</small></label>
     <label>Keep only the newest N downloaded episodes (0 = keep all) <input type="number" name="cleanup_keep_last" min="0" value="{{.Cfg.Defaults.CleanupKeepLast}}" required></label>

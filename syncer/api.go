@@ -46,12 +46,12 @@ func (s *Service) Pull(ctx context.Context, req podsync.PullRequest) error {
 		if !episodeIDRe.MatchString(req.Episode.ID) {
 			return podsync.Invalid("invalid episode id")
 		}
-		return s.RequestDownload(req.Feed, sanitize(*req.Episode))
+		return s.RequestDownload(req.Feed, req.Format, sanitize(*req.Episode))
 	}
 	if req.Feed == "" {
 		return s.TriggerAll()
 	}
-	return s.TriggerFeed(req.Feed)
+	return s.TriggerFeed(req.Feed, req.Format)
 }
 
 // sanitize limits what a client can inject into the library through a
@@ -78,12 +78,15 @@ func (s *Service) Status(ctx context.Context) (podsync.SyncStatus, error) {
 	s.mu.Lock()
 	jobs := make([]podsync.Job, 0, len(s.jobs))
 	for _, j := range s.jobs {
-		jobs = append(jobs, podsync.Job{FeedID: j.feedID, EpisodeID: j.ep.ID, State: j.state})
+		jobs = append(jobs, podsync.Job{FeedID: j.feedID, Format: j.format, EpisodeID: j.ep.ID, State: j.state})
 	}
 	s.mu.Unlock()
 	sort.Slice(jobs, func(i, k int) bool {
 		if jobs[i].FeedID != jobs[k].FeedID {
 			return jobs[i].FeedID < jobs[k].FeedID
+		}
+		if jobs[i].Format != jobs[k].Format {
+			return jobs[i].Format < jobs[k].Format
 		}
 		return jobs[i].EpisodeID < jobs[k].EpisodeID
 	})
@@ -116,9 +119,9 @@ func (s *Service) Find(ctx context.Context, query string) ([]podsync.FeedInfo, e
 	return feeds, nil
 }
 
-func (s *Service) List(ctx context.Context, feedID string, offset, limit int) ([]podsync.EpisodeInfo, error) {
+func (s *Service) List(ctx context.Context, feedID, format string, offset, limit int) ([]podsync.EpisodeInfo, error) {
 	cfg := s.cfg.Get()
-	f, ok := cfg.Feed(feedID)
+	f, ok := cfg.Feed(feedID, format)
 	if !ok {
 		return nil, podsync.NotFound("no such feed %q", feedID)
 	}
@@ -133,11 +136,11 @@ func (s *Service) List(ctx context.Context, feedID string, offset, limit int) ([
 	eps, err := src.ListEpisodes(ctx, info, offset, limit)
 	if err != nil {
 		if ctx.Err() == nil {
-			s.st.Report("list:"+feedID, podsync.LevelError, fmt.Sprintf("Could not list episodes for %q: %v", f.ID, err))
+			s.st.Report("list:"+refKey(feedID, format), podsync.LevelError, fmt.Sprintf("Could not list episodes for %q: %v", f.ID, err))
 		}
 		return nil, err
 	}
-	s.st.Clear("list:" + feedID)
+	s.st.Clear("list:" + refKey(feedID, format))
 	if eps == nil {
 		eps = []podsync.EpisodeInfo{}
 	}

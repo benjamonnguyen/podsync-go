@@ -32,8 +32,8 @@ func NewServer(cfg podsync.ConfigStore, lib podsync.Library, baseURL string) *Se
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { fmt.Fprintln(w, "ok") })
-	mux.HandleFunc("GET /feeds/{file}", s.serveRSS)
-	mux.HandleFunc("GET /media/{id}/{file}", s.serveMedia)
+	mux.HandleFunc("GET /feeds/{format}/{file}", s.serveRSS)
+	mux.HandleFunc("GET /media/{id}/{format}/{file}", s.serveMedia)
 	mux.HandleFunc("GET /opml.xml", s.serveOPML)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -47,21 +47,23 @@ func (s *Server) serveRSS(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	f, ok := s.cfg.Get().Feed(id)
+	format := r.PathValue("format")
+	cfg := s.cfg.Get()
+	f, ok := cfg.Feed(id, format)
 	if !ok {
 		http.NotFound(w, r)
 		return
 	}
-	lf, _ := s.lib.Feed(id)
+	lf, _ := s.lib.Feed(id, format)
 	title := lf.Meta.Name
 	if title == "" {
 		title = f.ID
 	}
 	base := s.baseURL
 	out, err := rss.Build(base, rss.Feed{
-		ID: id, Title: title, Description: lf.Meta.Description, ImageURL: lf.Meta.ImageURL,
-		Link: base, Self: base + "/feeds/" + id + ".xml",
-	}, s.lib.Episodes(id), s.now())
+		ID: id, Format: format, Title: title, Description: lf.Meta.Description, ImageURL: lf.Meta.ImageURL,
+		Link: base, Self: base + "/feeds/" + format + "/" + id + ".xml",
+	}, s.lib.Episodes(id, format), s.now())
 	if err != nil {
 		http.Error(w, "could not build feed", http.StatusInternalServerError)
 		return
@@ -78,12 +80,13 @@ func (s *Server) serveOPML(w http.ResponseWriter, r *http.Request) {
 		if f.OPMLExclude {
 			continue
 		}
-		lf, _ := s.lib.Feed(f.ID)
+		format := f.Effective(cfg.Defaults).Format
+		lf, _ := s.lib.Feed(f.ID, format)
 		title := lf.Meta.Name
 		if title == "" {
 			title = f.ID
 		}
-		feeds = append(feeds, opml.Feed{Title: title, XMLURL: base + "/feeds/" + f.ID + ".xml", HTMLURL: base})
+		feeds = append(feeds, opml.Feed{Title: title, XMLURL: base + "/feeds/" + format + "/" + f.ID + ".xml", HTMLURL: base})
 	}
 	out, err := opml.Build("podsync", feeds)
 	if err != nil {
@@ -96,7 +99,7 @@ func (s *Server) serveOPML(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) serveMedia(w http.ResponseWriter, r *http.Request) {
 	file := r.PathValue("file")
-	path, err := s.lib.MediaPath(r.PathValue("id"), file)
+	path, err := s.lib.MediaPath(r.PathValue("id"), r.PathValue("format"), file)
 	if err != nil {
 		http.NotFound(w, r)
 		return

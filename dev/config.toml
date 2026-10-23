@@ -1,6 +1,6 @@
-# Development/test feed data; use dev/run.sh (starts syncr and the web UI) from anywhere.
-# Ports, addresses and the data directory are flags in dev/run.sh now, not here.
-# Note: the web UI rewrites this file when you change settings.
+# podsync configuration.
+# This file is rewritten by the web UI when you change settings or feeds;
+# comments you add by hand will not be preserved.
 
 [download]
 concurrency = 2
@@ -9,11 +9,17 @@ self_update = false
 
 [defaults]
 format = "audio"
-max_resolution = 480
-min_duration = "61s"
+max_video_height = 720
+audio_quality = "high"
+min_duration = "1m1s"
 cleanup_keep_last = 50
 page_size = 5
 
 [[feeds]]
 id = "adamragusea"
 url = "https://www.youtube.com/channel/UC9_p50tH3WmMslWRWKnM7dQ"
+
+[[feeds]]
+id = "adamragusea"
+url = "https://www.youtube.com/channel/UC9_p50tH3WmMslWRWKnM7dQ"
+format = "video"

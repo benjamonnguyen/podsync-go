@@ -3,10 +3,12 @@
 // (unless PODSYNC_WEBUI_DISABLED is set) serves a web UI for managing the
 // library — all from one process on one listener. The public feed/media
 // endpoints (/feeds, /media, /opml.xml) are unauthenticated, since that's what podcast
-// apps fetch; everything else (the management portal) requires the HTTP
-// Basic credentials set by PODSYNC_USERNAME/PODSYNC_PASSWORD. Basic auth is
-// sent in the clear unless PODSYNC_TLS_CERT_FILE/PODSYNC_TLS_KEY_FILE are set,
-// in which case the one listener speaks HTTPS instead of HTTP. Almost every
+// apps fetch; everything else (the management portal) sits behind a login
+// page backed by a signed session cookie, checked against the credentials set
+// by PODSYNC_USERNAME/PODSYNC_PASSWORD. The session cookie is sent in the
+// clear unless PODSYNC_TLS_CERT_FILE/PODSYNC_TLS_KEY_FILE are set, in which
+// case the one listener speaks HTTPS instead of HTTP (and the cookie is
+// marked Secure). Almost every
 // deployment setting is an environment variable (all prefixed PODSYNC_);
 // -listen and -config also accept a command-line flag, for the common case
 // of running a few instances by hand without Docker. podsync fails fast
@@ -65,6 +67,7 @@ type config struct {
 	dataDir       string
 	cookies       string
 	ytdlpPath     string
+	mp3Encoding   bool
 	webuiDisabled bool
 	username      string
 	password      string
@@ -83,6 +86,7 @@ func configFromEnv() config {
 		dataDir:       envOr("PODSYNC_DATA_DIR", "./data"),
 		cookies:       envOr("PODSYNC_COOKIES_FILE", ""),
 		ytdlpPath:     envOr("PODSYNC_YTDLP_PATH", ""),
+		mp3Encoding:   envBool("PODSYNC_MP3_ENCODING", false),
 		webuiDisabled: envBool("PODSYNC_WEBUI_DISABLED", false),
 		username:      os.Getenv("PODSYNC_USERNAME"),
 		password:      os.Getenv("PODSYNC_PASSWORD"),
@@ -179,7 +183,7 @@ func probe(addr string, tlsEnabled bool) error {
 
 // newHandler builds the single mux served on -listen/PODSYNC_LISTEN_ADDR:
 // feeds and media are always public, the management portal is mounted at
-// "/" behind HTTP Basic auth unless PODSYNC_WEBUI_DISABLED is set. It also
+// "/" behind a login page unless PODSYNC_WEBUI_DISABLED is set. It also
 // returns a short description for the startup log.
 func newHandler(c config, cfg podsync.ConfigStore, lib podsync.Library, svc podsync.Syncer) (http.Handler, string, error) {
 	publishHandler := publish.NewServer(cfg, lib, c.baseURL).Handler()
@@ -196,8 +200,15 @@ func newHandler(c config, cfg podsync.ConfigStore, lib podsync.Library, svc pods
 		if err != nil {
 			return nil, "", err
 		}
-		mux.Handle("/", basicAuth(c.username, c.password, ui.Handler()))
-		webuiNote = "web UI on (Basic auth)"
+		a, err := newAuth(c.username, c.password, c.tlsEnabled())
+		if err != nil {
+			return nil, "", err
+		}
+		mux.HandleFunc("GET /login", a.handleLoginPage)
+		mux.HandleFunc("POST /login", a.handleLoginSubmit)
+		mux.HandleFunc("POST /logout", a.handleLogout)
+		mux.Handle("/", a.require(ui.Handler()))
+		webuiNote = "web UI on (login page)"
 	}
 	return mux, webuiNote, nil
 }
@@ -220,7 +231,7 @@ func run(c config) error {
 	defer stop()
 
 	yt := youtube.New(func() youtube.Settings {
-		return youtube.Settings{CookiesFile: c.cookies, BinPath: c.ytdlpPath}
+		return youtube.Settings{CookiesFile: c.cookies, BinPath: c.ytdlpPath, MP3Encoding: c.mp3Encoding}
 	})
 	svc := syncer.New(ctx, cfg, lib, podsync.NewRegistry(yt), status.New())
 	cfg.OnChange(svc.ConfigChanged)

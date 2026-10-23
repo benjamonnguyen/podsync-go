@@ -24,8 +24,14 @@ var _ podsync.Library = (*Library)(nil)
 
 const metaFile = "_meta.json"
 
+// feedKey is a feed's identity in the in-memory index: the same id may be
+// configured twice, once per format, each with its own directory.
+func feedKey(id, format string) string { return id + "\x00" + format }
+
 type feedState struct {
 	source   string
+	id       string
+	format   string
 	meta     podsync.FeedMeta
 	episodes map[string]*podsync.Episode
 	dirMod   time.Time // modification time of the feed directory when it was last scanned
@@ -34,7 +40,7 @@ type feedState struct {
 type Library struct {
 	root    string
 	mu      sync.RWMutex
-	feed    map[string]*feedState
+	feed    map[string]*feedState // keyed by feedKey(id, format)
 	version atomic.Uint64
 }
 
@@ -51,17 +57,19 @@ func (l *Library) Version() uint64 { return l.version.Load() }
 // TempDir is where downloads are staged before being moved into place.
 func (l *Library) TempDir() string { return filepath.Join(l.root, ".tmp") }
 
-func (l *Library) feedDir(source, id string) string { return filepath.Join(l.root, source, id) }
+func (l *Library) feedDir(source, id, format string) string {
+	return filepath.Join(l.root, source, id, format)
+}
 
 // FeedDir returns the directory for a known feed.
-func (l *Library) FeedDir(id string) (string, bool) {
+func (l *Library) FeedDir(id, format string) (string, bool) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
-	fs, ok := l.feed[id]
+	fs, ok := l.feed[feedKey(id, format)]
 	if !ok {
 		return "", false
 	}
-	return l.feedDir(fs.source, id), true
+	return l.feedDir(fs.source, id, format), true
 }
 
 // Load scans the data dir and rebuilds the index.
@@ -78,19 +86,30 @@ func (l *Library) Load() error {
 		if !src.IsDir() || strings.HasPrefix(src.Name(), ".") {
 			continue
 		}
-		dirs, err := os.ReadDir(filepath.Join(l.root, src.Name()))
+		ids, err := os.ReadDir(filepath.Join(l.root, src.Name()))
 		if err != nil {
 			return err
 		}
-		for _, d := range dirs {
-			if !d.IsDir() {
+		for _, idEntry := range ids {
+			if !idEntry.IsDir() {
 				continue
 			}
-			if _, dup := feeds[d.Name()]; dup {
-				log.Printf("library: feed id %q exists under more than one source; ignoring %s/%s", d.Name(), src.Name(), d.Name())
-				continue
+			formats, err := os.ReadDir(filepath.Join(l.root, src.Name(), idEntry.Name()))
+			if err != nil {
+				return err
 			}
-			feeds[d.Name()] = loadFeed(filepath.Join(l.root, src.Name(), d.Name()), src.Name())
+			for _, formatEntry := range formats {
+				if !formatEntry.IsDir() {
+					continue
+				}
+				key := feedKey(idEntry.Name(), formatEntry.Name())
+				if _, dup := feeds[key]; dup {
+					log.Printf("library: feed %q/%q exists under more than one source; ignoring %s", idEntry.Name(), formatEntry.Name(), src.Name())
+					continue
+				}
+				dir := filepath.Join(l.root, src.Name(), idEntry.Name(), formatEntry.Name())
+				feeds[key] = loadFeed(dir, src.Name(), idEntry.Name(), formatEntry.Name())
+			}
 		}
 	}
 	l.mu.Lock()
@@ -122,35 +141,48 @@ func (l *Library) Refresh() (bool, error) {
 		if !src.IsDir() || strings.HasPrefix(src.Name(), ".") {
 			continue
 		}
-		dirs, err := os.ReadDir(filepath.Join(l.root, src.Name()))
+		ids, err := os.ReadDir(filepath.Join(l.root, src.Name()))
 		if err != nil {
 			return changed, err
 		}
-		for _, d := range dirs {
-			id := d.Name()
-			if !d.IsDir() || seen[id] {
+		for _, idEntry := range ids {
+			if !idEntry.IsDir() {
 				continue
 			}
-			seen[id] = true
-			path := filepath.Join(l.root, src.Name(), id)
-			st, err := os.Stat(path)
+			formats, err := os.ReadDir(filepath.Join(l.root, src.Name(), idEntry.Name()))
 			if err != nil {
-				continue
+				return changed, err
 			}
-			cur := l.feed[id]
-			if cur != nil && cur.source == src.Name() && st.ModTime().Equal(cur.dirMod) && time.Since(st.ModTime()) > settleWindow {
-				continue
+			for _, formatEntry := range formats {
+				if !formatEntry.IsDir() {
+					continue
+				}
+				id, format := idEntry.Name(), formatEntry.Name()
+				key := feedKey(id, format)
+				if seen[key] {
+					continue
+				}
+				seen[key] = true
+				dir := filepath.Join(l.root, src.Name(), id, format)
+				st, err := os.Stat(dir)
+				if err != nil {
+					continue
+				}
+				cur := l.feed[key]
+				if cur != nil && cur.source == src.Name() && st.ModTime().Equal(cur.dirMod) && time.Since(st.ModTime()) > settleWindow {
+					continue
+				}
+				next := loadFeed(dir, src.Name(), id, format)
+				if cur == nil || cur.source != next.source || !reflect.DeepEqual(cur.meta, next.meta) || !reflect.DeepEqual(cur.episodes, next.episodes) {
+					changed = true
+				}
+				l.feed[key] = next
 			}
-			next := loadFeed(path, src.Name())
-			if cur == nil || cur.source != next.source || !reflect.DeepEqual(cur.meta, next.meta) || !reflect.DeepEqual(cur.episodes, next.episodes) {
-				changed = true
-			}
-			l.feed[id] = next
 		}
 	}
-	for id := range l.feed {
-		if !seen[id] {
-			delete(l.feed, id)
+	for key := range l.feed {
+		if !seen[key] {
+			delete(l.feed, key)
 			changed = true
 		}
 	}
@@ -163,8 +195,8 @@ func (l *Library) Refresh() (bool, error) {
 // CleanTemp removes staged partial downloads left by an interrupted run.
 func (l *Library) CleanTemp() error { return os.RemoveAll(l.TempDir()) }
 
-func loadFeed(dir, source string) *feedState {
-	fs := &feedState{source: source, episodes: map[string]*podsync.Episode{}}
+func loadFeed(dir, source, id, format string) *feedState {
+	fs := &feedState{source: source, id: id, format: format, episodes: map[string]*podsync.Episode{}}
 	if st, err := os.Stat(dir); err == nil {
 		fs.dirMod = st.ModTime()
 	}
@@ -200,14 +232,15 @@ func loadFeed(dir, source string) *feedState {
 }
 
 // EnsureFeed creates the feed directory and index entry if missing.
-func (l *Library) EnsureFeed(source, id string) error {
-	if err := os.MkdirAll(l.feedDir(source, id), 0o755); err != nil {
+func (l *Library) EnsureFeed(source, id, format string) error {
+	if err := os.MkdirAll(l.feedDir(source, id, format), 0o755); err != nil {
 		return err
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if _, ok := l.feed[id]; !ok {
-		l.feed[id] = &feedState{source: source, episodes: map[string]*podsync.Episode{}}
+	key := feedKey(id, format)
+	if _, ok := l.feed[key]; !ok {
+		l.feed[key] = &feedState{source: source, id: id, format: format, episodes: map[string]*podsync.Episode{}}
 		l.version.Add(1)
 	}
 	return nil
@@ -217,25 +250,30 @@ func (l *Library) Feeds() []podsync.LibraryFeed {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 	out := make([]podsync.LibraryFeed, 0, len(l.feed))
-	for id, fs := range l.feed {
-		out = append(out, summarize(id, fs))
+	for _, fs := range l.feed {
+		out = append(out, summarize(fs))
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].ID != out[j].ID {
+			return out[i].ID < out[j].ID
+		}
+		return out[i].Format < out[j].Format
+	})
 	return out
 }
 
-func (l *Library) Feed(id string) (podsync.LibraryFeed, bool) {
+func (l *Library) Feed(id, format string) (podsync.LibraryFeed, bool) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
-	fs, ok := l.feed[id]
+	fs, ok := l.feed[feedKey(id, format)]
 	if !ok {
 		return podsync.LibraryFeed{}, false
 	}
-	return summarize(id, fs), true
+	return summarize(fs), true
 }
 
-func summarize(id string, fs *feedState) podsync.LibraryFeed {
-	s := podsync.LibraryFeed{Source: fs.source, ID: id, Meta: fs.meta}
+func summarize(fs *feedState) podsync.LibraryFeed {
+	s := podsync.LibraryFeed{Source: fs.source, ID: fs.id, Format: fs.format, Meta: fs.meta}
 	for _, ep := range fs.episodes {
 		if ep.Status == podsync.StatusDownloaded {
 			s.Downloaded++
@@ -246,12 +284,13 @@ func summarize(id string, fs *feedState) podsync.LibraryFeed {
 }
 
 // UpdateMeta mutates and persists a feed's cache metadata.
-func (l *Library) UpdateMeta(id string, fn func(*podsync.FeedMeta)) error {
+func (l *Library) UpdateMeta(id, format string, fn func(*podsync.FeedMeta)) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	fs, ok := l.feed[id]
+	key := feedKey(id, format)
+	fs, ok := l.feed[key]
 	if !ok {
-		return fmt.Errorf("unknown feed %q", id)
+		return fmt.Errorf("unknown feed %q/%q", id, format)
 	}
 	next := fs.meta
 	fn(&next)
@@ -259,7 +298,7 @@ func (l *Library) UpdateMeta(id string, fn func(*podsync.FeedMeta)) error {
 	if err != nil {
 		return err
 	}
-	if err := WriteFileAtomic(filepath.Join(l.feedDir(fs.source, id), metaFile), b, 0o644); err != nil {
+	if err := WriteFileAtomic(filepath.Join(l.feedDir(fs.source, id, format), metaFile), b, 0o644); err != nil {
 		return err
 	}
 	fs.meta = next
@@ -268,10 +307,10 @@ func (l *Library) UpdateMeta(id string, fn func(*podsync.FeedMeta)) error {
 }
 
 // Episodes returns copies sorted newest first (episodes without a date last).
-func (l *Library) Episodes(feedID string) []podsync.Episode {
+func (l *Library) Episodes(feedID, format string) []podsync.Episode {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
-	fs, ok := l.feed[feedID]
+	fs, ok := l.feed[feedKey(feedID, format)]
 	if !ok {
 		return nil
 	}
@@ -283,10 +322,10 @@ func (l *Library) Episodes(feedID string) []podsync.Episode {
 	return out
 }
 
-func (l *Library) Episode(feedID, epID string) (podsync.Episode, bool) {
+func (l *Library) Episode(feedID, format, epID string) (podsync.Episode, bool) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
-	if fs, ok := l.feed[feedID]; ok {
+	if fs, ok := l.feed[feedKey(feedID, format)]; ok {
 		if ep, ok := fs.episodes[epID]; ok {
 			return *ep, true
 		}
@@ -295,21 +334,22 @@ func (l *Library) Episode(feedID, epID string) (podsync.Episode, bool) {
 }
 
 // PutEpisode persists the sidecar and updates the index.
-func (l *Library) PutEpisode(feedID string, ep podsync.Episode) error {
+func (l *Library) PutEpisode(feedID, format string, ep podsync.Episode) error {
 	if ep.ID == "" || strings.ContainsAny(ep.ID, `/\`) || strings.HasPrefix(ep.ID, ".") {
 		return fmt.Errorf("invalid episode id %q", ep.ID)
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	fs, ok := l.feed[feedID]
+	key := feedKey(feedID, format)
+	fs, ok := l.feed[key]
 	if !ok {
-		return fmt.Errorf("unknown feed %q", feedID)
+		return fmt.Errorf("unknown feed %q/%q", feedID, format)
 	}
 	b, err := json.MarshalIndent(ep, "", "  ")
 	if err != nil {
 		return err
 	}
-	if err := WriteFileAtomic(filepath.Join(l.feedDir(fs.source, feedID), ep.ID+".json"), b, 0o644); err != nil {
+	if err := WriteFileAtomic(filepath.Join(l.feedDir(fs.source, feedID, format), ep.ID+".json"), b, 0o644); err != nil {
 		return err
 	}
 	cp := ep
@@ -319,11 +359,11 @@ func (l *Library) PutEpisode(feedID string, ep podsync.Episode) error {
 }
 
 // RemoveMedia deletes an episode's media file (not its sidecar or thumbnail).
-func (l *Library) RemoveMedia(feedID string, ep podsync.Episode) error {
+func (l *Library) RemoveMedia(feedID, format string, ep podsync.Episode) error {
 	if ep.File == "" {
 		return nil
 	}
-	path, err := l.plainPath(feedID, ep.File)
+	path, err := l.plainPath(feedID, format, ep.File)
 	if err != nil {
 		return err
 	}
@@ -334,30 +374,69 @@ func (l *Library) RemoveMedia(feedID string, ep podsync.Episode) error {
 }
 
 // DeleteFeed removes the feed directory and its index entry.
-func (l *Library) DeleteFeed(id string) error {
+func (l *Library) DeleteFeed(id, format string) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	fs, ok := l.feed[id]
+	key := feedKey(id, format)
+	fs, ok := l.feed[key]
 	if !ok {
 		return nil
 	}
-	if err := os.RemoveAll(l.feedDir(fs.source, id)); err != nil {
+	if err := os.RemoveAll(l.feedDir(fs.source, id, format)); err != nil {
 		return err
 	}
-	delete(l.feed, id)
+	delete(l.feed, key)
+	l.version.Add(1)
+	return nil
+}
+
+// ClearFeed removes a feed's bookkeeping (sidecars and _meta.json)
+// unconditionally; if deleteMedia is true, every other file (media,
+// thumbnails) is removed too, and the whole directory with it. Used when a
+// feed's format changes: the old (id, format) entry is actively cleared
+// rather than left as a passive orphan, since the sidecars no longer
+// correspond to anything the config still points at.
+func (l *Library) ClearFeed(id, format string, deleteMedia bool) error {
+	if deleteMedia {
+		return l.DeleteFeed(id, format)
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	key := feedKey(id, format)
+	fs, ok := l.feed[key]
+	if !ok {
+		return nil
+	}
+	dir := l.feedDir(fs.source, id, format)
+	entries, err := os.ReadDir(dir)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if name == metaFile || strings.HasSuffix(name, ".json") {
+			if err := os.Remove(filepath.Join(dir, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return err
+			}
+		}
+	}
+	l.feed[key] = &feedState{source: fs.source, id: id, format: format, episodes: map[string]*podsync.Episode{}}
 	l.version.Add(1)
 	return nil
 }
 
 // plainPath resolves a file name inside a feed directory, refusing anything
 // that is not a plain file name.
-func (l *Library) plainPath(feedID, file string) (string, error) {
+func (l *Library) plainPath(feedID, format, file string) (string, error) {
 	if file == "" || file != filepath.Base(file) || strings.HasPrefix(file, ".") {
 		return "", fmt.Errorf("invalid file name %q", file)
 	}
-	dir, ok := l.FeedDir(feedID)
+	dir, ok := l.FeedDir(feedID, format)
 	if !ok {
-		return "", fmt.Errorf("unknown feed %q", feedID)
+		return "", fmt.Errorf("unknown feed %q/%q", feedID, format)
 	}
 	return filepath.Join(dir, file), nil
 }
@@ -365,10 +444,10 @@ func (l *Library) plainPath(feedID, file string) (string, error) {
 // MediaPath returns the path of a media or thumbnail file owned by one of the
 // feed's episodes. The thumbnail outlives the media: cleanup removes only the
 // media file. Sidecars and unknown names are not found.
-func (l *Library) MediaPath(feedID, file string) (string, error) {
+func (l *Library) MediaPath(feedID, format, file string) (string, error) {
 	l.mu.RLock()
 	owned := false
-	if fs, ok := l.feed[feedID]; ok {
+	if fs, ok := l.feed[feedKey(feedID, format)]; ok {
 		for _, ep := range fs.episodes {
 			if (ep.Status == podsync.StatusDownloaded && ep.File == file) || (ep.ThumbFile != "" && ep.ThumbFile == file) {
 				owned = true
@@ -380,7 +459,7 @@ func (l *Library) MediaPath(feedID, file string) (string, error) {
 	if !owned {
 		return "", podsync.NotFound("no such file")
 	}
-	path, err := l.plainPath(feedID, file)
+	path, err := l.plainPath(feedID, format, file)
 	if err != nil {
 		return "", podsync.NotFound("no such file")
 	}
@@ -397,7 +476,7 @@ func (l *Library) Search(query string) []podsync.EpisodeHit {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 	var out []podsync.EpisodeHit
-	for id, fs := range l.feed {
+	for _, fs := range l.feed {
 		for _, ep := range fs.episodes {
 			if ep.Status != podsync.StatusDownloaded {
 				continue
@@ -411,7 +490,7 @@ func (l *Library) Search(query string) []podsync.EpisodeHit {
 				}
 			}
 			if match {
-				out = append(out, podsync.EpisodeHit{FeedID: id, Episode: *ep})
+				out = append(out, podsync.EpisodeHit{FeedID: fs.id, Format: fs.format, Episode: *ep})
 			}
 		}
 	}

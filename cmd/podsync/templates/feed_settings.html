@@ -1,25 +1,37 @@
 {{define "content"}}
-<p><a href="/feed/{{.F.ID}}">← {{.F.Name}}</a></p>
+<p><a href="/feed/{{.F.ID}}/{{.F.CurrentFormat}}">← {{.F.Name}}</a></p>
 <h1>Feed settings</h1>
 {{if .Flash}}<div class="notice ok">{{.Flash}}</div>{{end}}
 {{if .Err}}<div class="notice err"><strong>Not saved.</strong><pre>{{.Err}}</pre></div>{{end}}
-<form method="post" action="/feed/{{.F.ID}}/settings" class="settings">
+{{if .Confirm}}
+<div class="notice warn">
+  <p>Changing format from <strong>{{.Confirm.OldFormat}}</strong> to <strong>{{.Confirm.NewFormat}}</strong> starts a separate download history under the new format.
+  {{if .Confirm.OldDownloaded}}The {{.Confirm.OldFormat}} one has {{count .Confirm.OldDownloaded "episode" "episodes"}} downloaded{{if .Confirm.OldBytes}} ({{size .Confirm.OldBytes}}){{end}} that will no longer be checked for updates.{{end}}
+  What should happen to those files?</p>
+  <form method="post" action="/feed/{{.F.ID}}/{{.Confirm.OldFormat}}/settings" class="settings">
+    <input type="hidden" name="confirm_format_change" value="1">
+    <input type="hidden" name="format" value="{{.F.Format}}">
+    <input type="hidden" name="max_video_height" value="{{.F.MaxVideoHeight}}">
+    <input type="hidden" name="audio_quality" value="{{.F.AudioQuality}}">
+    <input type="hidden" name="min_duration" value="{{.F.MinDuration}}">
+    <input type="hidden" name="title_include" value="{{.F.TitleInclude}}">
+    <input type="hidden" name="title_exclude" value="{{.F.TitleExclude}}">
+    <input type="hidden" name="cleanup_keep_last" value="{{.F.CleanupKeepLast}}">
+    <input type="hidden" name="page_size" value="{{.F.PageSize}}">
+    {{if eq .F.PlaylistSort "oldest"}}<input type="hidden" name="playlist_sort" value="oldest">{{end}}
+    {{if .F.OPMLExclude}}<input type="hidden" name="opml_exclude" value="on">{{end}}
+    <div class="actions">
+      <button class="btn danger" type="submit" name="delete_old_media" value="1">Delete the {{.Confirm.OldFormat}} files now</button>
+      <button class="btn" type="submit" name="delete_old_media" value="0">Keep them on disk</button>
+    </div>
+  </form>
+</div>
+{{else}}
+<form method="post" action="/feed/{{.F.ID}}/{{.F.CurrentFormat}}/settings" class="settings">
   <fieldset>
-    <label>Format
-      <select name="format">
-        <option value="">Default ({{.F.Defaults.Format}})</option>
-        <option value="video"{{if eq .F.Format "video"}} selected{{end}}>Video (mp4)</option>
-        <option value="audio"{{if eq .F.Format "audio"}} selected{{end}}>Audio only (m4a)</option>
-      </select></label>
-    <label>Maximum resolution (0 = no limit) <input type="number" name="max_resolution" min="0" value="{{.F.MaxResolution}}" placeholder="{{.F.Defaults.MaxResolution}}"></label>
-    <label>Skip videos shorter than <input type="text" name="min_duration" value="{{.F.MinDuration}}" placeholder="{{secs .F.Defaults.MinDuration}}"><small>For example 61s or 2m; 0 downloads everything.</small></label>
-    <label>Only download titles matching (regex) <input type="text" name="title_include" value="{{.F.TitleInclude}}" placeholder="empty = all titles"></label>
-    <label>Skip titles matching (regex) <input type="text" name="title_exclude" value="{{.F.TitleExclude}}" placeholder="empty = skip none"><small>Case-insensitive example: <code>(?i)sponsored|#shorts</code>. These patterns belong to this feed only.</small></label>
-    <label>Episodes checked per update <input type="number" name="page_size" min="1" max="500" value="{{.F.PageSize}}" placeholder="{{.F.Defaults.PageSize}}"></label>
-    <label>Keep only the newest N downloaded episodes (0 = keep all) <input type="number" name="cleanup_keep_last" min="0" value="{{.F.CleanupKeepLast}}" placeholder="{{.F.Defaults.CleanupKeepLast}}"></label>
-    {{if eq .F.Kind "playlist"}}<label class="check"><input type="checkbox" name="playlist_sort" value="oldest"{{if eq .F.PlaylistSort "oldest"}} checked{{end}}> Playlist is ordered oldest first<small>A course/series playlist: check this so updates pull the newest additions instead of only ever the first {{.F.PageSize}} episodes ever added.</small></label>{{end}}
-    <label class="check"><input type="checkbox" name="opml_exclude"{{if .F.OPMLExclude}} checked{{end}}> Exclude from OPML export<small>Off by default: the feed is included in <code>/opml.xml</code>.</small></label>
+    {{template "feed_option_fields" .F}}
   </fieldset>
   <div class="actions"><button class="btn primary" type="submit">Save</button></div>
 </form>
+{{end}}
 {{end}}

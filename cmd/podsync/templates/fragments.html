@@ -15,15 +15,14 @@
 {{define "icon_trash"}}<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg>{{end}}
 {{define "icon_select"}}<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>{{end}}
 {{define "icon_search"}}<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg>{{end}}
-{{define "icon_info"}}<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 16v-5"/><path d="M12 8h.01"/></svg>{{end}}
 
 {{define "feed_card"}}<article class="card">
-  {{if .Orphan}}<button class="icon-btn danger" title="Delete files" aria-label="Delete files" hx-post="/orphans/{{.ID}}/delete" hx-confirm="Delete all files stored for this feed? This cannot be undone.">{{template "icon_trash"}}</button>
-  {{else}}<button class="icon-btn" title="Check now" aria-label="Check now" hx-post="/feed/{{.ID}}/pull" hx-target="#status" hx-swap="outerHTML">{{template "icon_refresh"}}</button>{{end}}
+  {{if .Orphan}}<button class="icon-btn danger" title="Delete files" aria-label="Delete files" hx-post="/orphans/{{.ID}}/{{.Format}}/delete" hx-confirm="Delete all files stored for this feed? This cannot be undone.">{{template "icon_trash"}}</button>
+  {{else}}<button class="icon-btn" title="Check now" aria-label="Check now" hx-post="/feed/{{.ID}}/{{.Format}}/pull" hx-target="#status" hx-swap="outerHTML">{{template "icon_refresh"}}</button>{{end}}
   {{if .ImageURL}}<img class="avatar" src="{{.ImageURL}}" alt="" loading="lazy" referrerpolicy="no-referrer">{{else}}<div class="avatar placeholder"></div>{{end}}
   <div class="card-body">
-    <h3>{{if .Orphan}}{{.Name}}{{else}}<a href="/feed/{{.ID}}">{{.Name}}</a>{{end}}</h3>
-    <p class="muted">{{if .Orphan}}not in config{{else}}{{.Kind}}{{end}} · {{count .Episodes "episode" "episodes"}}{{if .Bytes}} · {{size .Bytes}}{{end}}{{if not .Orphan}} · checked {{ago .LastPull}}{{end}}</p>
+    <h3>{{if .Orphan}}{{.Name}}{{else}}<a href="/feed/{{.ID}}/{{.Format}}">{{.Name}}</a>{{end}}</h3>
+    <p class="muted">{{.Format}} · {{if .Orphan}}not in config · {{end}}{{count .Episodes "episode" "episodes"}}{{if .Bytes}} · {{size .Bytes}}{{end}}{{if not .Orphan}} · checked {{ago .LastPull}}{{end}}</p>
   </div>
 </article>{{end}}
 
@@ -45,12 +44,12 @@
 {{- else}}<p class="empty">No downloaded episodes match.</p>{{end}}
 {{end}}
 
-{{define "episode_row"}}<div class="row{{if ne .State "downloaded"}} faded{{end}}" id="ep-{{.ID}}"{{if .OOB}} hx-swap-oob="true"{{end}}{{if or (eq .State "queued") (eq .State "downloading")}} hx-get="/feed/{{.FeedID}}/episodes/{{.ID}}/row?title={{.Title | urlquery}}&amp;duration={{.DurationSec}}&amp;thumb={{.Thumb | urlquery}}&amp;channel={{.Channel | urlquery}}&amp;views={{.ViewCount}}" hx-trigger="every 2s" hx-swap="outerHTML"{{end}}>
+{{define "episode_row"}}<div class="row{{if ne .State "downloaded"}} faded{{end}}" id="ep-{{.ID}}"{{if .OOB}} hx-swap-oob="true"{{end}}{{if or (eq .State "queued") (eq .State "downloading")}} hx-get="/feed/{{.FeedID}}/{{.Format}}/episodes/{{.ID}}/row?title={{.Title | urlquery}}&amp;duration={{.DurationSec}}&amp;thumb={{.Thumb | urlquery}}&amp;channel={{.Channel | urlquery}}&amp;views={{.ViewCount}}" hx-trigger="every 2s" hx-swap="outerHTML"{{end}}>
   <input type="hidden" name="title" value="{{.Title}}"><input type="hidden" name="duration" value="{{.DurationSec}}"><input type="hidden" name="thumb" value="{{.Thumb}}"><input type="hidden" name="channel" value="{{.Channel}}"><input type="hidden" name="views" value="{{.ViewCount}}">
   {{if and (eq .State "downloaded") (not .ShowFeed)}}<input type="checkbox" class="sel" form="bulk-delete" name="ep" value="{{.ID}}" aria-label="Select {{.Title}}">{{end}}
   {{if .Thumb}}<img class="thumb" src="{{.Thumb}}" alt="" loading="lazy" referrerpolicy="no-referrer">{{else}}<div class="thumb placeholder"></div>{{end}}
   <div class="row-main">
-    {{if .ShowFeed}}<a class="feedname" href="/feed/{{.FeedID}}">{{.FeedName}}</a>{{end}}
+    {{if .ShowFeed}}<a class="feedname" href="/feed/{{.FeedID}}/{{.Format}}">{{.FeedName}}</a>{{end}}
     {{if eq .State "downloaded"}}<a class="title" href="{{.MediaURL}}" target="_blank" rel="noopener">{{.Title}}</a>{{else}}<span class="title">{{.Title}}</span>{{end}}
     <div class="meta">
       {{if .ShowChannel}}{{with .Channel}}<span>{{.}}</span>{{end}}{{end}}
@@ -72,12 +71,12 @@
   </div>
   <div class="row-actions">
     {{if or (eq .State "available") (eq .State "cleaned") (eq .State "failed")}}
-    <button class="btn" hx-post="/feed/{{.FeedID}}/episodes/{{.ID}}/download" hx-include="closest .row" hx-target="closest .row" hx-swap="outerHTML">{{if eq .State "failed"}}Retry{{else if eq .State "cleaned"}}Download again{{else}}Download{{end}}</button>
+    <button class="btn" hx-post="/feed/{{.FeedID}}/{{.Format}}/episodes/{{.ID}}/download" hx-include="closest .row" hx-target="closest .row" hx-swap="outerHTML">{{if eq .State "failed"}}Retry{{else if eq .State "cleaned"}}Download again{{else}}Download{{end}}</button>
     {{end}}
   </div>
 </div>{{end}}
 
-{{define "episode_list"}}<div id="episodes" class="rows" hx-get="/feed/{{.FeedID}}/episodes?q={{.Q | urlquery}}" hx-trigger="episodes-changed from:body" hx-swap="outerHTML">
+{{define "episode_list"}}<div id="episodes" class="rows" hx-get="/feed/{{.FeedID}}/{{.Format}}/episodes?q={{.Q | urlquery}}" hx-trigger="episodes-changed from:body" hx-swap="outerHTML">
 {{- range .Rows}}{{template "episode_row" .}}{{else}}<p class="empty">{{if .Q}}No episodes match “{{.Q}}”.{{else}}No episodes yet. They appear after the first update finishes.{{end}}</p>{{end}}
 </div>{{end}}
 
@@ -86,11 +85,35 @@
 {{- if .Err}}<p class="error center">Could not load more: {{.Err}}</p>{{end}}
 {{- if and (not .Rows) .More (not .Err)}}<p class="muted center">Nothing new in that batch (already downloaded or filtered out).</p>{{end}}
 {{- if .Empty}}<p class="muted center" id="more">No more episodes.</p>
-{{- else if .More}}<div id="more" class="center"><button class="btn" hx-get="/feed/{{.FeedID}}/older?offset={{.NextOffset}}" hx-target="#more" hx-swap="outerHTML" hx-disabled-elt="this">{{if .Err}}Try again{{else}}Load more{{end}}</button></div>
+{{- else if .More}}<div id="more" class="center"><button class="btn" hx-get="/feed/{{.FeedID}}/{{.Format}}/older?offset={{.NextOffset}}" hx-target="#more" hx-swap="outerHTML" hx-disabled-elt="this">{{if .Err}}Try again{{else}}Load more{{end}}</button></div>
 {{- else}}<p class="muted center" id="more">That's the end of the feed.</p>{{end}}
 {{end}}
 
-{{define "feed_stats"}}<p id="feed-stats" class="muted" hx-get="/feed/{{.Card.ID}}/stats" hx-trigger="episodes-changed from:body" hx-swap="outerHTML">{{.Card.Kind}} · {{count .Card.Episodes "episode" "episodes"}} downloaded{{if .Card.Bytes}} · {{size .Card.Bytes}}{{end}} · checked {{ago .Card.LastPull}} · downloads as {{.Format}}{{if .Card.HasOverrides}} · custom settings{{end}}</p>{{end}}
+{{define "feed_stats"}}<p id="feed-stats" class="muted" hx-get="/feed/{{.Card.ID}}/{{.Card.Format}}/stats" hx-trigger="episodes-changed from:body" hx-swap="outerHTML">{{count .Card.Episodes "episode" "episodes"}} downloaded{{if .Card.Bytes}} · {{size .Card.Bytes}}{{end}} · checked {{ago .Card.LastPull}}{{if .Card.HasOverrides}} · custom settings{{end}}</p>{{end}}
+
+{{/* The full set of per-feed options, shared by the feed settings page and the add-feed preview. */}}
+{{define "feed_option_fields"}}
+    <label>Format
+      <select name="format">
+        <option value="">Default ({{.Defaults.Format}})</option>
+        <option value="video"{{if eq .Format "video"}} selected{{end}}>Video (mp4)</option>
+        <option value="audio"{{if eq .Format "audio"}} selected{{end}}>Audio only (m4a)</option>
+      </select></label>
+    <label>Maximum video height (0 = no limit) <input type="number" name="max_video_height" min="0" value="{{.MaxVideoHeight}}" placeholder="{{.Defaults.MaxVideoHeight}}"></label>
+    <label>Audio quality
+      <select name="audio_quality">
+        <option value="">Default ({{.Defaults.AudioQuality}})</option>
+        <option value="high"{{if eq .AudioQuality "high"}} selected{{end}}>High</option>
+        <option value="low"{{if eq .AudioQuality "low"}} selected{{end}}>Low</option>
+      </select></label>
+    <label>Skip videos shorter than <input type="text" name="min_duration" value="{{.MinDuration}}" placeholder="{{secs .Defaults.MinDuration}}"><small>For example 61s or 2m; 0 downloads everything.</small></label>
+    <label>Only download titles matching (regex) <input type="text" name="title_include" value="{{.TitleInclude}}" placeholder="empty = all titles"></label>
+    <label>Skip titles matching (regex) <input type="text" name="title_exclude" value="{{.TitleExclude}}" placeholder="empty = skip none"><small>Case-insensitive example: <code>(?i)sponsored|#shorts</code>. These patterns belong to this feed only.</small></label>
+    <label>Episodes checked per update <input type="number" name="page_size" min="1" max="500" value="{{.PageSize}}" placeholder="{{.Defaults.PageSize}}"><small>Only this many of the newest episodes are downloaded at first; older ones can be fetched later from the feed page with “Load more”.</small></label>
+    <label>Keep only the newest N downloaded episodes (0 = keep all) <input type="number" name="cleanup_keep_last" min="0" value="{{.CleanupKeepLast}}" placeholder="{{.Defaults.CleanupKeepLast}}"></label>
+    {{if eq .Kind "playlist"}}<label class="check"><input type="checkbox" name="playlist_sort" value="oldest"{{if eq .PlaylistSort "oldest"}} checked{{end}}> Playlist is ordered oldest first<small>A course/series playlist: check this so updates pull the newest additions instead of only ever the first {{.PageSize}} episodes ever added.</small></label>{{end}}
+    <label class="check"><input type="checkbox" name="opml_exclude"{{if .OPMLExclude}} checked{{end}}> Exclude from OPML export</label>
+{{end}}
 
 {{define "add_results"}}
 {{- if .Err}}<p class="error">{{.Err}}</p>{{end}}
@@ -108,7 +131,7 @@
 {{- end}}
 {{end}}
 {{define "add_preview"}}
-{{- if .Err}}<p class="error">{{.Err}}</p>{{end}}
+{{- if .Err}}<p class="error"><pre>{{.Err}}</pre></p>{{end}}
 {{- with .Info}}
 <article class="card preview">
   {{if .ImageURL}}<img class="avatar" src="{{.ImageURL}}" alt="" referrerpolicy="no-referrer">{{else}}<div class="avatar placeholder"></div>{{end}}
@@ -116,18 +139,14 @@
     <h3>{{.Name}}</h3>
     <p class="muted">{{dot .Kind .Handle (subscribers .Subscribers) .ID}}</p>
     {{with .Description}}<p class="clip">{{.}}</p>{{end}}
-    {{if $.Exists}}
-      <p class="muted">Already in your library.</p><a class="btn" href="/feed/{{.ID}}">Open</a>
-    {{else}}
-      <form hx-post="/add" hx-target="#found" hx-disabled-elt="find button" class="inline-form">
-        <input type="hidden" name="id" value="{{.ID}}">
-        <label for="page-size-{{.ID}}">Newest episodes to fetch</label>
-        <button type="button" class="icon-btn" data-toggle-info="#pagesize-info-{{.ID}}" aria-expanded="false" aria-label="More info">{{template "icon_info"}}</button>
-        <input type="number" id="page-size-{{.ID}}" name="page_size" min="1" max="500" placeholder="{{$.DefaultPageSize}}">
-        <button class="btn primary full-line" type="submit">Add feed</button>
-      </form>
-      <p id="pagesize-info-{{.ID}}" class="muted" hidden>Only this many of the newest episodes are downloaded at first; older ones can be fetched later from the feed page with “Load more”.</p>
-    {{end}}
+    {{if $.Exists}}<p class="muted">Already in your library as {{$.ExistsFormat}}. <a href="/feed/{{.ID}}/{{$.ExistsFormat}}">Open</a> — or add it again below under a different format.</p>{{end}}
+    <form method="post" hx-post="/add" hx-target="#found" hx-disabled-elt="find button" class="settings">
+      <input type="hidden" name="id" value="{{.ID}}">
+      <fieldset>
+        {{template "feed_option_fields" $.F}}
+      </fieldset>
+      <div class="actions"><button class="btn primary" type="submit">Add feed</button></div>
+    </form>
   </div>
 </article>
 {{- end}}

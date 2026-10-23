@@ -47,10 +47,13 @@ type FeedMeta struct {
 	LastPull    time.Time `json:"last_pull,omitempty"`
 }
 
-// LibraryFeed describes a feed directory found in the library.
+// LibraryFeed describes a feed directory found in the library. A feed's
+// identity is (ID, Format): the same ID may be configured twice, once per
+// format, each getting its own directory and download history.
 type LibraryFeed struct {
 	Source     string
 	ID         string
+	Format     string
 	Meta       FeedMeta
 	Downloaded int
 	Bytes      int64
@@ -59,6 +62,7 @@ type LibraryFeed struct {
 // EpisodeHit is one library search result.
 type EpisodeHit struct {
 	FeedID  string
+	Format  string
 	Episode Episode
 }
 

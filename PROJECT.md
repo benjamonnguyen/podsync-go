@@ -57,8 +57,8 @@ the feeds and serves the management web UI from the same port.**
                        │   │            deletes │   │
  you (browser) ──► web UI (in-process call) ──► sync loop ──► yt-dlp, ffmpeg, deno
                    (views, edits)                  │  scheduler, queue, cleanup
-                   Basic auth required              │
-                                                    └─ public, same :8080: /feeds/<id>.xml, /media/...  ◄── podcast apps
+                   login required                   │
+                                                    └─ public, same :8080: /feeds/<format>/<id>.xml, /media/...  ◄── podcast apps
 ```
 
 - **cmd/podsync** is the one binary. It runs the sync loop (lists feeds, downloads episodes, applies cleanup,
@@ -264,7 +264,8 @@ self_update = false          # run `yt-dlp -U` at startup and daily
 
 [defaults]                    # template applied to newly-added feeds
 format = "audio"              # "audio" | "video"
-max_resolution = 720
+max_video_height = 720        # only applies when format = "video"
+audio_quality = "high"        # "high" | "low"; only applies when format = "audio"
 min_duration = "61s"          # skip videos shorter than this: 61s skips Shorts (60s or less); "0s" = none
 cleanup_keep_last = 50        # 0 = unlimited, else keep N newest
 page_size = 10                # newest N episodes considered per update — see §6.3
@@ -274,7 +275,7 @@ id = "UCxxxxxxxxxxxxxxxxxxxxxx"
 kind = "channel"              # "channel" | "playlist"
 name = "Some Channel"
 format = "audio"              # overrides [defaults]
-max_resolution = 480
+max_video_height = 480
 min_duration = "0s"
 title_exclude = "(?i)#shorts|\\bcompilation\\b"   # title filters are per feed only (no global patterns)
 cleanup_keep_last = 20
@@ -302,8 +303,9 @@ inherit the default.
   would be deleted on the next cycle for being outside the newest-N window.
 
 ### 6.2 RSS feeds
-- One RSS document per feed at a stable URL (e.g. `/feeds/{feed_id}.xml`),
-  iTunes-podcast-compatible tags, enclosure pointing at locally served media.
+- One RSS document per feed at a stable URL, `/feeds/{format}/{feed_id}.xml` (`{format}` is the
+  feed's own effective format, `audio` or `video` — a URL whose format segment doesn't match
+  404s), iTunes-podcast-compatible tags, enclosure pointing at locally served media.
   Only downloaded episodes appear; not-yet-downloaded episodes shown in the
   UI (§7, Load More) are never included.
 

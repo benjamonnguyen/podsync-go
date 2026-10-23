@@ -46,17 +46,6 @@ document.addEventListener("click", function (e) {
 document.addEventListener("DOMContentLoaded", initClips);
 window.addEventListener("load", initClips);
 
-// An icon button marked data-toggle-info shows/hides the text it points at (a
-// plain hint, not a clamped description, so it starts hidden rather than clamped).
-document.addEventListener("click", function (e) {
-  var btn = e.target.closest("[data-toggle-info]");
-  if (!btn) return;
-  var el = document.querySelector(btn.getAttribute("data-toggle-info"));
-  if (!el) return;
-  el.hidden = !el.hidden;
-  btn.setAttribute("aria-expanded", !el.hidden);
-});
-
 // Select mode on the feed page: tick episodes and delete their files.
 var selected = new Set();
 function selectState() {

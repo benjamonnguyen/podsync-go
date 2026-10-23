@@ -18,7 +18,8 @@ self_update = false
 # Defaults applied to every feed; each feed can override any of them.
 [defaults]
 format = "audio"            # "audio" (m4a) or "video" (mp4)
-max_resolution = 720        # pixels of height; 0 = no limit
+max_video_height = 720      # pixels; 0 = no limit; only applies when format = "video"
+audio_quality = "high"      # "high" or "low"; only applies when format = "audio"
 min_duration = "61s"        # skip videos shorter than this: 61s skips YouTube Shorts (60s or less); "0s" = download everything
 page_size = 10              # only the newest N episodes of a feed are considered per update
 cleanup_keep_last = 50      # keep the newest N downloaded episodes; 0 = keep all

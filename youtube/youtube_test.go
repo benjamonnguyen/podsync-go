@@ -73,15 +73,24 @@ func TestFriendlyError(t *testing.T) {
 }
 
 func TestFormatArgs(t *testing.T) {
-	v := strings.Join(formatArgs(podsync.DownloadOptions{MaxHeight: 720}), " ")
+	v := strings.Join(formatArgs(podsync.DownloadOptions{MaxVideoHeight: 720}, false), " ")
 	if !strings.Contains(v, "height<=?720") || !strings.Contains(v, "--merge-output-format mp4") {
 		t.Fatal(v)
 	}
-	if strings.Contains(strings.Join(formatArgs(podsync.DownloadOptions{}), " "), "height") {
+	if strings.Contains(strings.Join(formatArgs(podsync.DownloadOptions{}, false), " "), "height") {
 		t.Fatal("no cap expected")
 	}
-	if a := strings.Join(formatArgs(podsync.DownloadOptions{Audio: true}), " "); !strings.Contains(a, "-x") {
+	if a := strings.Join(formatArgs(podsync.DownloadOptions{Audio: true}, false), " "); !strings.Contains(a, "-x") || !strings.Contains(a, "bestaudio") || !strings.Contains(a, "--audio-format m4a") {
 		t.Fatal(a)
+	}
+	if a := strings.Join(formatArgs(podsync.DownloadOptions{Audio: true, AudioQuality: podsync.AudioQualityLow}, false), " "); !strings.Contains(a, "worstaudio") {
+		t.Fatal(a)
+	}
+	if a := strings.Join(formatArgs(podsync.DownloadOptions{Audio: true}, true), " "); !strings.Contains(a, "--audio-format mp3") {
+		t.Fatal(a)
+	}
+	if a := strings.Join(formatArgs(podsync.DownloadOptions{Audio: false}, true), " "); strings.Contains(a, "mp3") {
+		t.Fatal("mp3 encoding must not affect video downloads")
 	}
 }
 
@@ -446,7 +455,7 @@ func TestLive(t *testing.T) {
 	}
 
 	dest := t.TempDir()
-	dl, err := y.Download(ctx, podsync.EpisodeInfo{ID: "jNQXAC9IVRw"}, podsync.DownloadOptions{MaxHeight: 360}, dest)
+	dl, err := y.Download(ctx, podsync.EpisodeInfo{ID: "jNQXAC9IVRw"}, podsync.DownloadOptions{MaxVideoHeight: 360}, dest)
 	if err != nil {
 		t.Fatalf("download: %v", err)
 	}

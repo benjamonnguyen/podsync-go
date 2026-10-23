@@ -15,6 +15,7 @@ import (
 
 type Feed struct {
 	ID          string
+	Format      string // "audio" | "video"; part of the feed's identity and its media URLs
 	Title       string
 	Description string
 	ImageURL    string
@@ -99,8 +100,8 @@ func MimeType(file string) string {
 }
 
 // MediaURL is the absolute URL of an episode's media file.
-func MediaURL(baseURL, feedID, file string) string {
-	return strings.TrimRight(baseURL, "/") + "/media/" + url.PathEscape(feedID) + "/" + url.PathEscape(file)
+func MediaURL(baseURL, feedID, format, file string) string {
+	return strings.TrimRight(baseURL, "/") + "/media/" + url.PathEscape(feedID) + "/" + url.PathEscape(format) + "/" + url.PathEscape(file)
 }
 
 func clock(sec int) string {
@@ -132,14 +133,14 @@ func Build(baseURL string, f Feed, eps []podsync.Episode, now time.Time) ([]byte
 			Description: firstNonEmpty(ep.Description, ep.Title),
 			GUID:        guid{Value: f.ID + ":" + ep.ID},
 			PubDate:     ep.Published.UTC().Format(time.RFC1123Z),
-			Enclosure:   enclosure{URL: MediaURL(baseURL, f.ID, ep.File), Length: ep.Size, Type: MimeType(ep.File)},
+			Enclosure:   enclosure{URL: MediaURL(baseURL, f.ID, f.Format, ep.File), Length: ep.Size, Type: MimeType(ep.File)},
 		}
 		if ep.DurationSec > 0 {
 			it.Duration = clock(ep.DurationSec)
 		}
 		switch {
 		case ep.ThumbFile != "":
-			it.Image = &itunesImg{Href: MediaURL(baseURL, f.ID, ep.ThumbFile)}
+			it.Image = &itunesImg{Href: MediaURL(baseURL, f.ID, f.Format, ep.ThumbFile)}
 		case ep.Thumbnail != "":
 			it.Image = &itunesImg{Href: ep.Thumbnail}
 		}

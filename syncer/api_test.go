@@ -21,10 +21,10 @@ func TestPullRequestVariants(t *testing.T) {
 	if err := e.svc.Pull(bg, podsync.PullRequest{Feed: "nope"}); !errors.Is(err, podsync.ErrNotFound) {
 		t.Fatalf("unknown feed: %v", err)
 	}
-	if err := e.svc.Pull(bg, podsync.PullRequest{Feed: "UC1"}); err != nil {
+	if err := e.svc.Pull(bg, podsync.PullRequest{Feed: "UC1", Format: "audio"}); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, func() bool { return !e.svc.Activity().Pulling && len(e.lib.Episodes("UC1")) == 5 })
+	waitFor(t, func() bool { return !e.svc.Activity().Pulling && len(e.lib.Episodes("UC1", "audio")) == 5 })
 	if err := e.svc.Pull(bg, podsync.PullRequest{}); err != nil {
 		t.Fatal(err)
 	}
@@ -34,20 +34,20 @@ func TestPullRequestVariants(t *testing.T) {
 	if err := e.svc.Pull(bg, podsync.PullRequest{Episode: ep}); !errors.Is(err, podsync.ErrInvalid) {
 		t.Fatalf("an episode download needs a feed: %v", err)
 	}
-	if err := e.svc.Pull(bg, podsync.PullRequest{Feed: "UC1", Episode: &podsync.EpisodeInfo{ID: "../x"}}); !errors.Is(err, podsync.ErrInvalid) {
+	if err := e.svc.Pull(bg, podsync.PullRequest{Feed: "UC1", Format: "audio", Episode: &podsync.EpisodeInfo{ID: "../x"}}); !errors.Is(err, podsync.ErrInvalid) {
 		t.Fatalf("bad id: %v", err)
 	}
 	if err := e.svc.Pull(bg, podsync.PullRequest{Feed: "nope", Episode: ep}); !errors.Is(err, podsync.ErrNotFound) {
 		t.Fatalf("unknown feed: %v", err)
 	}
-	if err := e.svc.Pull(bg, podsync.PullRequest{Feed: "UC1", Episode: ep}); err != nil {
+	if err := e.svc.Pull(bg, podsync.PullRequest{Feed: "UC1", Format: "audio", Episode: ep}); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, func() bool {
-		v, ok := e.lib.Episode("UC1", "abcdEFGhij1")
+		v, ok := e.lib.Episode("UC1", "audio", "abcdEFGhij1")
 		return ok && v.Status == podsync.StatusDownloaded
 	})
-	got, _ := e.lib.Episode("UC1", "abcdEFGhij1")
+	got, _ := e.lib.Episode("UC1", "audio", "abcdEFGhij1")
 	if !got.Manual || got.Thumbnail == "javascript:x" || got.URL == "http://evil" || got.Description == "<b>" {
 		t.Fatalf("client-supplied hints must be sanitized and real metadata used: %+v", got)
 	}
@@ -57,7 +57,7 @@ func TestStatusListsJobsIssuesAndVersions(t *testing.T) {
 	e := setup(t, mock.Episodes(3), nil)
 	e.st.Report("k", podsync.LevelError, "bad")
 	e.src.With(func(s *mock.Source) { s.Gate = make(chan struct{}) })
-	if err := e.svc.Pull(bg, podsync.PullRequest{Feed: "UC1"}); err != nil {
+	if err := e.svc.Pull(bg, podsync.PullRequest{Feed: "UC1", Format: "audio"}); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, func() bool { a := e.svc.Activity(); return a.Downloading == 2 && a.Queued == 1 })
@@ -111,32 +111,32 @@ func TestFindBannerOnlyForServiceProblems(t *testing.T) {
 
 func TestListWindowValidationAndBanner(t *testing.T) {
 	e := setup(t, mock.Episodes(8), nil)
-	eps, err := e.svc.List(bg, "UC1", 5, 3)
+	eps, err := e.svc.List(bg, "UC1", "audio", 5, 3)
 	if err != nil || len(eps) != 3 || eps[0].ID != "ep05" {
 		t.Fatalf("%v %+v", err, eps)
 	}
-	if eps, _ := e.svc.List(bg, "UC1", 50, 3); eps == nil || len(eps) != 0 {
+	if eps, _ := e.svc.List(bg, "UC1", "audio", 50, 3); eps == nil || len(eps) != 0 {
 		t.Fatalf("past the end is an empty (non-nil) list: %#v", eps)
 	}
 	for name, call := range map[string]func() error{
-		"unknown feed": func() error { _, err := e.svc.List(bg, "nope", 0, 3); return err },
-		"neg offset":   func() error { _, err := e.svc.List(bg, "UC1", -1, 3); return err },
-		"zero limit":   func() error { _, err := e.svc.List(bg, "UC1", 0, 0); return err },
-		"huge limit":   func() error { _, err := e.svc.List(bg, "UC1", 0, 100000); return err },
+		"unknown feed": func() error { _, err := e.svc.List(bg, "nope", "audio", 0, 3); return err },
+		"neg offset":   func() error { _, err := e.svc.List(bg, "UC1", "audio", -1, 3); return err },
+		"zero limit":   func() error { _, err := e.svc.List(bg, "UC1", "audio", 0, 0); return err },
+		"huge limit":   func() error { _, err := e.svc.List(bg, "UC1", "audio", 0, 100000); return err },
 	} {
 		if err := call(); err == nil {
 			t.Errorf("%s: expected an error", name)
 		}
 	}
 	e.src.ListErr = errors.New("HTTP Error 429")
-	if _, err := e.svc.List(bg, "UC1", 0, 3); err == nil {
+	if _, err := e.svc.List(bg, "UC1", "audio", 0, 3); err == nil {
 		t.Fatal("expected error")
 	}
-	if a := e.st.Active(); len(a) != 1 || a[0].Key != "list:UC1" || !strings.Contains(a[0].Message, "429") {
+	if a := e.st.Active(); len(a) != 1 || a[0].Key != "list:UC1/audio" || !strings.Contains(a[0].Message, "429") {
 		t.Fatalf("%+v", a)
 	}
 	e.src.ListErr = nil
-	e.svc.List(bg, "UC1", 0, 3)
+	e.svc.List(bg, "UC1", "audio", 0, 3)
 	if len(e.st.Active()) != 0 {
 		t.Fatal("banner should clear after a successful listing")
 	}
@@ -192,7 +192,7 @@ func TestApplyPicksUpConfigAndLibraryChangesMadeByAnotherProcess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	webLib.EnsureFeed("youtube", "UC2")
+	webLib.EnsureFeed("youtube", "UC2", "audio")
 	res, err := svc.Apply(bg)
 	if err != nil || !res.Changed {
 		t.Fatalf("%v %+v", err, res)
@@ -200,24 +200,24 @@ func TestApplyPicksUpConfigAndLibraryChangesMadeByAnotherProcess(t *testing.T) {
 	if got := syncrCfg.Get(); len(got.Feeds) != 2 || got.Download.Concurrency != 4 {
 		t.Fatalf("%+v", got.Download)
 	}
-	if err := svc.Pull(bg, podsync.PullRequest{Feed: "UC2"}); err != nil {
+	if err := svc.Pull(bg, podsync.PullRequest{Feed: "UC2", Format: "audio"}); err != nil {
 		t.Fatalf("a feed added by the web UI is pullable after Apply: %v", err)
 	}
-	waitFor(t, func() bool { return !svc.Activity().Pulling && len(lib.Episodes("UC2")) == 3 })
+	waitFor(t, func() bool { return !svc.Activity().Pulling && len(lib.Episodes("UC2", "audio")) == 3 })
 
 	// Removing a feed and deleting its files (web UI) is picked up, and its banner entries are dropped.
-	svc.st.Report("download:UC2", podsync.LevelError, "x")
+	svc.st.Report("download:UC2/audio", podsync.LevelError, "x")
 	web.Update(func(x *podsync.Config) error { x.Feeds = x.Feeds[:1]; return nil })
 	webLib.Refresh()
-	webLib.DeleteFeed("UC2")
+	webLib.DeleteFeed("UC2", "audio")
 	if _, err := svc.Apply(bg); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := lib.Feed("UC2"); ok {
+	if _, ok := lib.Feed("UC2", "audio"); ok {
 		t.Fatal("the deleted feed's folder should leave the sync service's index")
 	}
 	for _, is := range svc.st.Active() {
-		if strings.HasSuffix(is.Key, "UC2") {
+		if strings.HasSuffix(is.Key, "UC2/audio") {
 			t.Fatalf("issues of a removed feed must be dropped: %+v", is)
 		}
 	}
@@ -250,7 +250,7 @@ func TestApplyPicksUpConfigAndLibraryChangesMadeByAnotherProcess(t *testing.T) {
 	if err := svc.PullAll(); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := syncrCfg.Get().Feed("UC3"); !ok {
+	if _, ok := syncrCfg.Get().Feed("UC3", "audio"); !ok {
 		t.Fatalf("the scheduled pull must re-read the config file: %+v", syncrCfg.Get().Feeds)
 	}
 	for _, is := range svc.st.Active() {
@@ -258,7 +258,7 @@ func TestApplyPicksUpConfigAndLibraryChangesMadeByAnotherProcess(t *testing.T) {
 			t.Fatal("the config banner should clear once the file applies again")
 		}
 	}
-	if n := len(lib.Episodes("UC3")); n != 3 {
+	if n := len(lib.Episodes("UC3", "audio")); n != 3 {
 		t.Fatalf("the feed added by the file edit should be pulled in the same run, got %d episodes", n)
 	}
 }

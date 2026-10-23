@@ -53,7 +53,8 @@ type Download struct {
 // filters are not here: they only make sense per feed.
 type Options struct {
 	Format          string   `toml:"format" json:"format"` // "video" | "audio"
-	MaxResolution   int      `toml:"max_resolution" json:"max_resolution"`
+	MaxVideoHeight  int      `toml:"max_video_height" json:"max_video_height"`
+	AudioQuality    string   `toml:"audio_quality" json:"audio_quality"` // "high" | "low"; only affects Format == "audio"
 	MinDuration     Duration `toml:"min_duration" json:"min_duration"` // skip videos shorter than this (YouTube Shorts); 0 = no minimum
 	CleanupKeepLast int      `toml:"cleanup_keep_last" json:"cleanup_keep_last"`
 	PageSize        int      `toml:"page_size" json:"page_size"`
@@ -71,7 +72,8 @@ type Feed struct {
 	Source string `toml:"-" json:"source,omitempty"`
 
 	Format          *string   `toml:"format,omitempty" json:"format,omitempty"`
-	MaxResolution   *int      `toml:"max_resolution,omitempty" json:"max_resolution,omitempty"`
+	MaxVideoHeight  *int      `toml:"max_video_height,omitempty" json:"max_video_height,omitempty"`
+	AudioQuality    *string   `toml:"audio_quality,omitempty" json:"audio_quality,omitempty"`
 	MinDuration     *Duration `toml:"min_duration,omitempty" json:"min_duration,omitempty"`
 	CleanupKeepLast *int      `toml:"cleanup_keep_last,omitempty" json:"cleanup_keep_last,omitempty"`
 	PageSize        *int      `toml:"page_size,omitempty" json:"page_size,omitempty"`
@@ -108,6 +110,11 @@ const (
 	FeedChannel   = "channel"
 	FeedPlaylist  = "playlist"
 	DefaultSource = "youtube"
+
+	// AudioQualityHigh and AudioQualityLow are the only values of
+	// Options.AudioQuality / Feed.AudioQuality.
+	AudioQualityHigh = "high"
+	AudioQualityLow  = "low"
 
 	// PlaylistSortOldest is the only non-empty value of Feed.PlaylistSort.
 	PlaylistSortOldest = "oldest"
@@ -158,7 +165,8 @@ func Default() Config {
 		},
 		Defaults: Options{
 			Format:          FormatAudio,
-			MaxResolution:   720,
+			MaxVideoHeight:  720,
+			AudioQuality:    AudioQualityHigh,
 			MinDuration:     Duration(61 * time.Second), // Shorts are 60s or less
 			CleanupKeepLast: 50,
 			PageSize:        10,
@@ -172,8 +180,11 @@ func (f Feed) Effective(d Options) Options {
 	if f.Format != nil {
 		o.Format = *f.Format
 	}
-	if f.MaxResolution != nil {
-		o.MaxResolution = *f.MaxResolution
+	if f.MaxVideoHeight != nil {
+		o.MaxVideoHeight = *f.MaxVideoHeight
+	}
+	if f.AudioQuality != nil {
+		o.AudioQuality = *f.AudioQuality
 	}
 	if f.MinDuration != nil {
 		o.MinDuration = *f.MinDuration
@@ -189,26 +200,42 @@ func (f Feed) Effective(d Options) Options {
 
 // HasOverrides reports whether the feed overrides any default.
 func (f Feed) HasOverrides() bool {
-	return f.Format != nil || f.MaxResolution != nil || f.MinDuration != nil ||
+	return f.Format != nil || f.MaxVideoHeight != nil || f.AudioQuality != nil || f.MinDuration != nil ||
 		f.TitleInclude != "" || f.TitleExclude != "" || f.CleanupKeepLast != nil || f.PageSize != nil ||
 		f.PlaylistSort != ""
 }
 
-// Feed looks a feed up by ID.
-func (c Config) Feed(id string) (Feed, bool) {
+// Feed looks a feed up by its (id, format) identity: the same id may be
+// configured twice, once per effective format, so id alone is not enough.
+func (c Config) Feed(id, format string) (Feed, bool) {
 	for _, f := range c.Feeds {
-		if f.ID == id {
+		if f.ID == id && f.Effective(c.Defaults).Format == format {
 			return f, true
 		}
 	}
 	return Feed{}, false
 }
 
-// FeedByURL looks a feed up by its configured URL, used to detect that a
-// channel or playlist is already in the library under a different ID.
-func (c Config) FeedByURL(url string) (Feed, bool) {
+// FeedsByID returns every feed configured under id (0, 1 or 2 of them: at
+// most one per format).
+func (c Config) FeedsByID(id string) []Feed {
+	var out []Feed
 	for _, f := range c.Feeds {
-		if f.URL == url {
+		if f.ID == id {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// FeedByURL looks a feed up by its configured URL and effective format, used
+// by the add flow to detect that a channel or playlist is already in the
+// library under a different ID. Matches Validate's duplicate-url check: the
+// same URL may be configured twice, once per format, so format is part of
+// the lookup too.
+func (c Config) FeedByURL(url, format string) (Feed, bool) {
+	for _, f := range c.Feeds {
+		if f.URL == url && f.Effective(c.Defaults).Format == format {
 			return f, true
 		}
 	}
@@ -220,8 +247,11 @@ func (o Options) validate(where string) error {
 	if o.Format != FormatVideo && o.Format != FormatAudio {
 		errs = append(errs, fmt.Errorf("%s: format must be %q or %q", where, FormatVideo, FormatAudio))
 	}
-	if o.MaxResolution < 0 {
-		errs = append(errs, fmt.Errorf("%s: max_resolution must be >= 0 (0 = no cap)", where))
+	if o.MaxVideoHeight < 0 {
+		errs = append(errs, fmt.Errorf("%s: max_video_height must be >= 0 (0 = no cap)", where))
+	}
+	if o.AudioQuality != AudioQualityHigh && o.AudioQuality != AudioQualityLow {
+		errs = append(errs, fmt.Errorf("%s: audio_quality must be %q or %q", where, AudioQualityHigh, AudioQualityLow))
 	}
 	if o.MinDuration < 0 {
 		errs = append(errs, fmt.Errorf("%s: min_duration must be >= 0 (0 = no minimum)", where))
@@ -260,27 +290,33 @@ func (c Config) Validate() error {
 	if err := c.Defaults.validate("defaults"); err != nil {
 		errs = append(errs, err)
 	}
-	seenID := map[string]bool{}
+	// A feed's identity is (id, effective format), not id alone: the same id
+	// may be configured twice, once per format, to get both an audio and a
+	// video feed out of one channel. Keyed the same way as the duplicate-url
+	// check below, for the same reason.
+	seenKey := map[string]bool{}
 	seenURL := map[string]bool{}
 	for i, f := range c.Feeds {
 		where := fmt.Sprintf("feeds[%d] (%s)", i, f.ID)
-		switch {
-		case !idPattern.MatchString(f.ID):
+		if !idPattern.MatchString(f.ID) {
 			errs = append(errs, fmt.Errorf("%s: id must be 1-128 characters of A-Z a-z 0-9 _ -", where))
-		case seenID[f.ID]:
-			errs = append(errs, fmt.Errorf("%s: duplicate feed id", where))
 		}
-		seenID[f.ID] = true
+		key := f.ID + "\x00" + f.Effective(c.Defaults).Format
+		if seenKey[key] {
+			errs = append(errs, fmt.Errorf("%s: duplicate feed id for the same format (already configured)", where))
+		}
+		seenKey[key] = true
 		if _, err := ParseFeedURL(f.URL); err != nil {
 			errs = append(errs, fmt.Errorf("%s: %v", where, err))
 		} else {
 			if f.Kind != FeedChannel && f.Kind != FeedPlaylist {
 				errs = append(errs, fmt.Errorf("%s: kind must be %q or %q", where, FeedChannel, FeedPlaylist))
 			}
-			if seenURL[f.URL] {
-				errs = append(errs, fmt.Errorf("%s: duplicate feed url (already configured under another id)", where))
+			urlKey := f.URL + "\x00" + f.Effective(c.Defaults).Format
+			if seenURL[urlKey] {
+				errs = append(errs, fmt.Errorf("%s: duplicate feed url for the same format (already configured under another id)", where))
 			}
-			seenURL[f.URL] = true
+			seenURL[urlKey] = true
 		}
 		if f.PlaylistSort != "" {
 			if f.PlaylistSort != PlaylistSortOldest {

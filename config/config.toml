@@ -9,7 +9,8 @@ self_update = false
 
 [defaults]
 format = "audio"
-max_resolution = 720
+max_video_height = 720
+audio_quality = "high"
 min_duration = "1m1s"
 cleanup_keep_last = 50
 page_size = 10

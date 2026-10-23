@@ -46,8 +46,9 @@ type EpisodeInfo struct {
 }
 
 type DownloadOptions struct {
-	Audio     bool
-	MaxHeight int // 0 = no cap
+	Audio          bool
+	MaxVideoHeight int    // 0 = no cap; ignored when Audio
+	AudioQuality   string // "high" or "low"; ignored unless Audio
 }
 
 type DownloadResult struct {

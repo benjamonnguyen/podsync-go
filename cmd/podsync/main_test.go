@@ -107,7 +107,7 @@ func newHarness(t *testing.T) *harness {
 	svc := syncer.New(ctx, cfg, lib, podsync.NewRegistry(src), st)
 	cfg.OnChange(svc.ConfigChanged)
 	svc.Reconcile()
-	_ = lib.UpdateMeta("UCone", func(m *podsync.FeedMeta) { m.Name = "Channel One" })
+	_ = lib.UpdateMeta("UCone", "audio", func(m *podsync.FeedMeta) { m.Name = "Channel One" })
 	ui, err := newServer(options{Config: cfg, Library: lib, Syncer: svc, BaseURL: "http://pod.example:8080"})
 	if err != nil {
 		t.Fatal(err)
@@ -177,7 +177,7 @@ func (h *harness) waitIdle() {
 func TestLibraryPageAndSecurityHeaders(t *testing.T) {
 	h := newHarness(t)
 	rec := h.get("/")
-	h.mustContain(rec, 200, "Channel One", `href="/feed/UCone"`, "Check all feeds now", `hx-get="/status?v=`)
+	h.mustContain(rec, 200, "Channel One", `href="/feed/UCone/audio"`, "Check all feeds now", `hx-get="/status?v=`)
 	if !strings.Contains(rec.Header().Get("Content-Security-Policy"), "default-src 'self'") || rec.Header().Get("X-Frame-Options") != "DENY" {
 		t.Fatalf("missing security headers: %v", rec.Header())
 	}
@@ -189,12 +189,12 @@ func TestLibraryPageAndSecurityHeaders(t *testing.T) {
 func TestCrossSiteWritesAreBlocked(t *testing.T) {
 	h := newHarness(t)
 	for _, hdr := range [][]string{{"Sec-Fetch-Site", "cross-site"}, {"Origin", "http://evil.example"}} {
-		rec := h.do("POST", "/feed/UCone/delete", url.Values{"delete_files": {"on"}}, hdr...)
+		rec := h.do("POST", "/feed/UCone/audio/delete", url.Values{"delete_files": {"on"}}, hdr...)
 		if rec.Code != 403 {
 			t.Fatalf("%v: got %d", hdr, rec.Code)
 		}
 	}
-	if _, ok := h.cfg.Get().Feed("UCone"); !ok {
+	if _, ok := h.cfg.Get().Feed("UCone", "audio"); !ok {
 		t.Fatal("feed must survive a blocked request")
 	}
 	// Same-origin requests pass.
@@ -203,21 +203,21 @@ func TestCrossSiteWritesAreBlocked(t *testing.T) {
 
 func TestPullFeedThenBrowseEpisodes(t *testing.T) {
 	h := newHarness(t)
-	h.mustContain(h.do("POST", "/feed/UCone/pull", nil), 200)
+	h.mustContain(h.do("POST", "/feed/UCone/audio/pull", nil), 200)
 	h.waitIdle()
 
-	rec := h.get("/feed/UCone")
-	h.mustContain(rec, 200, "Channel One", "Title vid0000000", "Title vid0000002", "http://pod.example:8080/feeds/UCone.xml", `hx-get="/feed/UCone/older?offset=3"`, "Load more")
+	rec := h.get("/feed/UCone/audio")
+	h.mustContain(rec, 200, "Channel One", "Title vid0000000", "Title vid0000002", "http://pod.example:8080/feeds/audio/UCone.xml", `hx-get="/feed/UCone/audio/older?offset=3"`, "Load more")
 	if strings.Contains(rec.Body.String(), "vid0000003") {
 		t.Fatal("only page_size episodes should be downloaded")
 	}
-	h.mustContain(h.get("/feed/UCone/episodes?q=0000001"), 200, "Title vid0000001")
-	if body := h.get("/feed/UCone/episodes?q=zzz").Body.String(); !strings.Contains(body, "No episodes match") {
+	h.mustContain(h.get("/feed/UCone/audio/episodes?q=0000001"), 200, "Title vid0000001")
+	if body := h.get("/feed/UCone/audio/episodes?q=zzz").Body.String(); !strings.Contains(body, "No episodes match") {
 		t.Fatalf("empty filter: %s", body)
 	}
 
 	// Media and thumbnails live at the public address; the UI links to them there.
-	h.mustContain(rec, 200, `href="http://pod.example:8080/media/UCone/vid0000000.mp4"`, `src="http://pod.example:8080/media/UCone/vid0000000.jpg"`)
+	h.mustContain(rec, 200, `href="http://pod.example:8080/media/UCone/audio/vid0000000.mp4"`, `src="http://pod.example:8080/media/UCone/audio/vid0000000.jpg"`)
 
 	h.mustContain(h.get("/search?q=0000002"), 200, "Title vid0000002", "Episodes matching")
 	h.mustContain(h.get("/search?q=channel+one"), 200, "Channel One")
@@ -226,19 +226,19 @@ func TestPullFeedThenBrowseEpisodes(t *testing.T) {
 
 func TestDeleteSelectedMedia(t *testing.T) {
 	h := newHarness(t)
-	h.svc.PullFeed("UCone")
-	page := h.get("/feed/UCone")
-	h.mustContain(page, 200, `data-select-toggle`, `id="bulk-delete"`, `hx-post="/feed/UCone/episodes/delete"`,
+	h.svc.PullFeed("UCone", "audio")
+	page := h.get("/feed/UCone/audio")
+	h.mustContain(page, 200, `data-select-toggle`, `id="bulk-delete"`, `hx-post="/feed/UCone/audio/episodes/delete"`,
 		`class="sel" form="bulk-delete" name="ep" value="vid0000000"`, `value="vid0000001"`, `value="vid0000002"`)
 
-	ep, _ := h.lib.Episode("UCone", "vid0000001")
-	path := filepath.Join(h.lib.Root(), "youtube", "UCone", ep.File)
+	ep, _ := h.lib.Episode("UCone", "audio", "vid0000001")
+	path := filepath.Join(h.lib.Root(), "youtube", "UCone", "audio", ep.File)
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("media should exist before deleting: %v", err)
 	}
 
 	// An unknown id and an already-removed one are skipped; the rest are removed.
-	rec := h.do("POST", "/feed/UCone/episodes/delete", url.Values{"ep": {"vid0000001", "vid0000001", "nope", "vid0000002"}})
+	rec := h.do("POST", "/feed/UCone/audio/episodes/delete", url.Values{"ep": {"vid0000001", "vid0000001", "nope", "vid0000002"}})
 	h.mustContain(rec, 200, `id="ep-vid0000001"`, `id="ep-vid0000002"`, `hx-swap-oob="true"`, "<span>removed</span>")
 	if rec.Header().Get("HX-Trigger") != "episodes-changed" {
 		t.Fatalf("stats and list should refresh: %v", rec.Header())
@@ -250,22 +250,22 @@ func TestDeleteSelectedMedia(t *testing.T) {
 		t.Fatalf("media should be gone: %v", err)
 	}
 	for id, want := range map[string]podsync.EpisodeStatus{"vid0000000": podsync.StatusDownloaded, "vid0000001": podsync.StatusCleaned, "vid0000002": podsync.StatusCleaned} {
-		if got, _ := h.lib.Episode("UCone", id); got.Status != want || (want == podsync.StatusCleaned && (got.File != "" || got.Size != 0)) {
+		if got, _ := h.lib.Episode("UCone", "audio", id); got.Status != want || (want == podsync.StatusCleaned && (got.File != "" || got.Size != 0)) {
 			t.Errorf("%s: status %q file %q size %d, want %q", id, got.Status, got.File, got.Size, want)
 		}
 	}
 	// Removed episodes lose their checkbox, and cleaned records are not downloaded again by the next update.
-	after := h.get("/feed/UCone").Body.String()
+	after := h.get("/feed/UCone/audio").Body.String()
 	if strings.Contains(after, `value="vid0000001"`) || !strings.Contains(after, `value="vid0000000"`) {
 		t.Fatalf("checkboxes only for downloaded episodes:\n%s", after)
 	}
-	h.svc.PullFeed("UCone")
-	if got, _ := h.lib.Episode("UCone", "vid0000001"); got.Status != podsync.StatusCleaned {
+	h.svc.PullFeed("UCone", "audio")
+	if got, _ := h.lib.Episode("UCone", "audio", "vid0000001"); got.Status != podsync.StatusCleaned {
 		t.Fatalf("removed episode came back: %+v", got)
 	}
 
-	h.mustContain(h.do("POST", "/feed/UCone/episodes/delete", url.Values{}), 400, "no episodes selected")
-	h.mustContain(h.do("POST", "/feed/UCnope/episodes/delete", url.Values{"ep": {"x"}}), 404)
+	h.mustContain(h.do("POST", "/feed/UCone/audio/episodes/delete", url.Values{}), 400, "no episodes selected")
+	h.mustContain(h.do("POST", "/feed/UCnope/audio/episodes/delete", url.Values{"ep": {"x"}}), 404)
 	h.mustContain(h.get("/search?q=Title"), 200)
 	if strings.Contains(h.get("/search?q=0000000").Body.String(), `name="ep"`) {
 		t.Fatal("search results have no select mode")
@@ -274,10 +274,10 @@ func TestDeleteSelectedMedia(t *testing.T) {
 
 func TestThumbnailsAndMetadataInUI(t *testing.T) {
 	h := newHarness(t)
-	h.svc.PullFeed("UCone")
-	page := h.get("/feed/UCone")
+	h.svc.PullFeed("UCone", "audio")
+	page := h.get("/feed/UCone/audio")
 	h.mustContain(page, 200,
-		`<img class="thumb" src="http://pod.example:8080/media/UCone/vid0000000.jpg"`, "1.2M views", "480p", "<summary>Details</summary>",
+		`<img class="thumb" src="http://pod.example:8080/media/UCone/audio/vid0000000.jpg"`, "1.2M views", "480p", "<summary>Details</summary>",
 		"Line one\nLine &lt;two&gt;", `href="https://youtu.be/vid0000000"`)
 
 	// Thumbnails survive cleanup; the media does not.
@@ -285,22 +285,22 @@ func TestThumbnailsAndMetadataInUI(t *testing.T) {
 	if _, err := h.svc.Apply(bg); err != nil { // the sync loop re-reads the config the web UI wrote
 		t.Fatal(err)
 	}
-	h.svc.Cleanup("UCone")
-	cleaned := h.get("/feed/UCone").Body.String()
-	if !strings.Contains(cleaned, `src="http://pod.example:8080/media/UCone/vid0000002.jpg"`) || !strings.Contains(cleaned, "removed") {
+	h.svc.Cleanup("UCone", "audio")
+	cleaned := h.get("/feed/UCone/audio").Body.String()
+	if !strings.Contains(cleaned, `src="http://pod.example:8080/media/UCone/audio/vid0000002.jpg"`) || !strings.Contains(cleaned, "removed") {
 		t.Fatalf("cleaned row should keep its thumbnail:\n%s", cleaned)
 	}
 	// Load More rows show the remote thumbnail, views and channel metadata; downloading keeps the hint.
-	older := h.get("/feed/UCone/older?offset=3")
+	older := h.get("/feed/UCone/audio/older?offset=3")
 	h.mustContain(older, 200, `src="https://i.ytimg.com/vi/vid0000003/hq.jpg"`, "2.5K views")
 	gate := h.holdDownloads()
-	dl := h.do("POST", "/feed/UCone/episodes/vid0000003/download", url.Values{
+	dl := h.do("POST", "/feed/UCone/audio/episodes/vid0000003/download", url.Values{
 		"title": {"Video 3"}, "thumb": {"https://i.ytimg.com/vi/vid0000003/hq.jpg"}, "views": {"2500"}, "channel": {"Remote Chan"},
 	})
 	h.mustContain(dl, 200, `src="https://i.ytimg.com/vi/vid0000003/hq.jpg"`, "downloading", `hx-trigger="every 2s"`,
 		// dynamic values in hx-get must be URL-encoded (html/template does not treat hx-* as URL attributes)
 		`row?title=Video&#43;3&amp;duration=0&amp;thumb=https%3A%2F%2Fi.ytimg.com%2Fvi%2Fvid0000003%2Fhq.jpg&amp;channel=Remote&#43;Chan&amp;views=2500"`)
-	bad := h.do("POST", "/feed/UCone/episodes/vid0000004/download", url.Values{"title": {"Video 4"}, "thumb": {"javascript:alert(1)"}})
+	bad := h.do("POST", "/feed/UCone/audio/episodes/vid0000004/download", url.Values{"title": {"Video 4"}, "thumb": {"javascript:alert(1)"}})
 	if strings.Contains(bad.Body.String(), "javascript:") {
 		t.Fatalf("non-https thumbnail hint must be ignored: %s", bad.Body.String())
 	}
@@ -309,37 +309,37 @@ func TestThumbnailsAndMetadataInUI(t *testing.T) {
 
 func TestLoadMoreShowsFadedRowsAndDownloadWorks(t *testing.T) {
 	h := newHarness(t)
-	h.svc.PullFeed("UCone")
+	h.svc.PullFeed("UCone", "audio")
 
-	rec := h.get("/feed/UCone/older?offset=3")
-	h.mustContain(rec, 200, "faded", "Video 3", "Video 5", "Download</button>", `hx-get="/feed/UCone/older?offset=6"`)
+	rec := h.get("/feed/UCone/audio/older?offset=3")
+	h.mustContain(rec, 200, "faded", "Video 3", "Video 5", "Download</button>", `hx-get="/feed/UCone/audio/older?offset=6"`)
 	if strings.Contains(rec.Body.String(), "Video 0") {
 		t.Fatal("already-downloaded episodes must not be offered")
 	}
-	last := h.get("/feed/UCone/older?offset=6")
+	last := h.get("/feed/UCone/audio/older?offset=6")
 	h.mustContain(last, 200, "Video 6", "Video 7", "the end of the feed")
 	if strings.Contains(last.Body.String(), "Load more") {
 		t.Fatal("no Load more button at the end of the feed")
 	}
 
 	gate := h.holdDownloads()
-	dl := h.do("POST", "/feed/UCone/episodes/vid0000004/download", url.Values{"title": {"Video 4"}, "duration": {"60"}})
+	dl := h.do("POST", "/feed/UCone/audio/episodes/vid0000004/download", url.Values{"title": {"Video 4"}, "duration": {"60"}})
 	h.mustContain(dl, 200, "Video 4", "faded", "downloading")
 	h.releaseDownloads(gate)
-	row := h.get("/feed/UCone/episodes/vid0000004/row?title=Video+4")
-	h.mustContain(row, 200, "Title vid0000004", `href="http://pod.example:8080/media/UCone/vid0000004.mp4"`, "kept")
+	row := h.get("/feed/UCone/audio/episodes/vid0000004/row?title=Video+4")
+	h.mustContain(row, 200, "Title vid0000004", `href="http://pod.example:8080/media/UCone/audio/vid0000004.mp4"`, "kept")
 	if strings.Contains(row.Body.String(), "faded") {
 		t.Fatal("downloaded row should not be faded")
 	}
 	// It is now part of the main list and no longer offered by Load More.
-	if strings.Contains(h.get("/feed/UCone/older?offset=3").Body.String(), "Video 4") {
+	if strings.Contains(h.get("/feed/UCone/audio/older?offset=3").Body.String(), "Video 4") {
 		t.Fatal("downloaded episode still offered")
 	}
-	h.mustContain(h.do("POST", "/feed/UCone/episodes/..%2Fx/download", url.Values{}), 400)
-	h.mustContain(h.get("/feed/UCone/older?offset=abc"), 200)
+	h.mustContain(h.do("POST", "/feed/UCone/audio/episodes/..%2Fx/download", url.Values{}), 400)
+	h.mustContain(h.get("/feed/UCone/audio/older?offset=abc"), 200)
 
 	h.src.With(func(m *mock.Source) { m.ListErr = errors.New("HTTP Error 429") })
-	h.mustContain(h.get("/feed/UCone/older?offset=3"), 200, "Could not load more", "429", "Try again")
+	h.mustContain(h.get("/feed/UCone/audio/older?offset=3"), 200, "Could not load more", "429", "Try again")
 	h.mustContain(h.get("/status"), 200, "Could not list episodes", "429")
 }
 
@@ -367,7 +367,7 @@ func TestStatusTriggersRefreshOnlyWhenLibraryChanged(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), fmt.Sprintf(`hx-get="/status?v=%d"`, cur)) {
 		t.Fatalf("poll URL must carry the current version: %s", rec.Body.String())
 	}
-	h.svc.PullFeed("UCone")
+	h.svc.PullFeed("UCone", "audio")
 	if rec := h.get(fmt.Sprintf("/status?v=%d", cur)); rec.Header().Get("HX-Trigger") != "episodes-changed" {
 		t.Fatalf("stale version should trigger a refresh, headers: %v", rec.Header())
 	}
@@ -418,39 +418,54 @@ func TestAddFlow(t *testing.T) {
 
 	// A forged id with no preview is refused.
 	h.mustContain(h.do("POST", "/add", url.Values{"id": {"UCforged"}}), 200, "preview expired")
-	if _, ok := h.cfg.Get().Feed("UCforged"); ok {
+	if _, ok := h.cfg.Get().Feed("UCforged", "audio"); ok {
 		t.Fatal("forged feed added")
 	}
 
-	h.mustContain(h.do("POST", "/add", url.Values{"id": {"UCnew"}, "page_size": {"x"}}), 200, "must be a number")
+	h.mustContain(h.do("POST", "/add", url.Values{"id": {"UCnew"}, "page_size": {"x"}}), 200, "must be a whole number")
 	rec := h.do("POST", "/add", url.Values{"id": {"UCnew"}, "page_size": {"2"}}, "HX-Request", "true")
-	if rec.Code != 204 || rec.Header().Get("HX-Redirect") != "/feed/UCnew" {
+	if rec.Code != 204 || rec.Header().Get("HX-Redirect") != "/feed/UCnew/audio" {
 		t.Fatalf("add result: %d %v", rec.Code, rec.Header())
 	}
-	f, ok := h.cfg.Get().Feed("UCnew")
+	f, ok := h.cfg.Get().Feed("UCnew", "audio")
 	if !ok || f.URL != "https://www.youtube.com/channel/UCnew/videos" || f.PageSize == nil || *f.PageSize != 2 || f.Source != "youtube" {
 		t.Fatalf("saved feed: %+v ok=%v", f, ok)
 	}
 	h.waitIdle()
-	if n := len(h.lib.Episodes("UCnew")); n != 2 {
+	if n := len(h.lib.Episodes("UCnew", "audio")); n != 2 {
 		t.Fatalf("first pull should fetch page_size=2 episodes, got %d", n)
 	}
-	sum, _ := h.lib.Feed("UCnew")
+	sum, _ := h.lib.Feed("UCnew", "audio")
 	if sum.Meta.Name != "New <Channel>" || sum.Meta.ImageURL != "https://img/x.jpg" || sum.Meta.Description != "about" {
 		t.Fatalf("meta: %+v", sum.Meta)
 	}
 	h.mustContain(h.do("POST", "/add/find", url.Values{"q": {"@new"}}), 200, "Already in your library")
 	h.mustContain(h.do("POST", "/add", url.Values{"id": {"UCnew"}}), 200, "already in your library")
+
+	// The add preview carries the full set of per-feed options, including
+	// format: the same id can be added again under a different format rather
+	// than being blocked outright, now that (id, format) is a feed's identity.
+	h.do("POST", "/add/find", url.Values{"q": {"@new"}}) // re-preview to repopulate s.previews["UCnew"]
+	rec = h.do("POST", "/add", url.Values{"id": {"UCnew"}, "format": {"video"}, "page_size": {"2"}}, "HX-Request", "true")
+	if rec.Code != 204 || rec.Header().Get("HX-Redirect") != "/feed/UCnew/video" {
+		t.Fatalf("add under a different format: %d %v", rec.Code, rec.Header())
+	}
+	if f, ok := h.cfg.Get().Feed("UCnew", "video"); !ok || f.Format == nil || *f.Format != "video" {
+		t.Fatalf("video feed not saved: %+v %v", f, ok)
+	}
+	if _, ok := h.cfg.Get().Feed("UCnew", "audio"); !ok {
+		t.Fatal("the original audio feed must still be configured")
+	}
 }
 
 func TestSettingsSaveValidationAndApply(t *testing.T) {
 	h := newHarness(t)
-	h.mustContain(h.get("/settings"), 200, `name="update_interval" value="30m"`, `name="min_duration" value="61s"`, `name="max_resolution" min="0" value="720"`)
+	h.mustContain(h.get("/settings"), 200, `name="update_interval" value="30m"`, `name="min_duration" value="61s"`, `name="max_video_height" min="0" value="720"`)
 
 	form := func() url.Values {
 		return url.Values{
 			"concurrency": {"3"}, "update_interval": {"15m"},
-			"format": {"audio"}, "max_resolution": {"480"}, "min_duration": {"90s"},
+			"format": {"audio"}, "max_video_height": {"480"}, "audio_quality": {"low"}, "min_duration": {"90s"},
 			"page_size": {"4"}, "cleanup_keep_last": {"20"},
 		}
 	}
@@ -458,7 +473,7 @@ func TestSettingsSaveValidationAndApply(t *testing.T) {
 	h.mustContain(rec, 200, "Saved. Changes are applied.")
 	got := h.cfg.Get()
 	if got.Download.Concurrency != 3 || got.Download.UpdateInterval.Std() != 15*time.Minute || got.Defaults.Format != "audio" || got.Defaults.PageSize != 4 ||
-		got.Defaults.CleanupKeepLast != 20 || got.Defaults.MaxResolution != 480 || got.Defaults.MinDuration.Std() != 90*time.Second || got.Download.SelfUpdate {
+		got.Defaults.CleanupKeepLast != 20 || got.Defaults.MaxVideoHeight != 480 || got.Defaults.AudioQuality != "low" || got.Defaults.MinDuration.Std() != 90*time.Second || got.Download.SelfUpdate {
 		t.Fatalf("not applied: %+v %+v", got.Download, got.Defaults)
 	}
 	h.mustContain(h.get("/settings"), 200, `name="min_duration" value="90s"`)
@@ -510,7 +525,7 @@ func TestSettingsPageDoesNotEditOperatorSettings(t *testing.T) {
 	forged := url.Values{
 		"base_url": {"http://evil.example"}, "yt_dlp_path": {"/bin/sh"}, "cookies_file": {"/etc/passwd"},
 		"listen_addr": {":1"}, "api_addr": {":2"}, "data_dir": {"/tmp/elsewhere"},
-		"concurrency": {"2"}, "update_interval": {"30m"}, "format": {"video"}, "max_resolution": {"720"}, "min_duration": {"61s"},
+		"concurrency": {"2"}, "update_interval": {"30m"}, "format": {"video"}, "max_video_height": {"720"}, "audio_quality": {"high"}, "min_duration": {"61s"},
 		"page_size": {"3"}, "cleanup_keep_last": {"0"}, "cleanup_after_days": {"30"}, "title_include": {"x"}, "title_exclude": {"y"},
 	}
 	h.mustContain(h.do("POST", "/settings", forged), 200, "Saved")
@@ -530,7 +545,7 @@ func TestSettingsPageDoesNotEditOperatorSettings(t *testing.T) {
 
 func TestFeedSettingsOverridesAndInherit(t *testing.T) {
 	h := newHarness(t)
-	page := h.get("/feed/UCone/settings")
+	page := h.get("/feed/UCone/audio/settings")
 	h.mustContain(page, 200, "Default (audio)", `placeholder="3"`, `name="min_duration" value="" placeholder="61s"`, `name="title_include"`, `name="title_exclude"`)
 	if strings.Contains(page.Body.String(), "cleanup_after_days") {
 		t.Fatal("age-based cleanup no longer exists")
@@ -538,12 +553,13 @@ func TestFeedSettingsOverridesAndInherit(t *testing.T) {
 	if strings.Contains(page.Body.String(), `name="name"`) {
 		t.Fatal("per-feed display name is no longer editable")
 	}
-	form := url.Values{"format": {"audio"}, "max_resolution": {""}, "min_duration": {"0"}, "title_include": {" review "}, "title_exclude": {"(?i)live"},
+	form := url.Values{"format": {"audio"}, "max_video_height": {""}, "audio_quality": {"low"}, "min_duration": {"0"}, "title_include": {" review "}, "title_exclude": {"(?i)live"},
 		"page_size": {"7"}, "cleanup_keep_last": {""}}
-	h.mustContain(h.do("POST", "/feed/UCone/settings", form), 200, "Saved", `name="min_duration" value="0s"`, `name="title_exclude" value="(?i)live"`)
-	f, _ := h.cfg.Get().Feed("UCone")
+	h.mustContain(h.do("POST", "/feed/UCone/audio/settings", form), 200, "Saved", `name="min_duration" value="0s"`, `name="title_exclude" value="(?i)live"`)
+	f, _ := h.cfg.Get().Feed("UCone", "audio")
 	eff := f.Effective(h.cfg.Get().Defaults)
-	if eff.Format != "audio" || f.MinDuration == nil || eff.MinDuration != 0 || eff.PageSize != 7 || eff.MaxResolution != 720 || f.MaxResolution != nil ||
+	if eff.Format != "audio" || f.MinDuration == nil || eff.MinDuration != 0 || eff.PageSize != 7 || eff.MaxVideoHeight != 720 || f.MaxVideoHeight != nil ||
+		eff.AudioQuality != "low" || f.AudioQuality == nil || *f.AudioQuality != "low" ||
 		f.TitleInclude != "review" || f.TitleExclude != "(?i)live" {
 		t.Fatalf("%+v / %+v", f, eff)
 	}
@@ -556,74 +572,74 @@ func TestFeedSettingsOverridesAndInherit(t *testing.T) {
 	form.Set("min_duration", "")
 	form.Set("title_include", "")
 	form.Set("title_exclude", "")
-	h.mustContain(h.do("POST", "/feed/UCone/settings", form), 200, "Saved")
-	if f, _ := h.cfg.Get().Feed("UCone"); f.MinDuration != nil || f.TitleInclude != "" || f.TitleExclude != "" {
+	h.mustContain(h.do("POST", "/feed/UCone/audio/settings", form), 200, "Saved")
+	if f, _ := h.cfg.Get().Feed("UCone", "audio"); f.MinDuration != nil || f.TitleInclude != "" || f.TitleExclude != "" {
 		t.Fatalf("blank must inherit/clear: %+v", f)
 	}
 	form.Set("min_duration", "45")
-	h.mustContain(h.do("POST", "/feed/UCone/settings", form), 200, "Saved")
-	if f, _ := h.cfg.Get().Feed("UCone"); f.MinDuration == nil || f.MinDuration.Std() != 45*time.Second {
+	h.mustContain(h.do("POST", "/feed/UCone/audio/settings", form), 200, "Saved")
+	if f, _ := h.cfg.Get().Feed("UCone", "audio"); f.MinDuration == nil || f.MinDuration.Std() != 45*time.Second {
 		t.Fatalf("%+v", f.MinDuration)
 	}
 	form.Set("min_duration", "x")
-	h.mustContain(h.do("POST", "/feed/UCone/settings", form), 200, "Not saved", "min_duration")
+	h.mustContain(h.do("POST", "/feed/UCone/audio/settings", form), 200, "Not saved", "min_duration")
 	bad := url.Values{"title_include": {"("}}
-	h.mustContain(h.do("POST", "/feed/UCone/settings", bad), 200, "Not saved", "title_include", "regular expression")
-	h.mustContain(h.get("/feed/UCnone/settings"), 404)
+	h.mustContain(h.do("POST", "/feed/UCone/audio/settings", bad), 200, "Not saved", "title_include", "regular expression")
+	h.mustContain(h.get("/feed/UCnone/audio/settings"), 404)
 }
 
 func TestDeleteFeedKeepsOrDeletesFiles(t *testing.T) {
 	h := newHarness(t)
-	h.svc.PullFeed("UCone")
-	h.mustContain(h.get("/feed/UCone/delete"), 200, "Delete “Channel One”?", "3 downloaded episodes")
-	h.mustContain(h.do("POST", "/feed/UCone/delete", url.Values{}), 303)
-	if _, ok := h.cfg.Get().Feed("UCone"); ok {
+	h.svc.PullFeed("UCone", "audio")
+	h.mustContain(h.get("/feed/UCone/audio/delete"), 200, "Delete “Channel One”?", "3 downloaded episodes")
+	h.mustContain(h.do("POST", "/feed/UCone/audio/delete", url.Values{}), 303)
+	if _, ok := h.cfg.Get().Feed("UCone", "audio"); ok {
 		t.Fatal("feed still configured")
 	}
 	// Files remain and show as orphaned.
 	h.mustContain(h.get("/"), 200, "Not in config", "Delete files")
-	dir, _ := h.lib.FeedDir("UCone")
+	dir, _ := h.lib.FeedDir("UCone", "audio")
 	if _, err := os.Stat(dir); err != nil {
 		t.Fatal("files should remain")
 	}
-	h.mustContain(h.do("POST", "/orphans/UCone/delete", nil), 303)
+	h.mustContain(h.do("POST", "/orphans/UCone/audio/delete", nil), 303)
 	if _, err := os.Stat(dir); !os.IsNotExist(err) {
 		t.Fatal("orphan files should be deleted")
 	}
 
 	h2 := newHarness(t)
-	h2.svc.PullFeed("UCone")
-	dir2, _ := h2.lib.FeedDir("UCone")
-	h2.do("POST", "/feed/UCone/delete", url.Values{"delete_files": {"on"}})
+	h2.svc.PullFeed("UCone", "audio")
+	dir2, _ := h2.lib.FeedDir("UCone", "audio")
+	h2.do("POST", "/feed/UCone/audio/delete", url.Values{"delete_files": {"on"}})
 	if _, err := os.Stat(dir2); !os.IsNotExist(err) {
 		t.Fatal("files should be deleted with the checkbox")
 	}
-	h2.do("POST", "/orphans/UCone/delete", nil) // no-op on missing
+	h2.do("POST", "/orphans/UCone/audio/delete", nil) // no-op on missing
 	h3 := newHarness(t)
-	h3.mustContain(h3.do("POST", "/orphans/UCone/delete", nil), 400)
+	h3.mustContain(h3.do("POST", "/orphans/UCone/audio/delete", nil), 400)
 }
 
 func TestForcePullNotices(t *testing.T) {
 	h := newHarness(t)
 	h.mustContain(h.do("POST", "/pull", nil), 200, "Checking all feeds")
 	h.waitIdle()
-	h.mustContain(h.do("POST", "/feed/UCnone/pull", nil), 404)
+	h.mustContain(h.do("POST", "/feed/UCnone/audio/pull", nil), 404)
 }
 
 // The web UI is for managing the library; feeds and media are published
 // separately (see TestSingleListenerRoutesAndAuth), not by the UI's own mux.
 func TestWebUIDoesNotPublishFeedsOrMedia(t *testing.T) {
 	h := newHarness(t)
-	h.svc.PullFeed("UCone")
-	for _, p := range []string{"/feeds/UCone.xml", "/media/UCone/vid0000000.mp4", "/media/UCone/vid0000000.jpg"} {
+	h.svc.PullFeed("UCone", "audio")
+	for _, p := range []string{"/feeds/audio/UCone.xml", "/media/UCone/audio/vid0000000.mp4", "/media/UCone/audio/vid0000000.jpg"} {
 		if rec := h.get(p); rec.Code != 404 {
 			t.Errorf("%s must not be served by the web UI, got %d", p, rec.Code)
 		}
 	}
 	// What it shows points at the public address (PODSYNC_BASE_URL, fixed for the process's life), and
 	// the CSP allows loading from there.
-	rec := h.get("/feed/UCone")
-	h.mustContain(rec, 200, `value="http://pod.example:8080/feeds/UCone.xml"`)
+	rec := h.get("/feed/UCone/audio")
+	h.mustContain(rec, 200, `value="http://pod.example:8080/feeds/audio/UCone.xml"`)
 	csp := rec.Header().Get("Content-Security-Policy")
 	if !strings.Contains(csp, "img-src 'self' https: data: http://pod.example:8080") || !strings.Contains(csp, "media-src 'self' http://pod.example:8080") {
 		t.Fatalf("CSP must allow images and media from the public address: %s", csp)
@@ -632,9 +648,9 @@ func TestWebUIDoesNotPublishFeedsOrMedia(t *testing.T) {
 
 func TestChangesFromTheSyncLoopAreSeenWithoutRestart(t *testing.T) {
 	h := newHarness(t)
-	h.mustContain(h.get("/feed/UCone"), 200, "No episodes yet")
-	h.svc.PullFeed("UCone") // the sync loop downloads while the web UI keeps running
-	h.mustContain(h.get("/feed/UCone"), 200, "Title vid0000000", "Title vid0000002")
+	h.mustContain(h.get("/feed/UCone/audio"), 200, "No episodes yet")
+	h.svc.PullFeed("UCone", "audio") // the sync loop downloads while the web UI keeps running
+	h.mustContain(h.get("/feed/UCone/audio"), 200, "Title vid0000000", "Title vid0000002")
 	h.mustContain(h.get("/"), 200, "3 episodes")
 
 	// Someone edits config.toml by hand.
@@ -699,12 +715,23 @@ func newTestConfig(t *testing.T, webuiDisabled bool) (config, podsync.ConfigStor
 	if err := lib.Load(); err != nil {
 		t.Fatal(err)
 	}
-	lib.EnsureFeed("youtube", "UCone")
-	lib.UpdateMeta("UCone", func(m *podsync.FeedMeta) { m.Name = "Channel One" })
+	lib.EnsureFeed("youtube", "UCone", "audio")
+	lib.UpdateMeta("UCone", "audio", func(m *podsync.FeedMeta) { m.Name = "Channel One" })
 	return config{
 		baseURL: "http://pod.example:8080", webuiDisabled: webuiDisabled,
 		username: "admin", password: "secret",
 	}, cfg, lib
+}
+
+// sessionCookieFrom extracts the value of the session cookie a response set,
+// or "" if it didn't set one.
+func sessionCookieFrom(rec *httptest.ResponseRecorder) string {
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == "podsync_session" {
+			return c.Value
+		}
+	}
+	return ""
 }
 
 func TestSingleListenerRoutesAndAuth(t *testing.T) {
@@ -716,8 +743,8 @@ func TestSingleListenerRoutesAndAuth(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(note, "Basic auth") {
-		t.Fatalf("expected a note about Basic auth, got %q", note)
+	if !strings.Contains(note, "login page") {
+		t.Fatalf("expected a note about the login page, got %q", note)
 	}
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/healthz", nil))
@@ -725,28 +752,67 @@ func TestSingleListenerRoutesAndAuth(t *testing.T) {
 		t.Fatalf("healthz must not require auth, got %d", rec.Code)
 	}
 	rec = httptest.NewRecorder()
-	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/feeds/UCone.xml", nil))
+	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/feeds/audio/UCone.xml", nil))
 	if rec.Code != 200 {
 		t.Fatalf("feeds must not require auth, got %d: %s", rec.Code, rec.Body)
 	}
 	rec = httptest.NewRecorder()
-	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/", nil))
-	if rec.Code != 401 || rec.Header().Get("WWW-Authenticate") == "" {
-		t.Fatalf("the management portal must require auth, got %d %v", rec.Code, rec.Header())
+	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/static/style.css", nil))
+	if rec.Code != 200 {
+		t.Fatalf("static assets must not require auth (the login page needs them), got %d", rec.Code)
 	}
-	req := httptest.NewRequest("GET", "/", nil)
-	req.SetBasicAuth("admin", "wrong")
+
+	// No session: redirected to the login page, carrying where it came from.
 	rec = httptest.NewRecorder()
-	mux.ServeHTTP(rec, req)
-	if rec.Code != 401 {
-		t.Fatalf("a wrong password must be rejected, got %d", rec.Code)
+	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/feed/UCone/audio", nil))
+	if rec.Code != 303 || rec.Header().Get("Location") != "/login?next=%2Ffeed%2FUCone%2Faudio" {
+		t.Fatalf("the management portal must require a session, got %d %v", rec.Code, rec.Header())
 	}
-	req = httptest.NewRequest("GET", "/", nil)
-	req.SetBasicAuth("admin", "secret")
+
+	// A wrong password shows the login page again, with an error, and sets no cookie.
+	loginReq := httptest.NewRequest("POST", "/login", strings.NewReader("username=admin&password=wrong"))
+	loginReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, loginReq)
+	if rec.Code != 401 || !strings.Contains(rec.Body.String(), "Invalid username or password") || sessionCookieFrom(rec) != "" {
+		t.Fatalf("a wrong password must be rejected without a session, got %d: %s", rec.Code, rec.Body)
+	}
+
+	// The right credentials set a session and redirect to next.
+	loginReq = httptest.NewRequest("POST", "/login", strings.NewReader("username=admin&password=secret&next=%2Ffeed%2FUCone%2Faudio"))
+	loginReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, loginReq)
+	session := sessionCookieFrom(rec)
+	if rec.Code != 303 || rec.Header().Get("Location") != "/feed/UCone/audio" || session == "" {
+		t.Fatalf("correct credentials must start a session and redirect to next, got %d %v", rec.Code, rec.Header())
+	}
+
+	// The session cookie reaches the portal.
+	req := httptest.NewRequest("GET", "/", nil)
+	req.AddCookie(&http.Cookie{Name: "podsync_session", Value: session})
 	rec = httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "Channel One") {
-		t.Fatalf("correct credentials must reach the portal, got %d", rec.Code)
+		t.Fatalf("a valid session must reach the portal, got %d", rec.Code)
+	}
+
+	// Logging out tells the browser to forget the cookie (sessions are stateless
+	// signed tokens, not server-side records, so a copy of the old value would
+	// still verify until it expires — logout can only clear the browser's copy).
+	logoutReq := httptest.NewRequest("POST", "/logout", nil)
+	logoutReq.AddCookie(&http.Cookie{Name: "podsync_session", Value: session})
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, logoutReq)
+	cleared := rec.Result().Cookies()
+	if rec.Code != 303 || rec.Header().Get("Location") != "/login" || len(cleared) != 1 || cleared[0].MaxAge >= 0 {
+		t.Fatalf("logout must clear the cookie, got %d %v", rec.Code, cleared)
+	}
+	req = httptest.NewRequest("GET", "/", nil) // no cookie: what a browser sends once it's forgotten
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != 303 || rec.Header().Get("Location") != "/login?next=%2F" {
+		t.Fatalf("without the cookie the portal must ask for login again, got %d", rec.Code)
 	}
 }
 
@@ -759,7 +825,7 @@ func TestWebUIDisabledOnlyServesFeedsAndMedia(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(note, "Basic auth") {
+	if strings.Contains(note, "login page") {
 		t.Fatalf("web UI should be off, got note %q", note)
 	}
 	rec := httptest.NewRecorder()
@@ -768,7 +834,7 @@ func TestWebUIDisabledOnlyServesFeedsAndMedia(t *testing.T) {
 		t.Fatalf("the portal must not be mounted when disabled, got %d", rec.Code)
 	}
 	rec = httptest.NewRecorder()
-	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/feeds/UCone.xml", nil))
+	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/feeds/audio/UCone.xml", nil))
 	if rec.Code != 200 {
 		t.Fatalf("feeds must still be served, got %d", rec.Code)
 	}

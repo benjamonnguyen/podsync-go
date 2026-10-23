@@ -12,7 +12,7 @@ func ptr[T any](v T) *T { return &v }
 
 func TestDefaults(t *testing.T) {
 	d := Default().Defaults
-	if d.MaxResolution != 720 || d.MinDuration.Std() != 61*time.Second || d.PageSize != 10 || d.CleanupKeepLast != 50 {
+	if d.MaxVideoHeight != 720 || d.AudioQuality != AudioQualityHigh || d.MinDuration.Std() != 61*time.Second || d.PageSize != 10 || d.CleanupKeepLast != 50 {
 		t.Fatalf("%+v", d)
 	}
 }
@@ -21,7 +21,7 @@ func TestEffectiveLayersOverridesOverDefaults(t *testing.T) {
 	d := Default().Defaults
 	f := Feed{ID: "UC1", Format: ptr("audio"), CleanupKeepLast: ptr(3), MinDuration: ptr(Duration(0))}
 	got := f.Effective(d)
-	if got.MinDuration != 0 || d.MinDuration == 0 || got.Format != "audio" || got.CleanupKeepLast != 3 || got.PageSize != d.PageSize || got.MaxResolution != d.MaxResolution {
+	if got.MinDuration != 0 || d.MinDuration == 0 || got.Format != "audio" || got.CleanupKeepLast != 3 || got.PageSize != d.PageSize || got.MaxVideoHeight != d.MaxVideoHeight {
 		t.Fatalf("%+v", got)
 	}
 	if !f.HasOverrides() || (Feed{ID: "UC2"}).HasOverrides() || !(Feed{ID: "UC3", TitleExclude: "x"}).HasOverrides() {
@@ -29,6 +29,12 @@ func TestEffectiveLayersOverridesOverDefaults(t *testing.T) {
 	}
 	if !(Feed{ID: "UC4", PlaylistSort: PlaylistSortOldest}).HasOverrides() {
 		t.Fatal("HasOverrides should count playlist_sort")
+	}
+	if !(Feed{ID: "UC5", AudioQuality: ptr(AudioQualityLow)}).HasOverrides() {
+		t.Fatal("HasOverrides should count audio_quality")
+	}
+	if got := (Feed{ID: "UC6", AudioQuality: ptr(AudioQualityLow)}).Effective(d); got.AudioQuality != AudioQualityLow {
+		t.Fatalf("audio_quality override: %+v", got)
 	}
 }
 
@@ -44,8 +50,14 @@ func TestValidateRejectsBadValues(t *testing.T) {
 		"bad include":       func(c *Config) { c.Feeds[0].TitleInclude = "(" },
 		"bad exclude":       func(c *Config) { c.Feeds[0].TitleExclude = "(" },
 		"bad format":        func(c *Config) { c.Defaults.Format = "gif" },
+		"bad audio_quality": func(c *Config) { c.Defaults.AudioQuality = "medium" },
 		"dup feed":          func(c *Config) { c.Feeds = append(c.Feeds, c.Feeds[0]) },
 		"dup feed url":      func(c *Config) { dup := c.Feeds[0]; dup.ID = "UC-dup"; c.Feeds = append(c.Feeds, dup) },
+		"dup feed id+format, different url": func(c *Config) {
+			dup := c.Feeds[0]
+			dup.URL = "https://www.youtube.com/channel/UC2/videos"
+			c.Feeds = append(c.Feeds, dup)
+		},
 		"missing url":       func(c *Config) { c.Feeds[0].URL = "" },
 		"bad url":           func(c *Config) { c.Feeds[0].URL = "https://example.com/not-youtube" },
 		"unsafe id":         func(c *Config) { c.Feeds[0].ID = "../x" },
@@ -69,6 +81,30 @@ func TestValidateRejectsBadValues(t *testing.T) {
 	withPlaylist.Feeds[0].PlaylistSort = PlaylistSortOldest
 	if err := withPlaylist.Validate(); err != nil {
 		t.Fatalf("playlist_sort=oldest on a playlist feed should be valid: %v", err)
+	}
+	sameURLDifferentFormat := validConfig()
+	sameURLDifferentFormat.Feeds = append(sameURLDifferentFormat.Feeds, Feed{
+		ID: "UC1-video", URL: sameURLDifferentFormat.Feeds[0].URL, Format: ptr(FormatVideo),
+	})
+	sameURLDifferentFormat.Normalize()
+	if err := sameURLDifferentFormat.Validate(); err != nil {
+		t.Fatalf("same url with a different effective format should be valid (audio + video feeds of one channel): %v", err)
+	}
+	// The same id (not just the same url) may also repeat, once per format:
+	// that's the point of indexing on (id, format) rather than id alone.
+	sameIDDifferentFormat := validConfig()
+	sameIDDifferentFormat.Feeds = append(sameIDDifferentFormat.Feeds, Feed{
+		ID: sameIDDifferentFormat.Feeds[0].ID, URL: sameIDDifferentFormat.Feeds[0].URL, Format: ptr(FormatVideo),
+	})
+	sameIDDifferentFormat.Normalize()
+	if err := sameIDDifferentFormat.Validate(); err != nil {
+		t.Fatalf("same id with a different effective format should be valid: %v", err)
+	}
+	if f, ok := sameIDDifferentFormat.Feed(sameIDDifferentFormat.Feeds[0].ID, FormatAudio); !ok || f.Format != nil {
+		t.Fatalf("Feed(id, audio) should find the default-format entry: %+v %v", f, ok)
+	}
+	if f, ok := sameIDDifferentFormat.Feed(sameIDDifferentFormat.Feeds[0].ID, FormatVideo); !ok || f.Format == nil || *f.Format != FormatVideo {
+		t.Fatalf("Feed(id, video) should find the overridden entry: %+v %v", f, ok)
 	}
 	for name, mutate := range cases {
 		c := validConfig()

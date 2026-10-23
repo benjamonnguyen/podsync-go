@@ -17,7 +17,7 @@ func TestBuild(t *testing.T) {
 		{ID: "gone", Title: "Cleaned", Status: podsync.StatusCleaned, Published: now},
 		{ID: "bad", Title: "Failed", Status: podsync.StatusFailed},
 	}
-	out, err := Build("http://host:8080/", Feed{ID: "UC1", Title: "My Feed", ImageURL: "http://img/a.jpg", Link: "http://host:8080/feed/UC1", Self: "http://host:8080/feeds/UC1.xml"}, eps, now)
+	out, err := Build("http://host:8080/", Feed{ID: "UC1", Format: "audio", Title: "My Feed", ImageURL: "http://img/a.jpg", Link: "http://host:8080/feed/UC1", Self: "http://host:8080/feeds/audio/UC1.xml"}, eps, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -29,13 +29,13 @@ func TestBuild(t *testing.T) {
 	if len(items) != 2 || items[0].Title != "New" || items[1].Title != "Old & <Busy>" {
 		t.Fatalf("items: %+v", items)
 	}
-	if items[0].Enclosure.URL != "http://host:8080/media/UC1/new%20one.mp4" || items[0].Enclosure.Type != "video/mp4" || items[0].Enclosure.Length != 20 {
+	if items[0].Enclosure.URL != "http://host:8080/media/UC1/audio/new%20one.mp4" || items[0].Enclosure.Type != "video/mp4" || items[0].Enclosure.Length != 20 {
 		t.Fatalf("enclosure: %+v", items[0].Enclosure)
 	}
 	if items[1].Enclosure.Type != "audio/mp4" {
 		t.Fatalf("item 2: %+v", items[1])
 	}
-	for _, want := range []string{`xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd"`, `<itunes:image href="http://img/a.jpg">`, `<itunes:image href="http://host:8080/media/UC1/new.jpg">`, `<itunes:image href="http://t/old.jpg">`, `<guid isPermaLink="false">UC1:new</guid>`, `<itunes:duration>01:02:05</itunes:duration>`, "&amp; &lt;Busy&gt;"} {
+	for _, want := range []string{`xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd"`, `<itunes:image href="http://img/a.jpg">`, `<itunes:image href="http://host:8080/media/UC1/audio/new.jpg">`, `<itunes:image href="http://t/old.jpg">`, `<guid isPermaLink="false">UC1:new</guid>`, `<itunes:duration>01:02:05</itunes:duration>`, "&amp; &lt;Busy&gt;"} {
 		if !strings.Contains(string(out), want) {
 			t.Errorf("missing %q in:\n%s", want, out)
 		}

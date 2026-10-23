@@ -58,7 +58,7 @@ button.link { background: none; border: 0; color: var(--accent); cursor: pointer
 .actions { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .5rem; }
 .rss .actions { margin-top: 0; flex-wrap: nowrap; flex: none; }
 
-input[type=text], input[type=search], input[type=number], select { width: 100%; padding: .45rem .6rem; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); color: var(--text); font: inherit; }
+input[type=text], input[type=search], input[type=number], input[type=password], select { width: 100%; padding: .45rem .6rem; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); color: var(--text); font: inherit; }
 .toolbar { display: flex; gap: .75rem; margin: .5rem 0 1rem; }
 .toolbar input { flex: 1; }
 
@@ -89,8 +89,9 @@ input[type=text], input[type=search], input[type=number], select { width: 100%; 
 .row-main { min-width: 0; flex: 1; }
 .row .title { display: block; font-weight: 500; overflow-wrap: anywhere; }
 .row .feedname { font-size: .85rem; color: var(--muted); display: block; }
-.row .meta { display: flex; flex-wrap: wrap; gap: .2rem .9rem; color: var(--muted); font-size: .85rem; }
-.tag { border: 1px solid var(--border); border-radius: 4px; padding: 0 .35rem; font-size: .75rem; }
+.row .meta { display: flex; flex-wrap: wrap; gap: .2rem 0; color: var(--muted); font-size: .85rem; }
+.row .meta > span:not(:first-child):not(.tag)::before { content: "\00B7"; margin: 0 .45rem; }
+.tag { border: 1px solid var(--border); border-radius: 4px; padding: 0 .35rem; font-size: .75rem; margin-left: .45rem; }
 #more { margin: 1rem 0; }
 .sel { display: none; width: 1.2rem; height: 1.2rem; flex: none; cursor: pointer; }
 body.selecting .sel { display: block; }
@@ -120,6 +121,11 @@ body.selecting .sel { display: block; }
 .notice { padding: .6rem .9rem; border-radius: 6px; border: 1px solid; margin: .6rem 0; }
 .notice.ok { background: var(--ok-bg); border-color: var(--ok-border); }
 .notice.err { background: var(--err-bg); border-color: var(--err-border); }
+.notice.warn { background: var(--warn-bg); border-color: var(--warn-border); }
+
+.auth { max-width: 360px; margin: 12vh auto 0; padding: 1rem; }
+.auth-card h1 { text-align: center; font-size: 1.3rem; margin-top: .2rem; }
+.auth-card .btn.primary { width: 100%; }
 
 .spinner, .indicator { display: none; }
 .spinner { width: .9em; height: .9em; border: 2px solid var(--muted); border-top-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; vertical-align: -.1em; }

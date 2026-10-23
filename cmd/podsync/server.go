@@ -2,7 +2,6 @@ package main
 
 import (
 	"crypto/sha256"
-	"crypto/subtle"
 	"embed"
 	"encoding/hex"
 	"fmt"
@@ -114,19 +113,19 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /search", s.handleSearch)
 	mux.HandleFunc("POST /pull", s.handlePullAll)
 
-	mux.HandleFunc("GET /feed/{id}", s.handleFeed)
-	mux.HandleFunc("GET /feed/{id}/stats", s.handleStats)
-	mux.HandleFunc("GET /feed/{id}/episodes", s.handleEpisodes)
-	mux.HandleFunc("GET /feed/{id}/older", s.handleOlder)
-	mux.HandleFunc("POST /feed/{id}/pull", s.handlePullFeed)
-	mux.HandleFunc("POST /feed/{id}/episodes/{ep}/download", s.handleDownload)
-	mux.HandleFunc("GET /feed/{id}/episodes/{ep}/row", s.handleRow)
-	mux.HandleFunc("POST /feed/{id}/episodes/delete", s.handleDeleteMedia)
-	mux.HandleFunc("GET /feed/{id}/settings", s.handleFeedSettings)
-	mux.HandleFunc("POST /feed/{id}/settings", s.handleFeedSettingsSave)
-	mux.HandleFunc("GET /feed/{id}/delete", s.handleDeleteConfirm)
-	mux.HandleFunc("POST /feed/{id}/delete", s.handleDelete)
-	mux.HandleFunc("POST /orphans/{id}/delete", s.handleOrphanDelete)
+	mux.HandleFunc("GET /feed/{id}/{format}", s.handleFeed)
+	mux.HandleFunc("GET /feed/{id}/{format}/stats", s.handleStats)
+	mux.HandleFunc("GET /feed/{id}/{format}/episodes", s.handleEpisodes)
+	mux.HandleFunc("GET /feed/{id}/{format}/older", s.handleOlder)
+	mux.HandleFunc("POST /feed/{id}/{format}/pull", s.handlePullFeed)
+	mux.HandleFunc("POST /feed/{id}/{format}/episodes/{ep}/download", s.handleDownload)
+	mux.HandleFunc("GET /feed/{id}/{format}/episodes/{ep}/row", s.handleRow)
+	mux.HandleFunc("POST /feed/{id}/{format}/episodes/delete", s.handleDeleteMedia)
+	mux.HandleFunc("GET /feed/{id}/{format}/settings", s.handleFeedSettings)
+	mux.HandleFunc("POST /feed/{id}/{format}/settings", s.handleFeedSettingsSave)
+	mux.HandleFunc("GET /feed/{id}/{format}/delete", s.handleDeleteConfirm)
+	mux.HandleFunc("POST /feed/{id}/{format}/delete", s.handleDelete)
+	mux.HandleFunc("POST /orphans/{id}/{format}/delete", s.handleOrphanDelete)
 
 	mux.HandleFunc("GET /add", s.handleAdd)
 	mux.HandleFunc("POST /add/find", s.handleAddFind)
@@ -192,27 +191,6 @@ func crossSiteGuard(next http.Handler) http.Handler {
 					return
 				}
 			}
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
-// basicAuth protects the management portal with a single username and
-// password (USERNAME/PASSWORD). Comparisons are constant-time and hash the
-// candidate either way, so neither a missing header nor a wrong guess leaks
-// timing information about the real credentials.
-func basicAuth(user, password string, next http.Handler) http.Handler {
-	wantUser := sha256.Sum256([]byte(user))
-	wantPass := sha256.Sum256([]byte(password))
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotUser, gotPass, ok := r.BasicAuth()
-		gu, gp := sha256.Sum256([]byte(gotUser)), sha256.Sum256([]byte(gotPass))
-		userOK := subtle.ConstantTimeCompare(gu[:], wantUser[:]) == 1
-		passOK := subtle.ConstantTimeCompare(gp[:], wantPass[:]) == 1
-		if !ok || !userOK || !passOK {
-			w.Header().Set("WWW-Authenticate", `Basic realm="podsync", charset="UTF-8"`)
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
 		}
 		next.ServeHTTP(w, r)
 	})

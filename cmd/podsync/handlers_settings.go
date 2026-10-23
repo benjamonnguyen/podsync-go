@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -58,7 +59,8 @@ func applySettingsForm(s *Settings, r *http.Request) error {
 	} else {
 		s.Defaults.MinDuration = *d
 	}
-	intField(r, "max_resolution", &s.Defaults.MaxResolution, &errs)
+	intField(r, "max_video_height", &s.Defaults.MaxVideoHeight, &errs)
+	s.Defaults.AudioQuality = r.FormValue("audio_quality")
 	intField(r, "cleanup_keep_last", &s.Defaults.CleanupKeepLast, &errs)
 	intField(r, "page_size", &s.Defaults.PageSize, &errs)
 	return errors.Join(errs...)
@@ -97,9 +99,14 @@ func (s *Server) handleSettingsSave(w http.ResponseWriter, r *http.Request) {
 // ---- per-feed overrides ----
 
 type feedSettingsView struct {
-	ID, Name, Kind  string
+	ID, Name, Kind string
+	// CurrentFormat is the feed's effective format right now (the format
+	// segment of the URL this settings page is on), always concrete; Format
+	// below is the submitted *override* value and may be empty.
+	CurrentFormat   string
 	Format          string
-	MaxResolution   string
+	MaxVideoHeight  string
+	AudioQuality    string
 	MinDuration     string
 	TitleInclude    string
 	TitleExclude    string
@@ -108,6 +115,17 @@ type feedSettingsView struct {
 	PlaylistSort    string
 	OPMLExclude     bool
 	Defaults        podsync.Options
+}
+
+// formatChangeConfirm is shown instead of saving when a settings submission
+// would change a feed's effective format: that moves it to a different (id,
+// format) identity, abandoning the old one's download history. The user
+// chooses whether the old format's downloaded files are deleted now or left
+// on disk (its sidecars are cleared either way; see handleFeedSettingsSave).
+type formatChangeConfirm struct {
+	OldFormat, NewFormat string
+	OldDownloaded        int
+	OldBytes             int64
 }
 
 // seconds renders a duration as whole seconds ("60s") for the forms.
@@ -132,9 +150,10 @@ func sval(p *string) string {
 	return *p
 }
 
-func feedSettingsFrom(id, name, kind string, fs FeedSettings, d podsync.Options) feedSettingsView {
+func feedSettingsFrom(id, name, kind, currentFormat string, fs FeedSettings, d podsync.Options) feedSettingsView {
 	v := feedSettingsView{
-		ID: id, Name: name, Kind: kind, Format: sval(fs.Format), MaxResolution: itoa(fs.MaxResolution),
+		ID: id, Name: name, Kind: kind, CurrentFormat: currentFormat, Format: sval(fs.Format), MaxVideoHeight: itoa(fs.MaxVideoHeight),
+		AudioQuality: sval(fs.AudioQuality),
 		TitleInclude: fs.TitleInclude, TitleExclude: fs.TitleExclude,
 		CleanupKeepLast: itoa(fs.CleanupKeepLast), PageSize: itoa(fs.PageSize),
 		PlaylistSort: fs.PlaylistSort,
@@ -149,7 +168,7 @@ func feedSettingsFrom(id, name, kind string, fs FeedSettings, d podsync.Options)
 
 func settingsFromFeed(f podsync.Feed) FeedSettings {
 	return FeedSettings{
-		Format: f.Format, MaxResolution: f.MaxResolution, MinDuration: f.MinDuration,
+		Format: f.Format, MaxVideoHeight: f.MaxVideoHeight, AudioQuality: f.AudioQuality, MinDuration: f.MinDuration,
 		TitleInclude: f.TitleInclude, TitleExclude: f.TitleExclude,
 		CleanupKeepLast: f.CleanupKeepLast, PageSize: f.PageSize,
 		PlaylistSort: f.PlaylistSort,
@@ -183,7 +202,8 @@ func feedSettingsFromForm(r *http.Request) (FeedSettings, error) {
 	_ = r.ParseForm()
 	fs := FeedSettings{}
 	fs.Format = optString(r, "format")
-	fs.MaxResolution = optInt(r, "max_resolution", &errs)
+	fs.MaxVideoHeight = optInt(r, "max_video_height", &errs)
+	fs.AudioQuality = optString(r, "audio_quality")
 	if d, err := parseMinDuration(r.FormValue("min_duration")); err != nil {
 		errs = append(errs, err)
 	} else {
@@ -202,12 +222,27 @@ func feedSettingsFromForm(r *http.Request) (FeedSettings, error) {
 
 func (s *Server) renderFeedSettings(w http.ResponseWriter, r *http.Request, d FeedDetail, fs FeedSettings, flash, errText string) {
 	s.render(w, r, "feed_settings", map[string]any{
-		"Title": d.Name + " settings", "F": feedSettingsFrom(d.ID, d.Name, d.Kind, fs, d.Defaults), "Flash": flash, "Err": errText,
+		"Title": d.Name + " settings", "F": feedSettingsFrom(d.ID, d.Name, d.Kind, d.Format, fs, d.Defaults), "Flash": flash, "Err": errText,
+	})
+}
+
+// renderFormatChangeConfirm shows the "what happens to the old format's
+// files" prompt instead of saving, with every submitted field replayed as
+// hidden inputs so confirming (or keeping the files) resubmits the same change.
+func (s *Server) renderFormatChangeConfirm(w http.ResponseWriter, r *http.Request, d FeedDetail, fs FeedSettings, oldFormat, newFormat string) {
+	oldLF, _ := s.lib.Feed(d.ID, oldFormat)
+	s.render(w, r, "feed_settings", map[string]any{
+		"Title": d.Name + " settings",
+		"F":     feedSettingsFrom(d.ID, d.Name, d.Kind, d.Format, fs, d.Defaults),
+		"Confirm": formatChangeConfirm{
+			OldFormat: oldFormat, NewFormat: newFormat,
+			OldDownloaded: oldLF.Downloaded, OldBytes: oldLF.Bytes,
+		},
 	})
 }
 
 func (s *Server) handleFeedSettings(w http.ResponseWriter, r *http.Request) {
-	d, err := s.Feed(r.Context(), r.PathValue("id"))
+	d, err := s.Feed(r.Context(), r.PathValue("id"), r.PathValue("format"))
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -215,9 +250,15 @@ func (s *Server) handleFeedSettings(w http.ResponseWriter, r *http.Request) {
 	s.renderFeedSettings(w, r, d, settingsFromFeed(d.Overrides), "", "")
 }
 
+// handleFeedSettingsSave saves a feed's settings. If the submission changes
+// the feed's effective format, that moves it to a different (id, format)
+// identity: the user is asked what to do with the old one's downloaded files
+// before anything is saved (renderFormatChangeConfirm), then — once
+// confirmed — the old entry's sidecars are cleared (and its media too, if
+// asked) right after the new identity is saved.
 func (s *Server) handleFeedSettingsSave(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	d, err := s.Feed(r.Context(), id)
+	id, format := r.PathValue("id"), r.PathValue("format")
+	d, err := s.Feed(r.Context(), id, format)
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -227,7 +268,15 @@ func (s *Server) handleFeedSettingsSave(w http.ResponseWriter, r *http.Request) 
 		s.renderFeedSettings(w, r, d, fs, "", parseErr.Error())
 		return
 	}
-	updated, err := s.UpdateFeed(r.Context(), id, fs)
+	newFormat := d.Defaults.Format
+	if fs.Format != nil {
+		newFormat = *fs.Format
+	}
+	if newFormat != format && r.FormValue("confirm_format_change") != "1" {
+		s.renderFormatChangeConfirm(w, r, d, fs, format, newFormat)
+		return
+	}
+	updated, err := s.UpdateFeed(r.Context(), id, format, fs)
 	if err != nil {
 		if r.Context().Err() != nil {
 			return
@@ -235,13 +284,19 @@ func (s *Server) handleFeedSettingsSave(w http.ResponseWriter, r *http.Request) 
 		s.renderFeedSettings(w, r, d, fs, "", err.Error())
 		return
 	}
+	if newFormat != format {
+		deleteMedia := r.FormValue("delete_old_media") == "1"
+		if err := s.lib.ClearFeed(id, format, deleteMedia); err != nil {
+			log.Printf("clear old (%s, %s) after format change: %v", id, format, err)
+		}
+	}
 	s.renderFeedSettings(w, r, updated, settingsFromFeed(updated.Overrides), "Saved. Changes apply to the next update.", "")
 }
 
 // ---- deleting ----
 
 func (s *Server) handleDeleteConfirm(w http.ResponseWriter, r *http.Request) {
-	d, err := s.Feed(r.Context(), r.PathValue("id"))
+	d, err := s.Feed(r.Context(), r.PathValue("id"), r.PathValue("format"))
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -250,7 +305,7 @@ func (s *Server) handleDeleteConfirm(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
-	if err := s.DeleteFeed(r.Context(), r.PathValue("id"), r.FormValue("delete_files") == "on"); err != nil {
+	if err := s.DeleteFeed(r.Context(), r.PathValue("id"), r.PathValue("format"), r.FormValue("delete_files") == "on"); err != nil {
 		s.fail(w, r, err)
 		return
 	}
@@ -258,7 +313,7 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleOrphanDelete(w http.ResponseWriter, r *http.Request) {
-	if err := s.DeleteOrphan(r.Context(), r.PathValue("id")); err != nil {
+	if err := s.DeleteOrphan(r.Context(), r.PathValue("id"), r.PathValue("format")); err != nil {
 		s.fail(w, r, err)
 		return
 	}

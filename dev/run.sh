@@ -10,12 +10,13 @@ cd "$(dirname "$0")/.."
 mkdir -p bin
 go build -o bin/podsync ./cmd/podsync
 PODSYNC_CONFIG=dev/config.toml \
-	PODSYNC_LISTEN_ADDR=:8080 \
-	PODSYNC_BASE_URL=http://100.120.50.37:8080 \
-	PODSYNC_DATA_DIR=./dev/data \
-	PODSYNC_USERNAME=dev PODSYNC_PASSWORD=dev \
-	bin/podsync &
+  PODSYNC_LISTEN_ADDR=:8080 \
+  PODSYNC_BASE_URL=http://100.120.50.37:8080 \
+  PODSYNC_DATA_DIR=./dev/data \
+  PODSYNC_USERNAME=dev PODSYNC_PASSWORD=dev \
+  PODSYNC_MP3_ENCODING=true \
+  bin/podsync &
 podsync=$!
 trap 'kill $podsync 2>/dev/null || true' EXIT INT TERM
-echo "web UI: http://localhost:8080 (user: dev, password: dev)   feeds: http://localhost:8080/feeds/<id>.xml"
+echo "web UI: http://localhost:8080 (user: dev, password: dev)"
 wait -n

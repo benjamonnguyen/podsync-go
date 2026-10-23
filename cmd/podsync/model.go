@@ -16,10 +16,16 @@ import (
 // podsync.ConfigStore and podsync.Library. It asks the sync service (podsync.Syncer)
 // only for what needs the running service: applying changes, pulls, live
 // status and source lookups.
+//
+// A feed's identity is the pair (ID, Format), not ID alone: the same ID may
+// be configured twice, once per format (e.g. an audio and a video feed off
+// one channel), each with its own directory, settings page and download
+// history.
 
 // FeedSummary is a feed as shown in lists.
 type FeedSummary struct {
 	ID           string
+	Format       string
 	Source       string
 	Kind         string
 	Name         string
@@ -49,7 +55,8 @@ type FeedDetail struct {
 // FeedSettings is what UpdateFeed replaces. Nil option fields inherit the defaults.
 type FeedSettings struct {
 	Format          *string
-	MaxResolution   *int
+	MaxVideoHeight  *int
+	AudioQuality    *string
 	MinDuration     *podsync.Duration
 	TitleInclude    string // regex, empty = off (per feed only; there are no global patterns)
 	TitleExclude    string
@@ -76,8 +83,9 @@ type EpisodeView struct {
 }
 
 type EpisodeSearchHit struct {
-	FeedID   string
-	FeedName string
+	FeedID     string
+	FeedFormat string
+	FeedName   string
 	EpisodeView
 }
 
@@ -96,7 +104,7 @@ type OlderPage struct {
 
 type AddFeedRequest struct {
 	Info     podsync.FeedInfo
-	PageSize *int
+	Settings FeedSettings
 }
 
 // Settings is the configuration as the settings page shows it. Only some of it
@@ -123,19 +131,20 @@ var errSyncDown = "Saved, but the sync service could not be reached, so it will 
 
 // ---- feeds ----
 
-func (s *Server) rssURL(id string) string {
-	return s.baseURL + "/feeds/" + id + ".xml"
+func (s *Server) rssURL(id, format string) string {
+	return s.baseURL + "/feeds/" + format + "/" + id + ".xml"
 }
 
 func (s *Server) summary(cfg podsync.Config, f podsync.Feed) FeedSummary {
-	lf, _ := s.lib.Feed(f.ID)
+	format := f.Effective(cfg.Defaults).Format
+	lf, _ := s.lib.Feed(f.ID, format)
 	name := lf.Meta.Name
 	if name == "" {
 		name = f.ID
 	}
 	return FeedSummary{
-		ID: f.ID, Source: f.Source, Kind: f.Kind, Name: name,
-		Description: lf.Meta.Description, ImageURL: lf.Meta.ImageURL, RSSURL: s.rssURL(f.ID),
+		ID: f.ID, Format: format, Source: f.Source, Kind: f.Kind, Name: name,
+		Description: lf.Meta.Description, ImageURL: lf.Meta.ImageURL, RSSURL: s.rssURL(f.ID, format),
 		Episodes: lf.Downloaded, Bytes: lf.Bytes, LastPull: lf.Meta.LastPull, HasOverrides: f.HasOverrides(),
 	}
 }
@@ -145,28 +154,35 @@ func (s *Server) orphanSummary(lf podsync.LibraryFeed) FeedSummary {
 	if name == "" {
 		name = lf.ID
 	}
-	return FeedSummary{ID: lf.ID, Source: lf.Source, Name: name, ImageURL: lf.Meta.ImageURL, Episodes: lf.Downloaded, Bytes: lf.Bytes, Orphan: true}
+	return FeedSummary{
+		ID: lf.ID, Format: lf.Format, Source: lf.Source, Name: name, ImageURL: lf.Meta.ImageURL,
+		Episodes: lf.Downloaded, Bytes: lf.Bytes, Orphan: true,
+	}
 }
+
+// feedIdentKey is the (id, format) identity key used to match configured
+// feeds against library directories (e.g. to tell orphans apart).
+func feedIdentKey(id, format string) string { return id + "\x00" + format }
 
 func (s *Server) Feeds(ctx context.Context) FeedList {
 	cfg := s.cfg.Get()
 	list := FeedList{Feeds: []FeedSummary{}, Orphans: []FeedSummary{}}
 	known := map[string]bool{}
 	for _, f := range cfg.Feeds {
-		known[f.ID] = true
+		known[feedIdentKey(f.ID, f.Effective(cfg.Defaults).Format)] = true
 		list.Feeds = append(list.Feeds, s.summary(cfg, f))
 	}
 	for _, lf := range s.lib.Feeds() {
-		if !known[lf.ID] {
+		if !known[feedIdentKey(lf.ID, lf.Format)] {
 			list.Orphans = append(list.Orphans, s.orphanSummary(lf))
 		}
 	}
 	return list
 }
 
-func (s *Server) feed(id string) (podsync.Config, podsync.Feed, error) {
+func (s *Server) feed(id, format string) (podsync.Config, podsync.Feed, error) {
 	cfg := s.cfg.Get()
-	f, ok := cfg.Feed(id)
+	f, ok := cfg.Feed(id, format)
 	if !ok {
 		return cfg, f, podsync.NotFound("no such feed %q", id)
 	}
@@ -177,8 +193,8 @@ func (s *Server) detail(cfg podsync.Config, f podsync.Feed) FeedDetail {
 	return FeedDetail{FeedSummary: s.summary(cfg, f), Overrides: f, Effective: f.Effective(cfg.Defaults), Defaults: cfg.Defaults}
 }
 
-func (s *Server) Feed(ctx context.Context, id string) (FeedDetail, error) {
-	cfg, f, err := s.feed(id)
+func (s *Server) Feed(ctx context.Context, id, format string) (FeedDetail, error) {
+	cfg, f, err := s.feed(id, format)
 	if err != nil {
 		return FeedDetail{}, err
 	}
@@ -187,9 +203,9 @@ func (s *Server) Feed(ctx context.Context, id string) (FeedDetail, error) {
 
 // ---- episodes ----
 
-type jobStates map[string]string // "feedID/episodeID" -> queued | downloading
+type jobStates map[string]string // jobKey(feedID,format,episodeID) -> queued | downloading
 
-func jobKey(feedID, epID string) string { return feedID + "/" + epID }
+func jobKey(feedID, format, epID string) string { return feedID + "/" + format + "/" + epID }
 
 // syncTimeout bounds the status calls made on every page and poll, so a hung
 // sync service cannot hang the web UI.
@@ -203,7 +219,7 @@ func (s *Server) jobs(ctx context.Context) jobStates {
 	defer cancel()
 	if st, err := s.sync.Status(ctx); err == nil {
 		for _, j := range st.Jobs {
-			out[jobKey(j.FeedID, j.EpisodeID)] = j.State
+			out[jobKey(j.FeedID, j.Format, j.EpisodeID)] = j.State
 		}
 	}
 	return out
@@ -218,9 +234,9 @@ func episodeFromInfo(ep podsync.EpisodeInfo) podsync.Episode {
 }
 
 // view overlays what the library and the download queue know onto hint.
-func (s *Server) view(feedID string, hint podsync.Episode, jobs jobStates) EpisodeView {
+func (s *Server) view(feedID, format string, hint podsync.Episode, jobs jobStates) EpisodeView {
 	v := EpisodeView{Episode: hint, State: StateAvailable}
-	if ep, ok := s.lib.Episode(feedID, hint.ID); ok {
+	if ep, ok := s.lib.Episode(feedID, format, hint.ID); ok {
 		v.Episode = ep
 		if v.Title == "" {
 			v.Title = hint.Title
@@ -239,7 +255,7 @@ func (s *Server) view(feedID string, hint podsync.Episode, jobs jobStates) Episo
 		}
 		v.State = string(ep.Status)
 	}
-	if js := jobs[jobKey(feedID, hint.ID)]; js != "" {
+	if js := jobs[jobKey(feedID, format, hint.ID)]; js != "" {
 		v.State = js
 	}
 	if v.Title == "" {
@@ -258,17 +274,17 @@ func matchWords(title, q string) bool {
 	return true
 }
 
-func (s *Server) Episodes(ctx context.Context, feedID, q string) ([]EpisodeView, error) {
-	if _, _, err := s.feed(feedID); err != nil {
+func (s *Server) Episodes(ctx context.Context, feedID, format, q string) ([]EpisodeView, error) {
+	if _, _, err := s.feed(feedID, format); err != nil {
 		return nil, err
 	}
 	jobs := s.jobs(ctx)
 	views := []EpisodeView{}
-	for _, ep := range s.lib.Episodes(feedID) {
+	for _, ep := range s.lib.Episodes(feedID, format) {
 		if q != "" && !matchWords(ep.Title, q) {
 			continue
 		}
-		views = append(views, s.view(feedID, ep, jobs))
+		views = append(views, s.view(feedID, format, ep, jobs))
 	}
 	// Episodes without a date (e.g. failed before metadata was fetched) are
 	// almost always recent, so list them first rather than burying them.
@@ -278,18 +294,18 @@ func (s *Server) Episodes(ctx context.Context, feedID, q string) ([]EpisodeView,
 
 // Episode returns one episode's current view; hint supplies listing data for
 // episodes the library does not know yet.
-func (s *Server) Episode(ctx context.Context, feedID string, hint podsync.EpisodeInfo) (EpisodeView, error) {
-	if _, _, err := s.feed(feedID); err != nil {
+func (s *Server) Episode(ctx context.Context, feedID, format string, hint podsync.EpisodeInfo) (EpisodeView, error) {
+	if _, _, err := s.feed(feedID, format); err != nil {
 		return EpisodeView{}, err
 	}
-	return s.view(feedID, episodeFromInfo(hint), s.jobs(ctx)), nil
+	return s.view(feedID, format, episodeFromInfo(hint), s.jobs(ctx)), nil
 }
 
 // Older lists the window [offset, offset+page_size) of a feed's source (asking
 // the sync service) and returns the episodes that pass the feed's filters and
 // are not already in the library.
-func (s *Server) Older(ctx context.Context, feedID string, offset int) (OlderPage, error) {
-	cfg, f, err := s.feed(feedID)
+func (s *Server) Older(ctx context.Context, feedID, format string, offset int) (OlderPage, error) {
+	cfg, f, err := s.feed(feedID, format)
 	if err != nil {
 		return OlderPage{}, err
 	}
@@ -298,7 +314,7 @@ func (s *Server) Older(ctx context.Context, feedID string, offset int) (OlderPag
 	if err != nil {
 		return OlderPage{}, err
 	}
-	eps, err := s.sync.List(ctx, feedID, offset, opts.PageSize)
+	eps, err := s.sync.List(ctx, feedID, format, offset, opts.PageSize)
 	if err != nil {
 		return OlderPage{}, err
 	}
@@ -308,10 +324,10 @@ func (s *Server) Older(ctx context.Context, feedID string, offset int) (OlderPag
 		if ep.Unavailable || ep.IsLive || !filter.Allows(ep) {
 			continue
 		}
-		if _, known := s.lib.Episode(feedID, ep.ID); known {
+		if _, known := s.lib.Episode(feedID, format, ep.ID); known {
 			continue
 		}
-		page.Episodes = append(page.Episodes, s.view(feedID, episodeFromInfo(ep), jobs))
+		page.Episodes = append(page.Episodes, s.view(feedID, format, episodeFromInfo(ep), jobs))
 	}
 	return page, nil
 }
@@ -330,7 +346,7 @@ func (s *Server) SearchLibrary(ctx context.Context, q string) SearchHits {
 		}
 	}
 	for _, f := range list.Feeds {
-		names[f.ID] = f.Name
+		names[feedIdentKey(f.ID, f.Format)] = f.Name
 	}
 	found := s.lib.Search(q)
 	if len(found) > searchLibraryLimit {
@@ -338,11 +354,13 @@ func (s *Server) SearchLibrary(ctx context.Context, q string) SearchHits {
 	}
 	jobs := s.jobs(ctx)
 	for _, h := range found {
-		name, ok := names[h.FeedID]
+		name, ok := names[feedIdentKey(h.FeedID, h.Format)]
 		if !ok {
 			name = h.FeedID + " (orphaned)"
 		}
-		hits.Episodes = append(hits.Episodes, EpisodeSearchHit{FeedID: h.FeedID, FeedName: name, EpisodeView: s.view(h.FeedID, h.Episode, jobs)})
+		hits.Episodes = append(hits.Episodes, EpisodeSearchHit{
+			FeedID: h.FeedID, FeedFormat: h.Format, FeedName: name, EpisodeView: s.view(h.FeedID, h.Format, h.Episode, jobs),
+		})
 	}
 	return hits
 }
@@ -359,10 +377,15 @@ func (s *Server) applyBestEffort(ctx context.Context) (podsync.ApplyResult, erro
 	return res, nil
 }
 
-// AddFeed saves the feed, creates its folder and cache, tells the sync service
-// and asks it to pull the feed right away.
+// AddFeed saves the feed (with the full set of per-feed options req.Settings
+// carries — the add page offers the same options the feed settings page
+// does), creates its folder and cache, tells the sync service and asks it to
+// pull the feed right away. An id may already be configured under a
+// different format (see config.go's duplicate check): req.Settings.Format
+// decides which (id, format) slot this add claims, defaulting to the
+// current global default when left unset, same as any other feed.
 func (s *Server) AddFeed(ctx context.Context, req AddFeedRequest) (FeedSummary, error) {
-	info := req.Info
+	info, upd := req.Info, req.Settings
 	if info.Source == "" {
 		info.Source = podsync.DefaultSource
 	}
@@ -372,49 +395,66 @@ func (s *Server) AddFeed(ctx context.Context, req AddFeedRequest) (FeedSummary, 
 	if strings.TrimSpace(info.URL) == "" {
 		return FeedSummary{}, podsync.Invalid("feed url is required")
 	}
+	var format string
 	err := s.cfg.Update(func(c *podsync.Config) error {
-		if _, dup := c.Feed(info.ID); dup {
+		format = c.Defaults.Format
+		if upd.Format != nil {
+			format = *upd.Format
+		}
+		if _, dup := c.Feed(info.ID, format); dup {
 			return podsync.Invalid("That feed is already in your library.")
 		}
-		if _, dup := c.FeedByURL(info.URL); dup {
+		if _, dup := c.FeedByURL(info.URL, format); dup {
 			return podsync.Invalid("That feed is already in your library.")
 		}
-		c.Feeds = append(c.Feeds, podsync.Feed{ID: info.ID, URL: info.URL, PageSize: req.PageSize})
+		c.Feeds = append(c.Feeds, podsync.Feed{
+			ID: info.ID, URL: info.URL,
+			Format: upd.Format, MaxVideoHeight: upd.MaxVideoHeight, AudioQuality: upd.AudioQuality, MinDuration: upd.MinDuration,
+			TitleInclude: upd.TitleInclude, TitleExclude: upd.TitleExclude,
+			CleanupKeepLast: upd.CleanupKeepLast, PageSize: upd.PageSize,
+			PlaylistSort: upd.PlaylistSort, OPMLExclude: upd.OPMLExclude,
+		})
 		return nil
 	})
 	if err != nil {
 		return FeedSummary{}, err
 	}
-	if err := s.lib.EnsureFeed(info.Source, info.ID); err == nil {
-		_ = s.lib.UpdateMeta(info.ID, func(m *podsync.FeedMeta) {
+	if err := s.lib.EnsureFeed(info.Source, info.ID, format); err == nil {
+		_ = s.lib.UpdateMeta(info.ID, format, func(m *podsync.FeedMeta) {
 			m.Name, m.Description, m.ImageURL = info.Name, info.Description, info.ImageURL
 		})
 	}
 	if _, err := s.applyBestEffort(ctx); err == nil {
-		_ = s.sync.Pull(ctx, podsync.PullRequest{Feed: info.ID}) // busy is fine: the scheduler picks it up
+		_ = s.sync.Pull(ctx, podsync.PullRequest{Feed: info.ID, Format: format}) // busy is fine: the scheduler picks it up
 	}
-	cfg, f, err := s.feed(info.ID)
+	cfg, f, err := s.feed(info.ID, format)
 	if err != nil {
 		return FeedSummary{}, err
 	}
 	return s.summary(cfg, f), nil
 }
 
-func (s *Server) UpdateFeed(ctx context.Context, id string, upd FeedSettings) (FeedDetail, error) {
-	if _, _, err := s.feed(id); err != nil {
+// UpdateFeed saves settings for the feed at (id, format). If upd.Format
+// changes the feed's effective format, this moves it to a new (id, format)
+// identity; the caller is responsible for deciding what happens to the old
+// one's library entry (see handleFeedSettingsSave).
+func (s *Server) UpdateFeed(ctx context.Context, id, format string, upd FeedSettings) (FeedDetail, error) {
+	if _, _, err := s.feed(id, format); err != nil {
 		return FeedDetail{}, err
 	}
+	var newFormat string
 	err := s.cfg.Update(func(c *podsync.Config) error {
 		for i := range c.Feeds {
-			if c.Feeds[i].ID != id {
+			if c.Feeds[i].ID != id || c.Feeds[i].Effective(c.Defaults).Format != format {
 				continue
 			}
 			f := &c.Feeds[i]
-			f.Format, f.MaxResolution, f.MinDuration = upd.Format, upd.MaxResolution, upd.MinDuration
+			f.Format, f.MaxVideoHeight, f.AudioQuality, f.MinDuration = upd.Format, upd.MaxVideoHeight, upd.AudioQuality, upd.MinDuration
 			f.TitleInclude, f.TitleExclude = upd.TitleInclude, upd.TitleExclude
 			f.CleanupKeepLast, f.PageSize = upd.CleanupKeepLast, upd.PageSize
 			f.PlaylistSort = upd.PlaylistSort
 			f.OPMLExclude = upd.OPMLExclude
+			newFormat = f.Effective(c.Defaults).Format
 			return nil
 		}
 		return podsync.NotFound("no such feed %q", id)
@@ -423,17 +463,17 @@ func (s *Server) UpdateFeed(ctx context.Context, id string, upd FeedSettings) (F
 		return FeedDetail{}, err
 	}
 	_, _ = s.applyBestEffort(ctx)
-	return s.Feed(ctx, id)
+	return s.Feed(ctx, id, newFormat)
 }
 
-func (s *Server) DeleteFeed(ctx context.Context, id string, deleteFiles bool) error {
-	if _, _, err := s.feed(id); err != nil {
+func (s *Server) DeleteFeed(ctx context.Context, id, format string, deleteFiles bool) error {
+	if _, _, err := s.feed(id, format); err != nil {
 		return err
 	}
 	err := s.cfg.Update(func(c *podsync.Config) error {
 		kept := c.Feeds[:0:0]
 		for _, x := range c.Feeds {
-			if x.ID != id {
+			if x.ID != id || x.Effective(c.Defaults).Format != format {
 				kept = append(kept, x)
 			}
 		}
@@ -444,7 +484,7 @@ func (s *Server) DeleteFeed(ctx context.Context, id string, deleteFiles bool) er
 		return err
 	}
 	if deleteFiles {
-		if err := s.lib.DeleteFeed(id); err != nil {
+		if err := s.lib.DeleteFeed(id, format); err != nil {
 			return fmt.Errorf("feed removed from config but deleting files failed: %w", err)
 		}
 	}
@@ -455,8 +495,8 @@ func (s *Server) DeleteFeed(ctx context.Context, id string, deleteFiles bool) er
 // DeleteMedia removes the downloaded files of the given episodes. Each record
 // stays, as "cleaned", so the episode is not downloaded again. It returns the
 // IDs it removed; episodes that are not downloaded are skipped.
-func (s *Server) DeleteMedia(ctx context.Context, feedID string, ids []string) ([]string, error) {
-	if _, _, err := s.feed(feedID); err != nil {
+func (s *Server) DeleteMedia(ctx context.Context, feedID, format string, ids []string) ([]string, error) {
+	if _, _, err := s.feed(feedID, format); err != nil {
 		return nil, err
 	}
 	if len(ids) == 0 {
@@ -470,16 +510,16 @@ func (s *Server) DeleteMedia(ctx context.Context, feedID string, ids []string) (
 			continue
 		}
 		seen[id] = true
-		ep, ok := s.lib.Episode(feedID, id)
+		ep, ok := s.lib.Episode(feedID, format, id)
 		if !ok || ep.Status != podsync.StatusDownloaded {
 			continue
 		}
-		if err := s.lib.RemoveMedia(feedID, ep); err != nil {
+		if err := s.lib.RemoveMedia(feedID, format, ep); err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", ep.Title, err))
 			continue
 		}
 		ep.Status, ep.File, ep.Size = podsync.StatusCleaned, "", 0
-		if err := s.lib.PutEpisode(feedID, ep); err != nil {
+		if err := s.lib.PutEpisode(feedID, format, ep); err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", ep.Title, err))
 			continue
 		}
@@ -491,14 +531,14 @@ func (s *Server) DeleteMedia(ctx context.Context, feedID string, ids []string) (
 	return removed, errors.Join(errs...)
 }
 
-func (s *Server) DeleteOrphan(ctx context.Context, id string) error {
-	if _, configured := s.cfg.Get().Feed(id); configured {
+func (s *Server) DeleteOrphan(ctx context.Context, id, format string) error {
+	if _, configured := s.cfg.Get().Feed(id, format); configured {
 		return podsync.Invalid("feed is still configured")
 	}
-	if _, ok := s.lib.Feed(id); !ok {
+	if _, ok := s.lib.Feed(id, format); !ok {
 		return podsync.NotFound("no such folder %q", id)
 	}
-	return s.lib.DeleteFeed(id)
+	return s.lib.DeleteFeed(id, format)
 }
 
 // ---- settings ----
@@ -532,19 +572,19 @@ func (s *Server) UpdateSettings(ctx context.Context, in Settings) (SettingsResul
 // ---- operations ----
 
 // Pull starts an update of one feed, or of all feeds when feedID is empty.
-func (s *Server) Pull(ctx context.Context, feedID string) error {
+func (s *Server) Pull(ctx context.Context, feedID, format string) error {
 	if feedID != "" {
-		if _, _, err := s.feed(feedID); err != nil {
+		if _, _, err := s.feed(feedID, format); err != nil {
 			return err
 		}
 	}
-	return s.sync.Pull(ctx, podsync.PullRequest{Feed: feedID})
+	return s.sync.Pull(ctx, podsync.PullRequest{Feed: feedID, Format: format})
 }
 
 // DownloadEpisode asks the sync service to download one episode now.
-func (s *Server) DownloadEpisode(ctx context.Context, feedID string, ep podsync.EpisodeInfo) error {
-	if _, _, err := s.feed(feedID); err != nil {
+func (s *Server) DownloadEpisode(ctx context.Context, feedID, format string, ep podsync.EpisodeInfo) error {
+	if _, _, err := s.feed(feedID, format); err != nil {
 		return err
 	}
-	return s.sync.Pull(ctx, podsync.PullRequest{Feed: feedID, Episode: &ep})
+	return s.sync.Pull(ctx, podsync.PullRequest{Feed: feedID, Format: format, Episode: &ep})
 }

@@ -57,17 +57,17 @@ func setup(t *testing.T, eps []podsync.EpisodeInfo, mutate func(*podsync.Config)
 
 func TestPullDownloadsNewestPageAndIsIdempotent(t *testing.T) {
 	e := setup(t, mock.Episodes(8), nil)
-	if err := e.svc.PullFeed("UC1"); err != nil {
+	if err := e.svc.PullFeed("UC1", "audio"); err != nil {
 		t.Fatal(err)
 	}
-	eps := e.lib.Episodes("UC1")
+	eps := e.lib.Episodes("UC1", "audio")
 	if len(eps) != 5 {
 		t.Fatalf("want page_size=5 episodes, got %d", len(eps))
 	}
 	if eps[0].ID != "ep00" || eps[0].Status != podsync.StatusDownloaded || eps[0].File != "ep00.mp4" || eps[0].Manual {
 		t.Fatalf("%+v", eps[0])
 	}
-	dir, _ := e.lib.FeedDir("UC1")
+	dir, _ := e.lib.FeedDir("UC1", "audio")
 	if _, err := os.Stat(filepath.Join(dir, "ep00.mp4")); err != nil {
 		t.Fatal("media not moved into the feed dir")
 	}
@@ -83,10 +83,10 @@ func TestPullDownloadsNewestPageAndIsIdempotent(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "ep00.jpg")); err != nil {
 		t.Fatal("thumbnail not moved into the feed dir")
 	}
-	if sum, _ := e.lib.Feed("UC1"); sum.Meta.LastPull.IsZero() || sum.Meta.ImageURL != "http://img/x.jpg" {
+	if sum, _ := e.lib.Feed("UC1", "audio"); sum.Meta.LastPull.IsZero() || sum.Meta.ImageURL != "http://img/x.jpg" {
 		t.Fatalf("meta: %+v", sum.Meta)
 	}
-	e.svc.PullFeed("UC1")
+	e.svc.PullFeed("UC1", "audio")
 	for _, ep := range eps {
 		if n := e.src.DownloadCount(ep.ID); n != 1 {
 			t.Fatalf("%s downloaded %d times", ep.ID, n)
@@ -100,10 +100,10 @@ func TestPullDownloadsNewestPageAndIsIdempotent(t *testing.T) {
 // outside page_size) is silently skipped forever.
 func TestPullCatchesUpOnPublishBurst(t *testing.T) {
 	e := setup(t, mock.Episodes(8), nil) // page_size=5
-	if err := e.svc.PullFeed("UC1"); err != nil {
+	if err := e.svc.PullFeed("UC1", "audio"); err != nil {
 		t.Fatal(err)
 	}
-	if n := len(e.lib.Episodes("UC1")); n != 5 {
+	if n := len(e.lib.Episodes("UC1", "audio")); n != 5 {
 		t.Fatalf("first pull: want 5, got %d", n)
 	}
 
@@ -114,16 +114,16 @@ func TestPullCatchesUpOnPublishBurst(t *testing.T) {
 	}
 	e.src.With(func(s *mock.Source) { s.Episodes = append(burst, s.Episodes...) })
 	e.src.ListCalls = 0
-	if err := e.svc.PullFeed("UC1"); err != nil {
+	if err := e.svc.PullFeed("UC1", "audio"); err != nil {
 		t.Fatal(err)
 	}
 
-	got := e.lib.Episodes("UC1")
+	got := e.lib.Episodes("UC1", "audio")
 	if len(got) != 15 { // the original 5 + all 10 from the burst
 		t.Fatalf("want 15 episodes after catch-up, got %d: %+v", len(got), got)
 	}
 	for _, ep := range burst {
-		if _, ok := e.lib.Episode("UC1", ep.ID); !ok {
+		if _, ok := e.lib.Episode("UC1", "audio", ep.ID); !ok {
 			t.Fatalf("%s from the burst was never downloaded: catch-up did not reach it", ep.ID)
 		}
 	}
@@ -141,10 +141,10 @@ func TestPullCatchesUpOnPublishBurst(t *testing.T) {
 // than paging forever through a feed where nothing ever matches.
 func TestPullCatchUpIsCappedAndSkippedOnFirstPull(t *testing.T) {
 	e := setup(t, mock.Episodes(500), func(c *podsync.Config) { c.Defaults.PageSize = 5 })
-	if err := e.svc.PullFeed("UC1"); err != nil {
+	if err := e.svc.PullFeed("UC1", "audio"); err != nil {
 		t.Fatal(err)
 	}
-	if n := len(e.lib.Episodes("UC1")); n != 5 {
+	if n := len(e.lib.Episodes("UC1", "audio")); n != 5 {
 		t.Fatalf("first pull must still be capped at page_size, got %d", n)
 	}
 	if e.src.ListCalls != 1 {
@@ -159,7 +159,7 @@ func TestPullCatchUpIsCappedAndSkippedOnFirstPull(t *testing.T) {
 		}
 	})
 	e.src.ListCalls = 0
-	if err := e.svc.PullFeed("UC1"); err != nil {
+	if err := e.svc.PullFeed("UC1", "audio"); err != nil {
 		t.Fatal(err)
 	}
 	// 1 initial page + maxCatchUpPages (10) extra, never finding a known episode.
@@ -180,9 +180,9 @@ func TestFiltersAndSkippedEntries(t *testing.T) {
 		c.Feeds[0].TitleExclude = "^Sponsored"
 		c.Feeds[0].TitleInclude = "(?i)keep|episode"
 	})
-	e.svc.PullFeed("UC1")
+	e.svc.PullFeed("UC1", "audio")
 	var got []string
-	for _, ep := range e.lib.Episodes("UC1") {
+	for _, ep := range e.lib.Episodes("UC1", "audio") {
 		got = append(got, ep.ID)
 	}
 	want := map[string]bool{"ep04": true, "ep05": true, "ep06": true}
@@ -199,28 +199,28 @@ func TestFiltersAndSkippedEntries(t *testing.T) {
 func TestFailureRetryBannerAndManualReset(t *testing.T) {
 	e := setup(t, mock.Episodes(2), nil)
 	e.src.DownloadErr["ep00"] = errors.New("Video unavailable")
-	e.svc.PullFeed("UC1")
-	ep, _ := e.lib.Episode("UC1", "ep00")
+	e.svc.PullFeed("UC1", "audio")
+	ep, _ := e.lib.Episode("UC1", "audio", "ep00")
 	if ep.Status != podsync.StatusFailed || ep.Attempts != 1 || ep.LastError != "Video unavailable" {
 		t.Fatalf("%+v", ep)
 	}
-	if iss := e.st.Active(); len(iss) != 1 || iss[0].Key != "download:UC1" {
+	if iss := e.st.Active(); len(iss) != 1 || iss[0].Key != "download:UC1/audio" {
 		t.Fatalf("banner: %+v", iss)
 	}
-	e.svc.PullFeed("UC1")
-	e.svc.PullFeed("UC1")
-	e.svc.PullFeed("UC1") // attempts exhausted: no 4th try
+	e.svc.PullFeed("UC1", "audio")
+	e.svc.PullFeed("UC1", "audio")
+	e.svc.PullFeed("UC1", "audio") // attempts exhausted: no 4th try
 	if n := e.src.DownloadCount("ep00"); n != MaxAttempts {
 		t.Fatalf("want %d attempts, got %d", MaxAttempts, n)
 	}
 	delete(e.src.DownloadErr, "ep00")
-	if err := e.svc.RequestDownload("UC1", podsync.EpisodeInfo{ID: "ep00"}); err != nil {
+	if err := e.svc.RequestDownload("UC1", "audio", podsync.EpisodeInfo{ID: "ep00"}); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, func() bool {
-		return e.svc.JobState("UC1", "ep00") == "" && e.lib.Episodes("UC1")[0].Status == podsync.StatusDownloaded
+		return e.svc.JobState("UC1", "audio", "ep00") == "" && e.lib.Episodes("UC1", "audio")[0].Status == podsync.StatusDownloaded
 	})
-	ep, _ = e.lib.Episode("UC1", "ep00")
+	ep, _ = e.lib.Episode("UC1", "audio", "ep00")
 	if !ep.Manual || ep.Attempts != 0 {
 		t.Fatalf("manual retry result: %+v", ep)
 	}
@@ -234,7 +234,7 @@ func TestListFailureReportedThenCleared(t *testing.T) {
 	e.src.ListErr = errors.New("HTTP Error 429")
 	e.svc.PullAll()
 	iss := e.st.Active()
-	if len(iss) != 1 || iss[0].Key != "list:UC1" {
+	if len(iss) != 1 || iss[0].Key != "list:UC1/audio" {
 		t.Fatalf("%+v", iss)
 	}
 	e.src.ListErr = nil
@@ -260,15 +260,15 @@ func TestHealthErrorsBecomeBanner(t *testing.T) {
 
 func TestCleanupKeepLastTombstonesAndManualExempt(t *testing.T) {
 	e := setup(t, mock.Episodes(5), func(c *podsync.Config) { c.Defaults.CleanupKeepLast = 2 })
-	e.svc.PullFeed("UC1")
+	e.svc.PullFeed("UC1", "audio")
 	// ep00,ep01 kept; ep02..04 cleaned.
-	dir, _ := e.lib.FeedDir("UC1")
+	dir, _ := e.lib.FeedDir("UC1", "audio")
 	for id, wantKept := range map[string]bool{"ep00": true, "ep01": true, "ep02": false, "ep03": false, "ep04": false} {
 		_, err := os.Stat(filepath.Join(dir, id+".mp4"))
 		if (err == nil) != wantKept {
 			t.Errorf("%s: media present=%v want %v", id, err == nil, wantKept)
 		}
-		ep, _ := e.lib.Episode("UC1", id)
+		ep, _ := e.lib.Episode("UC1", "audio", id)
 		if wantKept != (ep.Status == podsync.StatusDownloaded) {
 			t.Errorf("%s status %s", id, ep.Status)
 		}
@@ -280,15 +280,15 @@ func TestCleanupKeepLastTombstonesAndManualExempt(t *testing.T) {
 		}
 	}
 	// Next pull must not resurrect cleaned episodes.
-	e.svc.PullFeed("UC1")
+	e.svc.PullFeed("UC1", "audio")
 	if n := e.src.DownloadCount("ep04"); n != 1 {
 		t.Fatalf("cleaned episode re-downloaded: %d", n)
 	}
 	// Manually downloading a cleaned episode pins it.
-	e.svc.RequestDownload("UC1", podsync.EpisodeInfo{ID: "ep04"})
-	waitFor(t, func() bool { ep, _ := e.lib.Episode("UC1", "ep04"); return ep.Status == podsync.StatusDownloaded })
-	e.svc.Cleanup("UC1")
-	if ep, _ := e.lib.Episode("UC1", "ep04"); ep.Status != podsync.StatusDownloaded || !ep.Manual {
+	e.svc.RequestDownload("UC1", "audio", podsync.EpisodeInfo{ID: "ep04"})
+	waitFor(t, func() bool { ep, _ := e.lib.Episode("UC1", "audio", "ep04"); return ep.Status == podsync.StatusDownloaded })
+	e.svc.Cleanup("UC1", "audio")
+	if ep, _ := e.lib.Episode("UC1", "audio", "ep04"); ep.Status != podsync.StatusDownloaded || !ep.Manual {
 		t.Fatalf("manual episode must survive cleanup: %+v", ep)
 	}
 }
@@ -314,7 +314,7 @@ func TestConcurrencyCapAndBusy(t *testing.T) {
 	if e.src.MaxActive != 4 {
 		t.Fatalf("max concurrent downloads = %d, want 4", e.src.MaxActive)
 	}
-	if got := len(e.lib.Episodes("UC1")); got != 6 {
+	if got := len(e.lib.Episodes("UC1", "audio")); got != 6 {
 		t.Fatalf("episodes: %d", got)
 	}
 }

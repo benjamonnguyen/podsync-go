@@ -28,7 +28,7 @@ type Syncer interface {
 	Find(ctx context.Context, query string) ([]FeedInfo, error)
 	// List returns the window [offset, offset+limit) of a configured feed's
 	// episodes straight from its source, newest first. Nothing is stored.
-	List(ctx context.Context, feedID string, offset, limit int) ([]EpisodeInfo, error)
+	List(ctx context.Context, feedID, format string, offset, limit int) ([]EpisodeInfo, error)
 }
 
 // ApplyResult is what Apply reports.
@@ -37,15 +37,18 @@ type ApplyResult struct {
 	Changed bool `json:"changed"`
 }
 
-// PullRequest selects what Pull does.
+// PullRequest selects what Pull does. Feed and Format together identify one
+// feed; Feed empty means every feed (Format is then ignored).
 type PullRequest struct {
 	Feed    string       `json:"feed,omitempty"`    // empty = every feed
+	Format  string       `json:"format,omitempty"`  // required when Feed is set
 	Episode *EpisodeInfo `json:"episode,omitempty"` // download this episode of Feed now
 }
 
 // Job is one queued or running download.
 type Job struct {
 	FeedID    string `json:"feed_id"`
+	Format    string `json:"format"`
 	EpisodeID string `json:"episode_id"`
 	State     string `json:"state"` // "queued" | "downloading"
 }
