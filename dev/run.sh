@@ -14,7 +14,6 @@ PODSYNC_CONFIG=dev/config.toml \
   PODSYNC_BASE_URL=http://100.120.50.37:8080 \
   PODSYNC_DATA_DIR=./dev/data \
   PODSYNC_USERNAME=dev PODSYNC_PASSWORD=dev \
-  PODSYNC_MP3_ENCODING=true \
   bin/podsync &
 podsync=$!
 trap 'kill $podsync 2>/dev/null || true' EXIT INT TERM

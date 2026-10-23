@@ -33,7 +33,9 @@ type Settings struct {
 	// BinPath is the yt-dlp executable to run: a bare name resolved on PATH
 	// (the default, "yt-dlp") or an absolute/relative path. Empty means the default.
 	BinPath string
-	// MP3Encoding re-encodes audio downloads to mp3 instead of the default m4a.
+	// MP3Encoding re-encodes audio downloads to mp3 instead of m4a. On by
+	// default at the cmd/podsync level (PODSYNC_MP3_ENCODING_DISABLED turns it
+	// off); this field itself has no default, the caller always sets it.
 	MP3Encoding bool
 }
 

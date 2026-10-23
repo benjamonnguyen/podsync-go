@@ -35,7 +35,9 @@ func (r rowView) Thumb() string {
 }
 
 // MediaURL is where the downloaded media file is served (by syncr).
-func (r rowView) MediaURL() string { return r.base + "/media/" + r.FeedID + "/" + r.Format + "/" + r.File }
+func (r rowView) MediaURL() string {
+	return r.base + "/media/" + r.FeedID + "/" + r.Format + "/" + r.File
+}
 
 func (s *Server) makeRows(feedID, format, feedName string, playlist bool, views []EpisodeView) []rowView {
 	base := s.mediaBase()

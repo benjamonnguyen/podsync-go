@@ -286,7 +286,10 @@ func TestCleanupKeepLastTombstonesAndManualExempt(t *testing.T) {
 	}
 	// Manually downloading a cleaned episode pins it.
 	e.svc.RequestDownload("UC1", "audio", podsync.EpisodeInfo{ID: "ep04"})
-	waitFor(t, func() bool { ep, _ := e.lib.Episode("UC1", "audio", "ep04"); return ep.Status == podsync.StatusDownloaded })
+	waitFor(t, func() bool {
+		ep, _ := e.lib.Episode("UC1", "audio", "ep04")
+		return ep.Status == podsync.StatusDownloaded
+	})
 	e.svc.Cleanup("UC1", "audio")
 	if ep, _ := e.lib.Episode("UC1", "audio", "ep04"); ep.Status != podsync.StatusDownloaded || !ep.Manual {
 		t.Fatalf("manual episode must survive cleanup: %+v", ep)

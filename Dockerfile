@@ -37,7 +37,7 @@ RUN set -eux; \
 
 # ---- Runtime image: podsync (sync + publish + web UI) + yt-dlp + deno + ffmpeg ----
 # One port (8080) serves feeds, media, and (unless PODSYNC_WEBUI_DISABLED=true) the management
-# web UI, which requires the HTTP Basic credentials set by PODSYNC_USERNAME/PODSYNC_PASSWORD.
+# web UI, behind a login page using the credentials set by PODSYNC_USERNAME/PODSYNC_PASSWORD.
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl ffmpeg \
     && rm -rf /var/lib/apt/lists/*

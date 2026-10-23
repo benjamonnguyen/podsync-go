@@ -55,7 +55,7 @@ type Options struct {
 	Format          string   `toml:"format" json:"format"` // "video" | "audio"
 	MaxVideoHeight  int      `toml:"max_video_height" json:"max_video_height"`
 	AudioQuality    string   `toml:"audio_quality" json:"audio_quality"` // "high" | "low"; only affects Format == "audio"
-	MinDuration     Duration `toml:"min_duration" json:"min_duration"` // skip videos shorter than this (YouTube Shorts); 0 = no minimum
+	MinDuration     Duration `toml:"min_duration" json:"min_duration"`   // skip videos shorter than this (YouTube Shorts); 0 = no minimum
 	CleanupKeepLast int      `toml:"cleanup_keep_last" json:"cleanup_keep_last"`
 	PageSize        int      `toml:"page_size" json:"page_size"`
 }

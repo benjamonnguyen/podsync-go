@@ -61,18 +61,18 @@ func envBool(key string, def bool) bool {
 // life of the process and never edited through the web UI. All but -listen
 // and -config come from PODSYNC_-prefixed environment variables only.
 type config struct {
-	path          string
-	listenAddr    string
-	baseURL       string
-	dataDir       string
-	cookies       string
-	ytdlpPath     string
-	mp3Encoding   bool
-	webuiDisabled bool
-	username      string
-	password      string
-	tlsCertFile   string
-	tlsKeyFile    string
+	path                string
+	listenAddr          string
+	baseURL             string
+	dataDir             string
+	cookies             string
+	ytdlpPath           string
+	mp3EncodingDisabled bool
+	webuiDisabled       bool
+	username            string
+	password            string
+	tlsCertFile         string
+	tlsKeyFile          string
 }
 
 func configFromEnv() config {
@@ -80,18 +80,18 @@ func configFromEnv() config {
 	path := flag.String("config", envOr("PODSYNC_CONFIG", "config.toml"), "path to the TOML config file holding feeds and defaults (env PODSYNC_CONFIG)")
 	flag.Parse()
 	return config{
-		path:          *path,
-		listenAddr:    *listen,
-		baseURL:       os.Getenv("PODSYNC_BASE_URL"),
-		dataDir:       envOr("PODSYNC_DATA_DIR", "./data"),
-		cookies:       envOr("PODSYNC_COOKIES_FILE", ""),
-		ytdlpPath:     envOr("PODSYNC_YTDLP_PATH", ""),
-		mp3Encoding:   envBool("PODSYNC_MP3_ENCODING", false),
-		webuiDisabled: envBool("PODSYNC_WEBUI_DISABLED", false),
-		username:      os.Getenv("PODSYNC_USERNAME"),
-		password:      os.Getenv("PODSYNC_PASSWORD"),
-		tlsCertFile:   os.Getenv("PODSYNC_TLS_CERT_FILE"),
-		tlsKeyFile:    os.Getenv("PODSYNC_TLS_KEY_FILE"),
+		path:                *path,
+		listenAddr:          *listen,
+		baseURL:             os.Getenv("PODSYNC_BASE_URL"),
+		dataDir:             envOr("PODSYNC_DATA_DIR", "./data"),
+		cookies:             envOr("PODSYNC_COOKIES_FILE", ""),
+		ytdlpPath:           envOr("PODSYNC_YTDLP_PATH", ""),
+		mp3EncodingDisabled: envBool("PODSYNC_MP3_ENCODING_DISABLED", false),
+		webuiDisabled:       envBool("PODSYNC_WEBUI_DISABLED", false),
+		username:            os.Getenv("PODSYNC_USERNAME"),
+		password:            os.Getenv("PODSYNC_PASSWORD"),
+		tlsCertFile:         os.Getenv("PODSYNC_TLS_CERT_FILE"),
+		tlsKeyFile:          os.Getenv("PODSYNC_TLS_KEY_FILE"),
 	}
 }
 
@@ -231,7 +231,7 @@ func run(c config) error {
 	defer stop()
 
 	yt := youtube.New(func() youtube.Settings {
-		return youtube.Settings{CookiesFile: c.cookies, BinPath: c.ytdlpPath, MP3Encoding: c.mp3Encoding}
+		return youtube.Settings{CookiesFile: c.cookies, BinPath: c.ytdlpPath, MP3Encoding: !c.mp3EncodingDisabled}
 	})
 	svc := syncer.New(ctx, cfg, lib, podsync.NewRegistry(yt), status.New())
 	cfg.OnChange(svc.ConfigChanged)
