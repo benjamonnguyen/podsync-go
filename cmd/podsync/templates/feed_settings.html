@@ -5,7 +5,6 @@
 {{if .Err}}<div class="notice err"><strong>Not saved.</strong><pre>{{.Err}}</pre></div>{{end}}
 <form method="post" action="/feed/{{.F.ID}}/settings" class="settings">
   <fieldset>
-    <label>Name <input type="text" name="name" value="{{.F.Name}}" required></label>
     <label>Format
       <select name="format">
         <option value="">Default ({{.F.Defaults.Format}})</option>

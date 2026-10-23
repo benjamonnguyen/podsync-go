@@ -277,8 +277,14 @@ func isDirectReference(q string) bool {
 func channelURL(id string) string  { return "https://www.youtube.com/channel/" + id + "/videos" }
 func playlistURL(id string) string { return "https://www.youtube.com/playlist?list=" + id }
 
+// feedURL is what gets passed to yt-dlp: a configured feed's stored URL when
+// it has one, else reconstructed from its ID and Kind (Resolve's own results,
+// and callers that never had a URL to begin with).
 func feedURL(f podsync.FeedInfo) string {
-	if f.Kind == "playlist" {
+	if f.URL != "" {
+		return f.URL
+	}
+	if f.Kind == podsync.FeedPlaylist {
 		return playlistURL(f.ID)
 	}
 	return channelURL(f.ID)
@@ -427,6 +433,7 @@ func (y *YouTube) Resolve(ctx context.Context, ref string) (podsync.FeedInfo, er
 	info := podsync.FeedInfo{Source: Kind, ID: p.ID, Description: strings.TrimSpace(p.Description), ImageURL: p.Thumbnails.avatar()}
 	if channelIDRe.MatchString(p.ID) {
 		info.Kind = podsync.FeedChannel
+		info.URL = channelURL(p.ID)
 		info.Subscribers = int64(p.Followers)
 		if strings.HasPrefix(p.UploaderID, "@") {
 			info.Handle = p.UploaderID
@@ -434,6 +441,7 @@ func (y *YouTube) Resolve(ctx context.Context, ref string) (podsync.FeedInfo, er
 		info.Name = firstNonEmpty(p.Channel, p.Uploader, strings.TrimSuffix(p.Title, " - Videos"), p.ID)
 	} else {
 		info.Kind = podsync.FeedPlaylist
+		info.URL = playlistURL(p.ID)
 		info.Name = firstNonEmpty(p.Title, p.ID)
 	}
 	return info, nil
@@ -585,6 +593,7 @@ func parseSearch(entries []ytEntry) []podsync.FeedInfo {
 			Source:      Kind,
 			Kind:        podsync.FeedChannel,
 			ID:          e.ID,
+			URL:         channelURL(e.ID),
 			Name:        firstNonEmpty(e.Title, e.Channel, e.Uploader, e.ID),
 			Description: strings.TrimSpace(e.Description),
 			ImageURL:    e.Thumbnails.avatar(),

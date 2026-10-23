@@ -19,14 +19,16 @@ import (
 func setup(t *testing.T) (*httptest.Server, *fs.Library) {
 	t.Helper()
 	c := podsync.Default()
-	c.Feeds = []podsync.Feed{{ID: "UCone", Name: "Channel One", Kind: "channel", Source: "youtube"}}
+	c.Feeds = []podsync.Feed{{ID: "UCone", Kind: "channel", Source: "youtube"}}
 	c.Normalize()
 	lib := fs.New(t.TempDir())
 	if err := lib.Load(); err != nil {
 		t.Fatal(err)
 	}
 	lib.EnsureFeed("youtube", "UCone")
-	lib.UpdateMeta("UCone", func(m *podsync.FeedMeta) { m.Description, m.ImageURL = "About it", "https://img/a.jpg" })
+	lib.UpdateMeta("UCone", func(m *podsync.FeedMeta) {
+		m.Name, m.Description, m.ImageURL = "Channel One", "About it", "https://img/a.jpg"
+	})
 	dir, _ := lib.FeedDir("UCone")
 	os.WriteFile(filepath.Join(dir, "ep1.mp4"), []byte("0123456789"), 0o644)
 	os.WriteFile(filepath.Join(dir, "ep1.jpg"), []byte("JPEGDATA"), 0o644)
@@ -97,8 +99,8 @@ func TestMediaThumbnailsAndRanges(t *testing.T) {
 func TestOPML(t *testing.T) {
 	c := podsync.Default()
 	c.Feeds = []podsync.Feed{
-		{ID: "UCone", Name: "Channel One", Kind: "channel", Source: "youtube"},
-		{ID: "UCtwo", Name: "Channel Two", Kind: "channel", Source: "youtube", OPMLExclude: true},
+		{ID: "UCone", Kind: "channel", Source: "youtube"},
+		{ID: "UCtwo", Kind: "channel", Source: "youtube", OPMLExclude: true},
 	}
 	c.Normalize()
 	lib := fs.New(t.TempDir())

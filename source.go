@@ -9,9 +9,12 @@ import (
 
 // FeedInfo is the canonical description of a channel or playlist.
 type FeedInfo struct {
-	Source      string `json:"source"`
-	Kind        string `json:"kind"` // "channel" | "playlist"
-	ID          string `json:"id"`
+	Source string `json:"source"`
+	Kind   string `json:"kind"` // "channel" | "playlist"
+	ID     string `json:"id"`
+	// URL is the canonical link for this feed (what a configured Feed.URL
+	// stores); ListEpisodes and Resolve use it directly when set.
+	URL         string `json:"url,omitempty"`
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
 	ImageURL    string `json:"image_url,omitempty"`

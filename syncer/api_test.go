@@ -92,7 +92,7 @@ func TestFindBannerOnlyForServiceProblems(t *testing.T) {
 		t.Fatalf("a failed search is a service problem and belongs in the banner: %+v", a)
 	}
 	e.src.FindErr = nil
-	e.src.FindResults = []podsync.FeedInfo{{ID: "UC1", Name: "n"}}
+	e.src.FindResults = []podsync.FeedInfo{{ID: "UC1"}}
 	res, err := e.svc.Find(bg, "  some name ")
 	if err != nil || len(res) != 1 || len(e.st.Active()) != 0 {
 		t.Fatalf("%v %+v %+v", err, res, e.st.Active())
@@ -151,7 +151,7 @@ func TestApplyPicksUpConfigAndLibraryChangesMadeByAnotherProcess(t *testing.T) {
 	c := podsync.Default()
 	c.Defaults.PageSize = 3
 	c.Defaults.CleanupKeepLast = 0
-	c.Feeds = []podsync.Feed{{ID: "UC1", Name: "One", Kind: "channel", Source: "youtube"}}
+	c.Feeds = []podsync.Feed{{ID: "UC1", URL: "https://www.youtube.com/channel/UC1/videos"}}
 	c.Normalize()
 	web, err := toml.Open(cfgPath) // the web UI's store
 	if err != nil {
@@ -185,7 +185,7 @@ func TestApplyPicksUpConfigAndLibraryChangesMadeByAnotherProcess(t *testing.T) {
 	webLib := fs.New(dataDir)
 	webLib.Load()
 	err = web.Update(func(x *podsync.Config) error {
-		x.Feeds = append(x.Feeds, podsync.Feed{ID: "UC2", Name: "Two", Kind: "channel", Source: "youtube"})
+		x.Feeds = append(x.Feeds, podsync.Feed{ID: "UC2", URL: "https://www.youtube.com/channel/UC2/videos"})
 		x.Download.Concurrency = 4
 		return nil
 	})
@@ -241,7 +241,7 @@ func TestApplyPicksUpConfigAndLibraryChangesMadeByAnotherProcess(t *testing.T) {
 	// A missed Apply is corrected by the next pull: the web UI saves valid settings again and a
 	// scheduled pull (nobody calls Apply) re-reads the file and clears the banner.
 	err = web.Update(func(x *podsync.Config) error {
-		x.Feeds = append(x.Feeds, podsync.Feed{ID: "UC3", Name: "Three", Kind: "channel", Source: "youtube"})
+		x.Feeds = append(x.Feeds, podsync.Feed{ID: "UC3", URL: "https://www.youtube.com/channel/UC3/videos"})
 		return nil
 	})
 	if err != nil {

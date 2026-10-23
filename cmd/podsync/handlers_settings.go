@@ -132,9 +132,9 @@ func sval(p *string) string {
 	return *p
 }
 
-func feedSettingsFrom(id, kind string, fs FeedSettings, d podsync.Options) feedSettingsView {
+func feedSettingsFrom(id, name, kind string, fs FeedSettings, d podsync.Options) feedSettingsView {
 	v := feedSettingsView{
-		ID: id, Name: fs.Name, Kind: kind, Format: sval(fs.Format), MaxResolution: itoa(fs.MaxResolution),
+		ID: id, Name: name, Kind: kind, Format: sval(fs.Format), MaxResolution: itoa(fs.MaxResolution),
 		TitleInclude: fs.TitleInclude, TitleExclude: fs.TitleExclude,
 		CleanupKeepLast: itoa(fs.CleanupKeepLast), PageSize: itoa(fs.PageSize),
 		PlaylistSort: fs.PlaylistSort,
@@ -149,7 +149,7 @@ func feedSettingsFrom(id, kind string, fs FeedSettings, d podsync.Options) feedS
 
 func settingsFromFeed(f podsync.Feed) FeedSettings {
 	return FeedSettings{
-		Name: f.Name, Format: f.Format, MaxResolution: f.MaxResolution, MinDuration: f.MinDuration,
+		Format: f.Format, MaxResolution: f.MaxResolution, MinDuration: f.MinDuration,
 		TitleInclude: f.TitleInclude, TitleExclude: f.TitleExclude,
 		CleanupKeepLast: f.CleanupKeepLast, PageSize: f.PageSize,
 		PlaylistSort: f.PlaylistSort,
@@ -178,13 +178,10 @@ func optInt(r *http.Request, name string, errs *[]error) *int {
 	return &n
 }
 
-func feedSettingsFromForm(r *http.Request, current string) (FeedSettings, error) {
+func feedSettingsFromForm(r *http.Request) (FeedSettings, error) {
 	var errs []error
 	_ = r.ParseForm()
-	fs := FeedSettings{Name: current}
-	if n := strings.TrimSpace(r.FormValue("name")); n != "" {
-		fs.Name = n
-	}
+	fs := FeedSettings{}
 	fs.Format = optString(r, "format")
 	fs.MaxResolution = optInt(r, "max_resolution", &errs)
 	if d, err := parseMinDuration(r.FormValue("min_duration")); err != nil {
@@ -205,7 +202,7 @@ func feedSettingsFromForm(r *http.Request, current string) (FeedSettings, error)
 
 func (s *Server) renderFeedSettings(w http.ResponseWriter, r *http.Request, d FeedDetail, fs FeedSettings, flash, errText string) {
 	s.render(w, r, "feed_settings", map[string]any{
-		"Title": d.Name + " settings", "F": feedSettingsFrom(d.ID, d.Kind, fs, d.Defaults), "Flash": flash, "Err": errText,
+		"Title": d.Name + " settings", "F": feedSettingsFrom(d.ID, d.Name, d.Kind, fs, d.Defaults), "Flash": flash, "Err": errText,
 	})
 }
 
@@ -225,7 +222,7 @@ func (s *Server) handleFeedSettingsSave(w http.ResponseWriter, r *http.Request) 
 		s.fail(w, r, err)
 		return
 	}
-	fs, parseErr := feedSettingsFromForm(r, d.Name)
+	fs, parseErr := feedSettingsFromForm(r)
 	if parseErr != nil {
 		s.renderFeedSettings(w, r, d, fs, "", parseErr.Error())
 		return

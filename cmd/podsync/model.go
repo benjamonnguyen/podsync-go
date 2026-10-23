@@ -48,7 +48,6 @@ type FeedDetail struct {
 
 // FeedSettings is what UpdateFeed replaces. Nil option fields inherit the defaults.
 type FeedSettings struct {
-	Name            string
 	Format          *string
 	MaxResolution   *int
 	MinDuration     *podsync.Duration
@@ -130,9 +129,9 @@ func (s *Server) rssURL(id string) string {
 
 func (s *Server) summary(cfg podsync.Config, f podsync.Feed) FeedSummary {
 	lf, _ := s.lib.Feed(f.ID)
-	name := f.Name
+	name := lf.Meta.Name
 	if name == "" {
-		name = lf.Meta.Name
+		name = f.ID
 	}
 	return FeedSummary{
 		ID: f.ID, Source: f.Source, Kind: f.Kind, Name: name,
@@ -367,17 +366,20 @@ func (s *Server) AddFeed(ctx context.Context, req AddFeedRequest) (FeedSummary, 
 	if info.Source == "" {
 		info.Source = podsync.DefaultSource
 	}
-	if info.Kind == "" {
-		info.Kind = podsync.FeedChannel
-	}
 	if strings.TrimSpace(info.ID) == "" {
 		return FeedSummary{}, podsync.Invalid("feed id is required")
+	}
+	if strings.TrimSpace(info.URL) == "" {
+		return FeedSummary{}, podsync.Invalid("feed url is required")
 	}
 	err := s.cfg.Update(func(c *podsync.Config) error {
 		if _, dup := c.Feed(info.ID); dup {
 			return podsync.Invalid("That feed is already in your library.")
 		}
-		c.Feeds = append(c.Feeds, podsync.Feed{ID: info.ID, Source: info.Source, Kind: info.Kind, Name: info.Name, PageSize: req.PageSize})
+		if _, dup := c.FeedByURL(info.URL); dup {
+			return podsync.Invalid("That feed is already in your library.")
+		}
+		c.Feeds = append(c.Feeds, podsync.Feed{ID: info.ID, URL: info.URL, PageSize: req.PageSize})
 		return nil
 	})
 	if err != nil {
@@ -408,9 +410,6 @@ func (s *Server) UpdateFeed(ctx context.Context, id string, upd FeedSettings) (F
 				continue
 			}
 			f := &c.Feeds[i]
-			if n := strings.TrimSpace(upd.Name); n != "" {
-				f.Name = n
-			}
 			f.Format, f.MaxResolution, f.MinDuration = upd.Format, upd.MaxResolution, upd.MinDuration
 			f.TitleInclude, f.TitleExclude = upd.TitleInclude, upd.TitleExclude
 			f.CleanupKeepLast, f.PageSize = upd.CleanupKeepLast, upd.PageSize

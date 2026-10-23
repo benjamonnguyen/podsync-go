@@ -15,7 +15,5 @@ cleanup_keep_last = 50
 page_size = 5
 
 [[feeds]]
-id = "UC9_p50tH3WmMslWRWKnM7dQ"
-source = "youtube"
-kind = "channel"
-name = "Adam Ragusea"
+id = "adamragusea"
+url = "https://www.youtube.com/channel/UC9_p50tH3WmMslWRWKnM7dQ"

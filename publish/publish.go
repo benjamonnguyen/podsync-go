@@ -53,9 +53,9 @@ func (s *Server) serveRSS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	lf, _ := s.lib.Feed(id)
-	title := f.Name
+	title := lf.Meta.Name
 	if title == "" {
-		title = lf.Meta.Name
+		title = f.ID
 	}
 	base := s.baseURL
 	out, err := rss.Build(base, rss.Feed{
@@ -79,9 +79,9 @@ func (s *Server) serveOPML(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		lf, _ := s.lib.Feed(f.ID)
-		title := f.Name
+		title := lf.Meta.Name
 		if title == "" {
-			title = lf.Meta.Name
+			title = f.ID
 		}
 		feeds = append(feeds, opml.Feed{Title: title, XMLURL: base + "/feeds/" + f.ID + ".xml", HTMLURL: base})
 	}

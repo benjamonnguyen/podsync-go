@@ -3,6 +3,7 @@ package podsync
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -62,10 +63,12 @@ type Options struct {
 // inherit from [defaults]. TitleInclude and TitleExclude (Go regular
 // expressions, empty = off) belong to the feed alone; there are no global ones.
 type Feed struct {
-	ID     string `toml:"id" json:"id"`
-	Source string `toml:"source,omitempty" json:"source,omitempty"`
-	Kind   string `toml:"kind" json:"kind"` // "channel" | "playlist"
-	Name   string `toml:"name" json:"name"`
+	ID  string `toml:"id" json:"id"`
+	URL string `toml:"url" json:"url"`
+
+	// Kind and Source are derived from URL by Normalize, not configured.
+	Kind   string `toml:"-" json:"kind"` // "channel" | "playlist"
+	Source string `toml:"-" json:"source,omitempty"`
 
 	Format          *string   `toml:"format,omitempty" json:"format,omitempty"`
 	MaxResolution   *int      `toml:"max_resolution,omitempty" json:"max_resolution,omitempty"`
@@ -110,7 +113,41 @@ const (
 	PlaylistSortOldest = "oldest"
 )
 
-var idPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
+var (
+	idPattern         = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
+	feedChannelPathRe = regexp.MustCompile(`^/(channel/[^/]+|@[^/]+|c/[^/]+|user/[^/]+)`)
+	feedPlaylistIDRe  = regexp.MustCompile(`^(PL|UU|FL|OL|RD|LL)[A-Za-z0-9_-]{10,}$`)
+	feedURLHosts      = map[string]bool{
+		"youtube.com": true, "www.youtube.com": true, "m.youtube.com": true, "music.youtube.com": true,
+	}
+)
+
+// ParseFeedURL classifies a configured feed URL as a channel or playlist
+// link, the only two kinds a feed can be. It accepts the same channel and
+// playlist link shapes youtube/youtube.go's Resolve does, but (deliberately,
+// since this is a recurring feed, not a one-off lookup) nothing else: no bare
+// IDs, no @handles, no video links.
+func ParseFeedURL(raw string) (kind string, err error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", errors.New("url is required")
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" || !feedURLHosts[strings.ToLower(u.Hostname())] {
+		return "", errors.New("url must be a youtube.com channel or playlist link")
+	}
+	q := u.Query()
+	switch {
+	case u.Path == "/playlist" || (u.Path == "/watch" && q.Get("list") != ""):
+		if !feedPlaylistIDRe.MatchString(q.Get("list")) {
+			return "", errors.New("unrecognized playlist url")
+		}
+		return FeedPlaylist, nil
+	case feedChannelPathRe.MatchString(u.Path):
+		return FeedChannel, nil
+	}
+	return "", errors.New("url must link to a youtube.com channel or playlist")
+}
 
 // Default returns the configuration used when no file exists.
 func Default() Config {
@@ -167,6 +204,17 @@ func (c Config) Feed(id string) (Feed, bool) {
 	return Feed{}, false
 }
 
+// FeedByURL looks a feed up by its configured URL, used to detect that a
+// channel or playlist is already in the library under a different ID.
+func (c Config) FeedByURL(url string) (Feed, bool) {
+	for _, f := range c.Feeds {
+		if f.URL == url {
+			return f, true
+		}
+	}
+	return Feed{}, false
+}
+
 func (o Options) validate(where string) error {
 	var errs []error
 	if o.Format != FormatVideo && o.Format != FormatAudio {
@@ -192,14 +240,10 @@ func (c *Config) Normalize() {
 	for i := range c.Feeds {
 		f := &c.Feeds[i]
 		f.ID = strings.TrimSpace(f.ID)
-		if f.Source == "" {
-			f.Source = DefaultSource
-		}
-		if f.Kind == "" {
-			f.Kind = FeedChannel
-		}
-		if f.Name == "" {
-			f.Name = f.ID
+		f.URL = strings.TrimSpace(f.URL)
+		f.Source = DefaultSource // only one source today; derived, not configured
+		if kind, err := ParseFeedURL(f.URL); err == nil {
+			f.Kind = kind
 		}
 	}
 }
@@ -216,21 +260,27 @@ func (c Config) Validate() error {
 	if err := c.Defaults.validate("defaults"); err != nil {
 		errs = append(errs, err)
 	}
-	seen := map[string]bool{}
+	seenID := map[string]bool{}
+	seenURL := map[string]bool{}
 	for i, f := range c.Feeds {
 		where := fmt.Sprintf("feeds[%d] (%s)", i, f.ID)
 		switch {
 		case !idPattern.MatchString(f.ID):
 			errs = append(errs, fmt.Errorf("%s: id must be 1-128 characters of A-Z a-z 0-9 _ -", where))
-		case seen[f.ID]:
+		case seenID[f.ID]:
 			errs = append(errs, fmt.Errorf("%s: duplicate feed id", where))
 		}
-		seen[f.ID] = true
-		if !idPattern.MatchString(f.Source) {
-			errs = append(errs, fmt.Errorf("%s: invalid source %q", where, f.Source))
-		}
-		if f.Kind != FeedChannel && f.Kind != FeedPlaylist {
-			errs = append(errs, fmt.Errorf("%s: kind must be %q or %q", where, FeedChannel, FeedPlaylist))
+		seenID[f.ID] = true
+		if _, err := ParseFeedURL(f.URL); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %v", where, err))
+		} else {
+			if f.Kind != FeedChannel && f.Kind != FeedPlaylist {
+				errs = append(errs, fmt.Errorf("%s: kind must be %q or %q", where, FeedChannel, FeedPlaylist))
+			}
+			if seenURL[f.URL] {
+				errs = append(errs, fmt.Errorf("%s: duplicate feed url (already configured under another id)", where))
+			}
+			seenURL[f.URL] = true
 		}
 		if f.PlaylistSort != "" {
 			if f.PlaylistSort != PlaylistSortOldest {

@@ -31,7 +31,7 @@ func setup(t *testing.T, eps []podsync.EpisodeInfo, mutate func(*podsync.Config)
 	c := podsync.Default()
 	c.Defaults.PageSize = 5
 	c.Defaults.CleanupKeepLast = 0
-	c.Feeds = []podsync.Feed{{ID: "UC1", Name: "One", Kind: "channel", Source: "youtube"}}
+	c.Feeds = []podsync.Feed{{ID: "UC1", URL: "https://www.youtube.com/channel/UC1/videos"}}
 	if mutate != nil {
 		mutate(&c)
 	}

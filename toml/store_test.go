@@ -18,7 +18,7 @@ page_size = 7
 
 [[feeds]]
 id = "UC123"
-name = "Chan"
+url = "https://www.youtube.com/channel/UC123/videos"
 format = "audio"
 cleanup_keep_last = 3
 `))
@@ -39,22 +39,28 @@ cleanup_keep_last = 3
 }
 
 func TestParseRejectsUnknownKeysAndBadValues(t *testing.T) {
+	validFeed := "id=\"a\"\nurl=\"https://www.youtube.com/channel/UCa/videos\"\n"
 	cases := map[string]string{
-		"unknown key":    "[defaults]\ntitle_filter = \"x\"\n",
-		"old shorts key": "[defaults]\nexclude_shorts = true\n",
-		"neg min dur":    "[defaults]\nmin_duration = \"-5s\"\n",
-		"global include": "[defaults]\ntitle_include = \"x\"\n",
-		"global exclude": "[defaults]\ntitle_exclude = \"x\"\n",
-		"old age key":    "[defaults]\ncleanup_after_days = 30\n",
-		"old feed age":   "[[feeds]]\nid=\"a\"\ncleanup_after_days = 30\n",
-		"bad regex":      "[[feeds]]\nid=\"a\"\ntitle_include = \"(\"\n",
-		"bad format":     "[defaults]\nformat = \"gif\"\n",
-		"dup feed":       "[[feeds]]\nid=\"a\"\n[[feeds]]\nid=\"a\"\n",
-		"unsafe id":      "[[feeds]]\nid=\"../x\"\n",
-		"bad interval":   "[download]\nupdate_interval = \"5s\"\n",
-		"bad base url":   "[server]\nbase_url = \"localhost\"\n",
-		"zero page":      "[defaults]\npage_size = 0\n",
-		"feed bad kind":  "[[feeds]]\nid=\"a\"\nkind=\"user\"\n",
+		"unknown key":         "[defaults]\ntitle_filter = \"x\"\n",
+		"old shorts key":      "[defaults]\nexclude_shorts = true\n",
+		"neg min dur":         "[defaults]\nmin_duration = \"-5s\"\n",
+		"global include":      "[defaults]\ntitle_include = \"x\"\n",
+		"global exclude":      "[defaults]\ntitle_exclude = \"x\"\n",
+		"old age key":         "[defaults]\ncleanup_after_days = 30\n",
+		"old feed age":        "[[feeds]]\n" + validFeed + "cleanup_after_days = 30\n",
+		"old feed kind key":   "[[feeds]]\n" + validFeed + "kind = \"channel\"\n",
+		"old feed source key": "[[feeds]]\n" + validFeed + "source = \"youtube\"\n",
+		"old feed name key":   "[[feeds]]\n" + validFeed + "name = \"Chan\"\n",
+		"bad regex":           "[[feeds]]\n" + validFeed + "title_include = \"(\"\n",
+		"bad format":          "[defaults]\nformat = \"gif\"\n",
+		"dup feed id":         "[[feeds]]\n" + validFeed + "[[feeds]]\nid=\"a\"\nurl=\"https://www.youtube.com/channel/UCb/videos\"\n",
+		"dup feed url":        "[[feeds]]\n" + validFeed + "[[feeds]]\nid=\"b\"\nurl=\"https://www.youtube.com/channel/UCa/videos\"\n",
+		"unsafe id":           "[[feeds]]\nid=\"../x\"\nurl=\"https://www.youtube.com/channel/UCa/videos\"\n",
+		"bad interval":        "[download]\nupdate_interval = \"5s\"\n",
+		"bad base url":        "[server]\nbase_url = \"localhost\"\n",
+		"zero page":           "[defaults]\npage_size = 0\n",
+		"missing url":         "[[feeds]]\nid=\"a\"\n",
+		"non-youtube url":     "[[feeds]]\nid=\"a\"\nurl=\"https://example.com/foo\"\n",
 	}
 	for name, in := range cases {
 		if _, err := Parse([]byte(in)); err == nil {
@@ -64,7 +70,7 @@ func TestParseRejectsUnknownKeysAndBadValues(t *testing.T) {
 }
 
 func TestMinDurationParsesAndRoundTrips(t *testing.T) {
-	cfg, err := Parse([]byte("[defaults]\nmin_duration = \"90s\"\n\n[[feeds]]\nid = \"UC1\"\nmin_duration = \"0s\"\n\n[[feeds]]\nid = \"UC2\"\n"))
+	cfg, err := Parse([]byte("[defaults]\nmin_duration = \"90s\"\n\n[[feeds]]\nid = \"UC1\"\nurl = \"https://www.youtube.com/channel/UC1/videos\"\nmin_duration = \"0s\"\n\n[[feeds]]\nid = \"UC2\"\nurl = \"https://www.youtube.com/channel/UC2/videos\"\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,8 +97,8 @@ func TestMinDurationParsesAndRoundTrips(t *testing.T) {
 func TestRoundTripOmitsNilOverrides(t *testing.T) {
 	cfg := podsync.Default()
 	cfg.Feeds = []podsync.Feed{
-		{ID: "UC1", Name: "One", Kind: "channel", Source: "youtube"},
-		{ID: "UC2", Name: "Two", Kind: "playlist", Source: "youtube", Format: ptr("audio"), PageSize: ptr(25), TitleExclude: "(?i)live"},
+		{ID: "UC1", URL: "https://www.youtube.com/channel/UC1/videos"},
+		{ID: "UC2", URL: "https://www.youtube.com/playlist?list=PLsomethingsomething", Format: ptr("audio"), PageSize: ptr(25), TitleExclude: "(?i)live"},
 	}
 	data, err := Marshal(cfg)
 	if err != nil {
@@ -140,7 +146,7 @@ func TestStoreCreatesUpdatesAndNotifies(t *testing.T) {
 		}
 	})
 	err = s.Update(func(c *podsync.Config) error {
-		c.Feeds = append(c.Feeds, podsync.Feed{ID: "UC9", Name: "Nine"})
+		c.Feeds = append(c.Feeds, podsync.Feed{ID: "UC9", URL: "https://www.youtube.com/channel/UC9/videos"})
 		return nil
 	})
 	if err != nil || notified != 1 {
@@ -179,7 +185,7 @@ func TestReloadPicksUpExternalEditsAndKeepsConfigOnErrors(t *testing.T) {
 		t.Fatalf("untouched file: %v %v", changed, err)
 	}
 	err = web.Update(func(c *podsync.Config) error {
-		c.Feeds = append(c.Feeds, podsync.Feed{ID: "UC1", Name: "One"})
+		c.Feeds = append(c.Feeds, podsync.Feed{ID: "UC1", URL: "https://www.youtube.com/channel/UC1/videos"})
 		c.Download.Concurrency = 3
 		return nil
 	})
@@ -244,4 +250,3 @@ func TestExampleConfigParses(t *testing.T) {
 		t.Fatalf("dev/config.toml no longer parses: %v", err)
 	}
 }
-

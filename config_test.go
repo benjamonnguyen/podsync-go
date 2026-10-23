@@ -34,7 +34,7 @@ func TestEffectiveLayersOverridesOverDefaults(t *testing.T) {
 
 func validConfig() Config {
 	c := Default()
-	c.Feeds = []Feed{{ID: "UC1", Name: "One", Kind: FeedChannel, Source: DefaultSource}}
+	c.Feeds = []Feed{{ID: "UC1", URL: "https://www.youtube.com/channel/UC1/videos"}}
 	c.Normalize()
 	return c
 }
@@ -45,6 +45,9 @@ func TestValidateRejectsBadValues(t *testing.T) {
 		"bad exclude":       func(c *Config) { c.Feeds[0].TitleExclude = "(" },
 		"bad format":        func(c *Config) { c.Defaults.Format = "gif" },
 		"dup feed":          func(c *Config) { c.Feeds = append(c.Feeds, c.Feeds[0]) },
+		"dup feed url":      func(c *Config) { dup := c.Feeds[0]; dup.ID = "UC-dup"; c.Feeds = append(c.Feeds, dup) },
+		"missing url":       func(c *Config) { c.Feeds[0].URL = "" },
+		"bad url":           func(c *Config) { c.Feeds[0].URL = "https://example.com/not-youtube" },
 		"unsafe id":         func(c *Config) { c.Feeds[0].ID = "../x" },
 		"bad interval":      func(c *Config) { c.Download.UpdateInterval = Duration(5 * time.Second) },
 		"zero page":         func(c *Config) { c.Defaults.PageSize = 0 },

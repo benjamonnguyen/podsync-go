@@ -106,7 +106,7 @@ func (s *Service) JobState(feedID, epID string) string {
 func (s *Service) Reconcile() {
 	for _, f := range s.cfg.Get().Feeds {
 		if err := s.lib.EnsureFeed(f.Source, f.ID); err != nil {
-			s.st.Report("library:"+f.ID, podsync.LevelError, fmt.Sprintf("Cannot create storage for %q: %v", f.Name, err))
+			s.st.Report("library:"+f.ID, podsync.LevelError, fmt.Sprintf("Cannot create storage for %q: %v", f.ID, err))
 		} else {
 			s.st.Clear("library:" + f.ID)
 		}
@@ -327,20 +327,20 @@ func (s *Service) listAndEnqueue(id string) []*job {
 	key := "list:" + id
 	src, err := s.reg.Get(f.Source)
 	if err != nil {
-		s.st.Report(key, podsync.LevelError, fmt.Sprintf("Feed %q: %v", f.Name, err))
+		s.st.Report(key, podsync.LevelError, fmt.Sprintf("Feed %q: %v", f.ID, err))
 		return nil
 	}
 	opts := f.Effective(cfg.Defaults)
 	filter, err := f.Filter(cfg.Defaults)
 	if err != nil {
-		s.st.Report(key, podsync.LevelError, fmt.Sprintf("Feed %q has an invalid title filter: %v", f.Name, err))
+		s.st.Report(key, podsync.LevelError, fmt.Sprintf("Feed %q has an invalid title filter: %v", f.ID, err))
 		return nil
 	}
-	info := podsync.FeedInfo{Source: f.Source, Kind: f.Kind, ID: f.ID, Name: f.Name, Reverse: f.PlaylistSort == podsync.PlaylistSortOldest}
+	info := podsync.FeedInfo{Source: f.Source, Kind: f.Kind, ID: f.ID, URL: f.URL, Reverse: f.PlaylistSort == podsync.PlaylistSortOldest}
 	eps, err := src.ListEpisodes(s.ctx, info, 0, opts.PageSize)
 	if err != nil {
 		if s.ctx.Err() == nil {
-			s.st.Report(key, podsync.LevelError, fmt.Sprintf("Could not list episodes for %q: %v", f.Name, err))
+			s.st.Report(key, podsync.LevelError, fmt.Sprintf("Could not list episodes for %q: %v", f.ID, err))
 		}
 		return nil
 	}
@@ -369,7 +369,7 @@ func (s *Service) listAndEnqueue(id string) []*job {
 		more, err := src.ListEpisodes(s.ctx, info, offset, opts.PageSize)
 		if err != nil {
 			if s.ctx.Err() == nil {
-				s.st.Report(key, podsync.LevelWarning, fmt.Sprintf("Could not fully check %q for missed episodes: %v", f.Name, err))
+				s.st.Report(key, podsync.LevelWarning, fmt.Sprintf("Could not fully check %q for missed episodes: %v", f.ID, err))
 			}
 			break
 		}
@@ -416,17 +416,14 @@ func (s *Service) refreshMeta(id string, src podsync.Source, info podsync.FeedIn
 	sum, _ := s.lib.Feed(id)
 	var fresh podsync.FeedInfo
 	if sum.Meta.ImageURL == "" {
-		if r, err := src.Resolve(s.ctx, info.ID); err == nil {
+		if r, err := src.Resolve(s.ctx, info.URL); err == nil {
 			fresh = r
 		}
 	}
 	_ = s.lib.UpdateMeta(id, func(m *podsync.FeedMeta) {
 		m.LastPull = s.now().UTC()
-		if m.Name == "" {
-			m.Name = info.Name
-		}
 		if fresh.ID != "" {
-			m.ImageURL, m.Description = fresh.ImageURL, fresh.Description
+			m.Name, m.ImageURL, m.Description = fresh.Name, fresh.ImageURL, fresh.Description
 		}
 	})
 }
@@ -575,9 +572,9 @@ func (s *Service) recordFailure(j *job, f podsync.Feed, err error) {
 	s.failures[j.feedID][j.ep.ID] = fmt.Sprintf("%q: %v", title, err)
 	n, msg := len(s.failures[j.feedID]), s.failures[j.feedID][j.ep.ID]
 	s.mu.Unlock()
-	text := fmt.Sprintf("Download failed in %q — %s", f.Name, msg)
+	text := fmt.Sprintf("Download failed in %q — %s", f.ID, msg)
 	if n > 1 {
-		text = fmt.Sprintf("%d downloads failed in %q; latest: %s", n, f.Name, msg)
+		text = fmt.Sprintf("%d downloads failed in %q; latest: %s", n, f.ID, msg)
 	}
 	s.st.Report("download:"+j.feedID, podsync.LevelError, text)
 }
@@ -643,13 +640,13 @@ func (s *Service) Cleanup(feedID string) {
 	for _, id := range ids {
 		ep := doomed[id]
 		if err := s.lib.RemoveMedia(feedID, ep); err != nil {
-			s.st.Report(key, podsync.LevelWarning, fmt.Sprintf("Cleanup of %q failed: %v", f.Name, err))
+			s.st.Report(key, podsync.LevelWarning, fmt.Sprintf("Cleanup of %q failed: %v", f.ID, err))
 			failed = true
 			continue
 		}
 		ep.Status, ep.File, ep.Size = podsync.StatusCleaned, "", 0
 		if err := s.lib.PutEpisode(feedID, ep); err != nil {
-			s.st.Report(key, podsync.LevelWarning, fmt.Sprintf("Cleanup of %q failed: %v", f.Name, err))
+			s.st.Report(key, podsync.LevelWarning, fmt.Sprintf("Cleanup of %q failed: %v", f.ID, err))
 			failed = true
 		}
 	}

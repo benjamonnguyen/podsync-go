@@ -24,11 +24,12 @@ page_size = 10              # only the newest N episodes of a feed are considere
 cleanup_keep_last = 50      # keep the newest N downloaded episodes; 0 = keep all
 
 # One [[feeds]] block per channel or playlist. Easiest is to add them from the web UI.
+# id is a short name you choose (letters, digits, _ and - only); it names the feed's
+# RSS path and library folder, and is its display name until the first update fetches
+# the channel/playlist's real title.
 [[feeds]]
-id = "UCXuqSBlHAE6Xw-yeJA0Tunw"     # channel ID (UC...) or playlist ID (PL...)
-source = "youtube"
-kind = "channel"                     # "channel" or "playlist"
-name = "Linus Tech Tips"
+id = "linustechtips"
+url = "https://www.youtube.com/channel/UCXuqSBlHAE6Xw-yeJA0Tunw"   # a youtube.com channel or playlist link
 # Optional per-feed overrides of any [defaults] key:
 format = "audio"
 page_size = 5
@@ -38,10 +39,8 @@ title_exclude = "(?i)sponsored|#shorts"   # matching titles are skipped
 # opml_exclude = true                      # leave this feed out of the /opml.xml export; absent/false = included
 
 # [[feeds]]
-# id = "PLsomeCourseSeriesPlaylistId"
-# source = "youtube"
-# kind = "playlist"
-# name = "Some Course"
+# id = "some-course"
+# url = "https://www.youtube.com/playlist?list=PLsomeCourseSeriesPlaylistId"
 # playlist_sort = "oldest" # only valid on playlist feeds: set this when the playlist is ordered
 #                           # oldest first (a course/series), so updates pull its newest additions
 #                           # instead of only ever the first page_size episodes ever added to it

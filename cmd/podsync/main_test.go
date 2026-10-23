@@ -46,7 +46,7 @@ func newHarness(t *testing.T) *harness {
 	c := podsync.Default()
 	c.Defaults.PageSize = 3
 	c.Defaults.CleanupKeepLast = 0
-	c.Feeds = []podsync.Feed{{ID: "UCone", Name: "Channel One", Kind: "channel", Source: "youtube"}}
+	c.Feeds = []podsync.Feed{{ID: "UCone", URL: "https://www.youtube.com/channel/UCone/videos"}}
 	c.Normalize()
 	cfg, err := toml.Open(cfgPath)
 	if err != nil {
@@ -66,7 +66,16 @@ func newHarness(t *testing.T) *harness {
 			Thumbnail: fmt.Sprintf("https://i.ytimg.com/vi/vid%07d/hq.jpg", i), ViewCount: 2500, Channel: "Remote Chan",
 		})
 	}
-	newInfo := podsync.FeedInfo{Source: "youtube", Kind: "channel", ID: "UCnew", Name: "New <Channel>", Description: "about", ImageURL: "https://img/x.jpg", Handle: "@new", Subscribers: 1500000}
+	newInfo := podsync.FeedInfo{Source: "youtube", Kind: "channel", ID: "UCnew", URL: "https://www.youtube.com/channel/UCnew/videos", Name: "New <Channel>", Description: "about", ImageURL: "https://img/x.jpg", Handle: "@new", Subscribers: 1500000}
+	// A feed's display name comes from the library's own fetched metadata
+	// (there's no config field for it), filled in by the first pull's Resolve call.
+	src.ResolveFn = func(ref string) (podsync.FeedInfo, error) {
+		name := "Fake"
+		if ref == "https://www.youtube.com/channel/UCone/videos" {
+			name = "Channel One"
+		}
+		return podsync.FeedInfo{Source: "youtube", Kind: "channel", ID: ref, Name: name, ImageURL: "http://img/x.jpg"}, nil
+	}
 	src.FindFn = func(q string) ([]podsync.FeedInfo, error) { // stands in for the adapter's hints
 		switch q {
 		case "":
@@ -98,6 +107,7 @@ func newHarness(t *testing.T) *harness {
 	svc := syncer.New(ctx, cfg, lib, podsync.NewRegistry(src), st)
 	cfg.OnChange(svc.ConfigChanged)
 	svc.Reconcile()
+	_ = lib.UpdateMeta("UCone", func(m *podsync.FeedMeta) { m.Name = "Channel One" })
 	ui, err := newServer(options{Config: cfg, Library: lib, Syncer: svc, BaseURL: "http://pod.example:8080"})
 	if err != nil {
 		t.Fatal(err)
@@ -418,7 +428,7 @@ func TestAddFlow(t *testing.T) {
 		t.Fatalf("add result: %d %v", rec.Code, rec.Header())
 	}
 	f, ok := h.cfg.Get().Feed("UCnew")
-	if !ok || f.Name != "New <Channel>" || f.PageSize == nil || *f.PageSize != 2 || f.Source != "youtube" {
+	if !ok || f.URL != "https://www.youtube.com/channel/UCnew/videos" || f.PageSize == nil || *f.PageSize != 2 || f.Source != "youtube" {
 		t.Fatalf("saved feed: %+v ok=%v", f, ok)
 	}
 	h.waitIdle()
@@ -426,7 +436,7 @@ func TestAddFlow(t *testing.T) {
 		t.Fatalf("first pull should fetch page_size=2 episodes, got %d", n)
 	}
 	sum, _ := h.lib.Feed("UCnew")
-	if sum.Meta.ImageURL != "https://img/x.jpg" || sum.Meta.Description != "about" {
+	if sum.Meta.Name != "New <Channel>" || sum.Meta.ImageURL != "https://img/x.jpg" || sum.Meta.Description != "about" {
 		t.Fatalf("meta: %+v", sum.Meta)
 	}
 	h.mustContain(h.do("POST", "/add/find", url.Values{"q": {"@new"}}), 200, "Already in your library")
@@ -525,12 +535,15 @@ func TestFeedSettingsOverridesAndInherit(t *testing.T) {
 	if strings.Contains(page.Body.String(), "cleanup_after_days") {
 		t.Fatal("age-based cleanup no longer exists")
 	}
-	form := url.Values{"name": {"Renamed"}, "format": {"audio"}, "max_resolution": {""}, "min_duration": {"0"}, "title_include": {" review "}, "title_exclude": {"(?i)live"},
+	if strings.Contains(page.Body.String(), `name="name"`) {
+		t.Fatal("per-feed display name is no longer editable")
+	}
+	form := url.Values{"format": {"audio"}, "max_resolution": {""}, "min_duration": {"0"}, "title_include": {" review "}, "title_exclude": {"(?i)live"},
 		"page_size": {"7"}, "cleanup_keep_last": {""}}
 	h.mustContain(h.do("POST", "/feed/UCone/settings", form), 200, "Saved", `name="min_duration" value="0s"`, `name="title_exclude" value="(?i)live"`)
 	f, _ := h.cfg.Get().Feed("UCone")
 	eff := f.Effective(h.cfg.Get().Defaults)
-	if f.Name != "Renamed" || eff.Format != "audio" || f.MinDuration == nil || eff.MinDuration != 0 || eff.PageSize != 7 || eff.MaxResolution != 720 || f.MaxResolution != nil ||
+	if eff.Format != "audio" || f.MinDuration == nil || eff.MinDuration != 0 || eff.PageSize != 7 || eff.MaxResolution != 720 || f.MaxResolution != nil ||
 		f.TitleInclude != "review" || f.TitleExclude != "(?i)live" {
 		t.Fatalf("%+v / %+v", f, eff)
 	}
@@ -554,7 +567,7 @@ func TestFeedSettingsOverridesAndInherit(t *testing.T) {
 	}
 	form.Set("min_duration", "x")
 	h.mustContain(h.do("POST", "/feed/UCone/settings", form), 200, "Not saved", "min_duration")
-	bad := url.Values{"name": {"X"}, "title_include": {"("}}
+	bad := url.Values{"title_include": {"("}}
 	h.mustContain(h.do("POST", "/feed/UCone/settings", bad), 200, "Not saved", "title_include", "regular expression")
 	h.mustContain(h.get("/feed/UCnone/settings"), 404)
 }
@@ -626,7 +639,7 @@ func TestChangesFromTheSyncLoopAreSeenWithoutRestart(t *testing.T) {
 
 	// Someone edits config.toml by hand.
 	hand := h.cfg.Get()
-	hand.Feeds = append(hand.Feeds, podsync.Feed{ID: "UChand", Name: "Hand Added", Kind: "channel", Source: "youtube"})
+	hand.Feeds = append(hand.Feeds, podsync.Feed{ID: "HandAdded", URL: "https://www.youtube.com/channel/UChand/videos"})
 	raw, err := toml.Marshal(hand)
 	if err != nil {
 		t.Fatal(err)
@@ -634,14 +647,15 @@ func TestChangesFromTheSyncLoopAreSeenWithoutRestart(t *testing.T) {
 	if err := os.WriteFile(h.cfgPath, raw, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	h.mustContain(h.get("/"), 200, "Hand Added")
+	// Before its first pull, a feed has no fetched metadata, so it's shown by its id.
+	h.mustContain(h.get("/"), 200, "HandAdded")
 
 	// A broken edit is reported (not dismissible) and the last good settings stay.
 	if err := os.WriteFile(h.cfgPath, []byte("[defaults]\npage_size = 0\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	rec := h.get("/")
-	h.mustContain(rec, 200, "Hand Added", "configuration file cannot be read", "page_size")
+	h.mustContain(rec, 200, "HandAdded", "configuration file cannot be read", "page_size")
 	if strings.Count(rec.Body.String(), "/status/dismiss") != 0 {
 		t.Fatal("a broken config file banner must not be dismissible")
 	}
@@ -676,7 +690,7 @@ func newTestConfig(t *testing.T, webuiDisabled bool) (config, podsync.ConfigStor
 		t.Fatal(err)
 	}
 	c := podsync.Default()
-	c.Feeds = []podsync.Feed{{ID: "UCone", Name: "Channel One", Kind: "channel", Source: "youtube"}}
+	c.Feeds = []podsync.Feed{{ID: "UCone", URL: "https://www.youtube.com/channel/UCone/videos"}}
 	c.Normalize()
 	if err := cfg.Update(func(x *podsync.Config) error { *x = c; return nil }); err != nil {
 		t.Fatal(err)
@@ -685,6 +699,8 @@ func newTestConfig(t *testing.T, webuiDisabled bool) (config, podsync.ConfigStor
 	if err := lib.Load(); err != nil {
 		t.Fatal(err)
 	}
+	lib.EnsureFeed("youtube", "UCone")
+	lib.UpdateMeta("UCone", func(m *podsync.FeedMeta) { m.Name = "Channel One" })
 	return config{
 		baseURL: "http://pod.example:8080", webuiDisabled: webuiDisabled,
 		username: "admin", password: "secret",
