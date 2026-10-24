@@ -1,5 +1,6 @@
 /data/
 /config.toml
+/config/
 /podsync-go
 /bin/
 *.test
