@@ -47,6 +47,8 @@ COPY --from=tools /out/yt-dlp /opt/yt-dlp
 COPY --from=tools /out/deno /usr/local/bin/deno
 RUN chmod 0777 /opt/yt-dlp && mkdir -p /config /data && chmod 0777 /config /data
 COPY --from=build /out/podsync /usr/local/bin/podsync
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod 0755 /usr/local/bin/docker-entrypoint.sh
 
 ENV PATH="/opt/yt-dlp:${PATH}" \
     PODSYNC_CONFIG=/config/config.toml \
@@ -62,4 +64,9 @@ WORKDIR /
 EXPOSE 8080
 VOLUME ["/config", "/data"]
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s CMD ["env", "PODSYNC_HEALTHCHECK=1", "/usr/local/bin/podsync"]
-ENTRYPOINT ["/usr/local/bin/podsync"]
+# The container starts as root (no USER set) so the entrypoint can chown freshly-created
+# bind mounts at /config and /data to PUID:PGID (default 1000:1000) before dropping to that
+# user and running podsync — see docker-entrypoint.sh. Setting --user/compose's `user:`
+# yourself skips all of that and runs podsync directly as whatever you picked, as before.
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
+CMD ["/usr/local/bin/podsync"]

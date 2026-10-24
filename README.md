@@ -43,6 +43,11 @@ Inspired by [mxpv/podsync](https://github.com/mxpv/podsync)
    cp compose.example.yaml compose.yaml
    ```
 
+   `config/` and `data/` don't strictly need to exist first — the container starts as root
+   and its entrypoint chowns them to `PUID`/`PGID` (default `1000:1000`, set in
+   `compose.yaml`) before running podsync, fixing them up even if Docker auto-created them
+   as root:root. Pre-creating them is just for predictability.
+
    The example builds one image from the repository. To build it yourself for both architectures:
 
    ```sh

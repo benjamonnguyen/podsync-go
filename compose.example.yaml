@@ -12,9 +12,14 @@ services:
       # Downloaded media and metadata. Back this up; config.toml alone is enough to
       # re-create your feeds, but downloaded state lives here.
       - ./data:/data
-    # Run as your own user so files in ./config and ./data are yours (create both dirs first).
-    user: "1000:1000"
+    # The container starts as root and the entrypoint chowns ./config and ./data to
+    # PUID:PGID before running podsync as that user — so a fresh ./config or ./data that
+    # Docker auto-created as root:root (because it didn't exist on the host yet) still
+    # "just works". Set these to your host user if you want the files it creates to be
+    # yours outside the container too; the default (1000:1000) is fine otherwise.
     environment:
+      PUID: "1000"
+      PGID: "1000"
       TZ: UTC
       PODSYNC_BASE_URL: http://<this-host>:8080
       PODSYNC_USERNAME: admin
@@ -24,8 +29,9 @@ services:
       # Optional: use a yt-dlp other than the one baked into the image (must exist in the
       # container, e.g. bind-mounted in):
       # PODSYNC_YTDLP_PATH: /config/yt-dlp
-      # Optional: re-encode audio downloads (format = "audio") to mp3 instead of m4a:
-      # PODSYNC_MP3_ENCODING: "true"
+      # Audio downloads (format = "audio") are re-encoded to mp3 by default; set this to
+      # turn that off and keep the original m4a:
+      # PODSYNC_MP3_ENCODING_DISABLED: "true"
       # Optional: serve HTTPS directly instead of plain HTTP (cert/key must exist in the
       # container, e.g. bind-mounted in via ./config). The login page sends credentials and
       # the session cookie in the clear otherwise, so set these or put podsync behind a
