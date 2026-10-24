@@ -1,15 +1,16 @@
 services:
   podsync:
-    image: podsync:latest
+    # image: podsync:latest
     # Build it yourself (multi-arch: docker buildx build --platform linux/amd64,linux/arm64 .):
     build: .
     container_name: podsync
     restart: unless-stopped
     volumes:
-      # Mount the *directory*, not the single file: config.toml is created here with
-      # defaults if it doesn't exist yet, and the app rewrites it (atomically) when you
-      # change settings in the UI — a single-file bind mount can't be replaced that way.
+      # Mount the *directory*, not the single file: the app rewrites config.toml when you
+      # change settings in the UI, and a single-file bind mount can't be replaced atomically.
       - ./config:/config
+      # Downloaded media and metadata. Back this up; config.toml alone is enough to
+      # re-create your feeds, but downloaded state lives here.
       - ./data:/data
     # Run as your own user so files in ./config and ./data are yours (create both dirs first).
     user: "1000:1000"
@@ -20,9 +21,11 @@ services:
       PODSYNC_PASSWORD: change-me # required unless PODSYNC_WEBUI_DISABLED is true
       # Optional: cookies for YouTube sign-in checks (put cookies.txt in ./config):
       # PODSYNC_COOKIES_FILE: /config/cookies.txt
-      # Audio downloads (format = "audio") are re-encoded to mp3 by default; set this to
-      # turn that off and keep the original m4a:
-      # PODSYNC_MP3_ENCODING_DISABLED: "true"
+      # Optional: use a yt-dlp other than the one baked into the image (must exist in the
+      # container, e.g. bind-mounted in):
+      # PODSYNC_YTDLP_PATH: /config/yt-dlp
+      # Optional: re-encode audio downloads (format = "audio") to mp3 instead of m4a:
+      # PODSYNC_MP3_ENCODING: "true"
       # Optional: serve HTTPS directly instead of plain HTTP (cert/key must exist in the
       # container, e.g. bind-mounted in via ./config). The login page sends credentials and
       # the session cookie in the clear otherwise, so set these or put podsync behind a
