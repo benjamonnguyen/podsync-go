@@ -196,7 +196,7 @@ func newHandler(c config, cfg podsync.ConfigStore, lib podsync.Library, svc pods
 
 	webuiNote := "web UI off"
 	if !c.webuiDisabled {
-		ui, err := newServer(options{Config: cfg, Library: lib, Syncer: svc, BaseURL: c.baseURL})
+		ui, err := newServer(options{Config: cfg, Library: lib, Syncer: svc, BaseURL: c.baseURL, MP3Encoding: !c.mp3EncodingDisabled})
 		if err != nil {
 			return nil, "", err
 		}

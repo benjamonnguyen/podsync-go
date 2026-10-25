@@ -24,19 +24,19 @@ import (
 
 // FeedSummary is a feed as shown in lists.
 type FeedSummary struct {
-	ID           string
-	Format       string
-	Source       string
-	Kind         string
-	Name         string
-	Description  string
-	ImageURL     string
-	RSSURL       string
-	Episodes     int // downloaded
-	Bytes        int64
-	LastPull     time.Time
-	HasOverrides bool
-	Orphan       bool
+	ID          string
+	Format      string
+	Source      string
+	Kind        string
+	Name        string
+	Description string
+	ImageURL    string
+	URL         string // the channel/playlist link podsync fetches from; empty for orphans
+	RSSURL      string
+	Episodes    int // downloaded
+	Bytes       int64
+	LastPull    time.Time
+	Orphan      bool
 }
 
 type FeedList struct {
@@ -144,8 +144,8 @@ func (s *Server) summary(cfg podsync.Config, f podsync.Feed) FeedSummary {
 	}
 	return FeedSummary{
 		ID: f.ID, Format: format, Source: f.Source, Kind: f.Kind, Name: name,
-		Description: lf.Meta.Description, ImageURL: lf.Meta.ImageURL, RSSURL: s.rssURL(f.ID, format),
-		Episodes: lf.Downloaded, Bytes: lf.Bytes, LastPull: lf.Meta.LastPull, HasOverrides: f.HasOverrides(),
+		Description: lf.Meta.Description, ImageURL: lf.Meta.ImageURL, URL: f.URL, RSSURL: s.rssURL(f.ID, format),
+		Episodes: lf.Downloaded, Bytes: lf.Bytes, LastPull: lf.Meta.LastPull,
 	}
 }
 

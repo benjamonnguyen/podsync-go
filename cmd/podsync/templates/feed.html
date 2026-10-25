@@ -6,6 +6,7 @@
     <h1>{{.Card.Name}}</h1>
     {{template "feed_stats" .Stats}}
     {{with .Card.Description}}<p class="clip" id="feed-desc">{{.}}</p><button class="link" type="button" data-toggle-clip="#feed-desc" aria-controls="feed-desc" aria-expanded="false" hidden>More info</button>{{end}}
+    {{with .Card.URL}}<a href="{{.}}" target="_blank" rel="noopener noreferrer">Open on YouTube</a>{{end}}
     <div class="rss">
       <input id="rss-url" type="text" aria-label="Podcast feed URL" class="rss-url" readonly data-copy value="{{.Card.RSSURL}}" title="Click to copy">
       <div class="actions">

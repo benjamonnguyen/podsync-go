@@ -64,7 +64,7 @@ func (s *Server) renderAddPreview(w http.ResponseWriter, r *http.Request, info p
 	_, exists := cfg.Feed(info.ID, format)
 	s.fragment(w, "add_preview", map[string]any{
 		"Info": info, "Err": errText,
-		"F":            feedSettingsFrom(info.ID, info.Name, info.Kind, "", fs, cfg.Defaults),
+		"F":            s.feedSettingsFrom(info.ID, info.Name, info.Kind, "", fs, cfg.Defaults),
 		"Exists":       exists,
 		"ExistsFormat": format,
 	})

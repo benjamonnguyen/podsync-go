@@ -41,11 +41,13 @@ RUN set -eux; \
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl ffmpeg \
     && rm -rf /var/lib/apt/lists/*
-# yt-dlp lives in its own world-writable directory so `download.self_update` can replace it
-# even when the container runs as an arbitrary --user.
+# yt-dlp lives in its own world-writable directory, and the binary itself is world-writable
+# too, so `download.self_update` can replace it even when the container runs as an arbitrary
+# --user: yt-dlp's updater checks write access on the file itself, not just its directory, and
+# refuses with "Unable to write to ...; try running as administrator" if that check fails.
 COPY --from=tools /out/yt-dlp /opt/yt-dlp
 COPY --from=tools /out/deno /usr/local/bin/deno
-RUN chmod 0777 /opt/yt-dlp && mkdir -p /config /data && chmod 0777 /config /data
+RUN chmod 0777 /opt/yt-dlp /opt/yt-dlp/yt-dlp && mkdir -p /config /data && chmod 0777 /config /data
 COPY --from=build /out/podsync /usr/local/bin/podsync
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod 0755 /usr/local/bin/docker-entrypoint.sh

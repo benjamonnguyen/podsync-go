@@ -34,18 +34,20 @@ var assetVersion = func() string {
 
 // options are the web UI's dependencies, wired together in main.
 type options struct {
-	Config  podsync.ConfigStore // the config file, shared with the sync loop
-	Library podsync.Library     // the data directory, shared with the sync loop
-	Syncer  podsync.Syncer      // the sync service, called in-process
-	BaseURL string              // the public address, for the links and thumbnails the UI shows
+	Config      podsync.ConfigStore // the config file, shared with the sync loop
+	Library     podsync.Library     // the data directory, shared with the sync loop
+	Syncer      podsync.Syncer      // the sync service, called in-process
+	BaseURL     string              // the public address, for the links and thumbnails the UI shows
+	MP3Encoding bool                // PODSYNC_MP3_ENCODING_DISABLED, inverted; just for the "audio" format label
 }
 
 type Server struct {
-	cfg     podsync.ConfigStore
-	lib     podsync.Library
-	sync    podsync.Syncer
-	baseURL string
-	now     func() time.Time
+	cfg         podsync.ConfigStore
+	lib         podsync.Library
+	sync        podsync.Syncer
+	baseURL     string
+	mp3Encoding bool
+	now         func() time.Time
 
 	pages map[string]*template.Template
 	frag  *template.Template
@@ -67,7 +69,7 @@ var pageNames = []string{"library", "feed", "add", "settings", "feed_settings", 
 
 func newServer(o options) (*Server, error) {
 	s := &Server{
-		cfg: o.Config, lib: o.Library, sync: o.Syncer, baseURL: o.BaseURL, now: time.Now,
+		cfg: o.Config, lib: o.Library, sync: o.Syncer, baseURL: o.BaseURL, mp3Encoding: o.MP3Encoding, now: time.Now,
 		previews: map[string]preview{}, dismissed: map[string]time.Time{},
 	}
 	funcs := template.FuncMap{
@@ -198,6 +200,16 @@ func crossSiteGuard(next http.Handler) http.Handler {
 
 // mediaBase is the public address where feeds, media and thumbnails are served.
 func (s *Server) mediaBase() string { return s.baseURL }
+
+// audioExt names the file extension "audio" format downloads actually land
+// as, for the settings pages' format labels: PODSYNC_MP3_ENCODING_DISABLED
+// changes this deployment-wide, so a hardcoded "(m4a)" would lie about it.
+func (s *Server) audioExt() string {
+	if s.mp3Encoding {
+		return "mp3"
+	}
+	return "m4a"
+}
 
 // mediaOrigin is mediaBase reduced to scheme://host[:port] for the CSP.
 func (s *Server) mediaOrigin() string {

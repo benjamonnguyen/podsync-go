@@ -67,7 +67,9 @@ func applySettingsForm(s *Settings, r *http.Request) error {
 }
 
 func (s *Server) renderSettings(w http.ResponseWriter, r *http.Request, cur Settings, flash, errText string) {
-	s.render(w, r, "settings", map[string]any{"Title": "Settings", "Cfg": cur, "ConfigPath": cur.ConfigPath, "Flash": flash, "Err": errText})
+	s.render(w, r, "settings", map[string]any{
+		"Title": "Settings", "Cfg": cur, "ConfigPath": cur.ConfigPath, "AudioExt": s.audioExt(), "Flash": flash, "Err": errText,
+	})
 }
 
 func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
@@ -115,6 +117,10 @@ type feedSettingsView struct {
 	PlaylistSort    string
 	OPMLExclude     bool
 	Defaults        podsync.Options
+	// AudioExt is the file extension "audio" format actually downloads as
+	// right now (m4a, or mp3 if PODSYNC_MP3_ENCODING_DISABLED is not set), for
+	// the Format option's label.
+	AudioExt string
 }
 
 // formatChangeConfirm is shown instead of saving when a settings submission
@@ -150,7 +156,7 @@ func sval(p *string) string {
 	return *p
 }
 
-func feedSettingsFrom(id, name, kind, currentFormat string, fs FeedSettings, d podsync.Options) feedSettingsView {
+func (s *Server) feedSettingsFrom(id, name, kind, currentFormat string, fs FeedSettings, d podsync.Options) feedSettingsView {
 	v := feedSettingsView{
 		ID: id, Name: name, Kind: kind, CurrentFormat: currentFormat, Format: sval(fs.Format), MaxVideoHeight: itoa(fs.MaxVideoHeight),
 		AudioQuality: sval(fs.AudioQuality),
@@ -159,6 +165,7 @@ func feedSettingsFrom(id, name, kind, currentFormat string, fs FeedSettings, d p
 		PlaylistSort: fs.PlaylistSort,
 		OPMLExclude:  fs.OPMLExclude,
 		Defaults:     d,
+		AudioExt:     s.audioExt(),
 	}
 	if fs.MinDuration != nil {
 		v.MinDuration = seconds(*fs.MinDuration)
@@ -222,7 +229,7 @@ func feedSettingsFromForm(r *http.Request) (FeedSettings, error) {
 
 func (s *Server) renderFeedSettings(w http.ResponseWriter, r *http.Request, d FeedDetail, fs FeedSettings, flash, errText string) {
 	s.render(w, r, "feed_settings", map[string]any{
-		"Title": d.Name + " settings", "F": feedSettingsFrom(d.ID, d.Name, d.Kind, d.Format, fs, d.Defaults), "Flash": flash, "Err": errText,
+		"Title": d.Name + " settings", "F": s.feedSettingsFrom(d.ID, d.Name, d.Kind, d.Format, fs, d.Defaults), "Flash": flash, "Err": errText,
 	})
 }
 
@@ -233,7 +240,7 @@ func (s *Server) renderFormatChangeConfirm(w http.ResponseWriter, r *http.Reques
 	oldLF, _ := s.lib.Feed(d.ID, oldFormat)
 	s.render(w, r, "feed_settings", map[string]any{
 		"Title": d.Name + " settings",
-		"F":     feedSettingsFrom(d.ID, d.Name, d.Kind, d.Format, fs, d.Defaults),
+		"F":     s.feedSettingsFrom(d.ID, d.Name, d.Kind, d.Format, fs, d.Defaults),
 		"Confirm": formatChangeConfirm{
 			OldFormat: oldFormat, NewFormat: newFormat,
 			OldDownloaded: oldLF.Downloaded, OldBytes: oldLF.Bytes,

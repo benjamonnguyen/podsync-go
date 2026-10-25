@@ -15,7 +15,7 @@
     <label>Format
       <select name="format">
         <option value="video"{{if eq .Cfg.Defaults.Format "video"}} selected{{end}}>Video (mp4)</option>
-        <option value="audio"{{if eq .Cfg.Defaults.Format "audio"}} selected{{end}}>Audio only (m4a)</option>
+        <option value="audio"{{if eq .Cfg.Defaults.Format "audio"}} selected{{end}}>Audio only ({{.AudioExt}})</option>
       </select></label>
     <label>Maximum video height (pixels, 0 = no limit) <input type="number" name="max_video_height" min="0" value="{{.Cfg.Defaults.MaxVideoHeight}}" required></label>
     <label>Audio quality

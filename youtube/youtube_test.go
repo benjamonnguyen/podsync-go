@@ -138,6 +138,22 @@ func fakeYtDlp(args []string) int {
 		}
 		return ""
 	}
+	hasPrefix := func(prefix string) bool {
+		for _, a := range args {
+			if strings.HasPrefix(a, prefix) {
+				return true
+			}
+		}
+		return false
+	}
+	valPrefix := func(prefix string) string {
+		for _, a := range args {
+			if strings.HasPrefix(a, prefix) {
+				return strings.TrimPrefix(a, prefix)
+			}
+		}
+		return ""
+	}
 	last := args[len(args)-1]
 	switch {
 	case has("--version"):
@@ -159,20 +175,51 @@ func fakeYtDlp(args []string) int {
 		fmt.Fprintln(os.Stderr, "ERROR: [youtube:tab] The playlist does not exist.")
 		return 1
 	case has("--flat-playlist") && has("--playlist-start"):
+		// The non-reverse path: --playlist-start/-end index the playlist's native
+		// order directly (1-indexed, inclusive), same as real yt-dlp.
 		start, _ := strconv.Atoi(val("--playlist-start"))
 		end, _ := strconv.Atoi(val("--playlist-end"))
 		all := fakeEntries(12)
-		if has("--playlist-reverse") {
-			for i, j := 0, len(all)-1; i < j; i, j = i+1, j-1 {
-				all[i], all[j] = all[j], all[i]
-			}
-		}
 		if end > len(all) {
 			end = len(all)
 		}
 		var page []map[string]any
 		if start <= end {
 			page = all[start-1 : end]
+		}
+		json.NewEncoder(os.Stdout).Encode(map[string]any{"id": "UCXuqSBlHAE6Xw-yeJA0Tunw", "entries": page})
+	case has("--flat-playlist") && hasPrefix("--playlist-items="):
+		// The reverse path: a negative --playlist-items slice indexes from the end
+		// of the playlist's native order (Python-slice-like, clamped at either
+		// end); --playlist-reverse then only reverses the *selected* page's
+		// display order, same as real yt-dlp (verified against the real binary —
+		// it does NOT reverse the whole list before applying the slice).
+		items := valPrefix("--playlist-items=")
+		a, b, _ := strings.Cut(items, ":")
+		all := fakeEntries(12)
+		n := len(all)
+		toIdx := func(s string) int {
+			k, _ := strconv.Atoi(s)
+			if k < 0 {
+				return n + k
+			}
+			return k - 1
+		}
+		start, end := toIdx(a), toIdx(b)+1
+		if start < 0 {
+			start = 0
+		}
+		if end > n {
+			end = n
+		}
+		var page []map[string]any
+		if start < end {
+			page = append([]map[string]any(nil), all[start:end]...)
+		}
+		if has("--playlist-reverse") {
+			for i, j := 0, len(page)-1; i < j; i, j = i+1, j-1 {
+				page[i], page[j] = page[j], page[i]
+			}
 		}
 		json.NewEncoder(os.Stdout).Encode(map[string]any{"id": "UCXuqSBlHAE6Xw-yeJA0Tunw", "entries": page})
 	case has("--flat-playlist"):
@@ -287,13 +334,42 @@ func TestListEpisodesReverseForOldestFirstPlaylists(t *testing.T) {
 	if err != nil || len(eps) != 5 {
 		t.Fatalf("%v %d", err, len(eps))
 	}
-	if eps[0].ID != "vid00000012" {
-		t.Fatalf("Reverse should list from the end of the playlist first, got %+v", eps[0])
+	if ids(eps) != "vid00000012,vid00000011,vid00000010,vid00000009,vid00000008" {
+		t.Fatalf("Reverse should list the newest 5, newest first, got %s", ids(eps))
 	}
 	unreversed, _ := y.ListEpisodes(context.Background(), feed, 0, 5)
 	if unreversed[0].ID != "vid00000001" {
 		t.Fatalf("without Reverse the natural order should stand, got %+v", unreversed[0])
 	}
+
+	// A later page (offset > 0) must keep paging backwards in time from where the
+	// first page left off (the 6th-newest, 7th-newest, ...), not just re-show the
+	// same newest window in a different display order: --playlist-start/-end
+	// index the playlist's native (oldest-first) order, so naively combining
+	// them with --playlist-reverse selects the OLDEST page_size window every
+	// time and only reverses its display — the actual bug this test catches.
+	next, err := y.ListEpisodes(context.Background(), oldestFirst, 5, 5)
+	if err != nil || len(next) != 5 {
+		t.Fatalf("%v %d", err, len(next))
+	}
+	if ids(next) != "vid00000007,vid00000006,vid00000005,vid00000004,vid00000003" {
+		t.Fatalf("second page should continue backwards from the newest 5, got %s", ids(next))
+	}
+
+	// Near the oldest end, the window is clamped (like a Python slice) rather
+	// than erroring or wrapping.
+	tail, err := y.ListEpisodes(context.Background(), oldestFirst, 10, 5)
+	if err != nil || ids(tail) != "vid00000002,vid00000001" {
+		t.Fatalf("clamped tail page: %v %s", err, ids(tail))
+	}
+}
+
+func ids(eps []podsync.EpisodeInfo) string {
+	ss := make([]string, len(eps))
+	for i, e := range eps {
+		ss[i] = e.ID
+	}
+	return strings.Join(ss, ",")
 }
 
 func searched(dir string) bool {

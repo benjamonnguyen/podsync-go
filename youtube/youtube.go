@@ -479,9 +479,18 @@ func (y *YouTube) ListEpisodes(ctx context.Context, feed podsync.FeedInfo, offse
 	}
 	args := append(y.baseArgs(), "-J", "--flat-playlist")
 	if feed.Reverse {
-		args = append(args, "--playlist-reverse")
+		// feed.Reverse means the playlist's native order is oldest-first (a
+		// course/series), and we want newest-first. --playlist-start/-end index
+		// from that native order, so combining them with --playlist-reverse would
+		// just reverse the display order of the OLDEST window, not select the
+		// newest one. A negative --playlist-items slice indexes from the end
+		// instead, which is exactly "newest first" here; yt-dlp clamps it like a
+		// Python slice when the window runs past either end of the playlist.
+		args = append(args, "--playlist-reverse", fmt.Sprintf("--playlist-items=%d:%d", -(offset+limit), -(offset+1)))
+	} else {
+		args = append(args, "--playlist-start", fmt.Sprint(offset+1), "--playlist-end", fmt.Sprint(offset+limit))
 	}
-	args = append(args, "--playlist-start", fmt.Sprint(offset+1), "--playlist-end", fmt.Sprint(offset+limit), "--", feedURL(feed))
+	args = append(args, "--", feedURL(feed))
 	out, err := y.run(ctx, listTimeout, args...)
 	if err != nil {
 		return nil, err

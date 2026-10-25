@@ -89,7 +89,7 @@
 {{- else}}<p class="muted center" id="more">That's the end of the feed.</p>{{end}}
 {{end}}
 
-{{define "feed_stats"}}<p id="feed-stats" class="muted" hx-get="/feed/{{.Card.ID}}/{{.Card.Format}}/stats" hx-trigger="episodes-changed from:body" hx-swap="outerHTML">{{count .Card.Episodes "episode" "episodes"}} downloaded{{if .Card.Bytes}} · {{size .Card.Bytes}}{{end}} · checked {{ago .Card.LastPull}}{{if .Card.HasOverrides}} · custom settings{{end}}</p>{{end}}
+{{define "feed_stats"}}<p id="feed-stats" class="muted" hx-get="/feed/{{.Card.ID}}/{{.Card.Format}}/stats" hx-trigger="episodes-changed from:body" hx-swap="outerHTML">{{count .Card.Episodes "episode" "episodes"}} downloaded{{if .Card.Bytes}} · {{size .Card.Bytes}}{{end}} · checked {{ago .Card.LastPull}}</p>{{end}}
 
 {{/* The full set of per-feed options, shared by the feed settings page and the add-feed preview. */}}
 {{define "feed_option_fields"}}
@@ -97,7 +97,7 @@
       <select name="format">
         <option value="">Default ({{.Defaults.Format}})</option>
         <option value="video"{{if eq .Format "video"}} selected{{end}}>Video (mp4)</option>
-        <option value="audio"{{if eq .Format "audio"}} selected{{end}}>Audio only (m4a)</option>
+        <option value="audio"{{if eq .Format "audio"}} selected{{end}}>Audio only ({{.AudioExt}})</option>
       </select></label>
     <label>Maximum video height (0 = no limit) <input type="number" name="max_video_height" min="0" value="{{.MaxVideoHeight}}" placeholder="{{.Defaults.MaxVideoHeight}}"></label>
     <label>Audio quality
