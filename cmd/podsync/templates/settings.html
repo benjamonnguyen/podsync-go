@@ -1,5 +1,4 @@
 {{define "content"}}
-<h1>Settings</h1>
 {{if .Flash}}<div class="notice ok">{{.Flash}}</div>{{end}}
 {{if .Err}}<div class="notice err"><strong>Not saved.</strong><pre>{{.Err}}</pre></div>{{end}}
 <form method="post" action="/settings" class="settings">
