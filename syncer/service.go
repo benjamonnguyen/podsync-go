@@ -456,7 +456,7 @@ func (s *Service) refreshMeta(ref feedRef, src podsync.Source, info podsync.Feed
 
 // ---- download queue ----
 
-// RequestDownload queues a user-requested download (Load More / Retry).
+// RequestDownload queues a user-requested download (Download more / Retry).
 func (s *Service) RequestDownload(feedID, format string, ep podsync.EpisodeInfo) error {
 	if _, ok := s.cfg.Get().Feed(feedID, format); !ok {
 		return podsync.NotFound("no such feed %q", feedID)

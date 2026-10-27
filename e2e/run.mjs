@@ -36,17 +36,15 @@ check('4 episodes appear without reload', await waitFor(() => document.querySele
 check('header stats refresh after pull', await waitFor(() => /4 episodes downloaded/.test(document.getElementById('feed-stats').textContent) && !/never/.test(document.getElementById('feed-stats').textContent), 10000), await text('#feed-stats'));
 await shot('1-feed');
 
-// 2. Load More
+// 2. Download more
 await page.click('#more button');
-check('Load more adds faded rows into #loaded', await waitFor(() => document.querySelectorAll('#loaded .row.faded').length === 4), String(await count('#loaded .row.faded')));
-check('Load more button advanced offset', (await page.$eval('#more button', b => b.getAttribute('hx-get'))).endsWith('offset=8'));
-check('faded rows have Download buttons', (await page.$$eval('.row.faded button', bs => bs.map(b => b.textContent.trim()))).every(t => t === 'Download'));
-await shot('2-loadmore');
+check('Download more adds faded rows into #loaded', await waitFor(() => document.querySelectorAll('#loaded .row.faded').length === 4), String(await count('#loaded .row.faded')));
+check('Download more button advanced offset', (await page.$eval('#more button', b => b.getAttribute('hx-post'))).endsWith('offset=8'));
+check('new rows are queued for download', (await page.$$eval('#loaded .row', rs => rs.map(r => r.textContent))).every(t => /queued|downloading|kept|failed/.test(t)));
+await shot('2-downloadmore');
 
-// 3. Download a faded episode
-const firstFaded = await page.$eval('.row.faded', r => r.id);
-await page.click(`#${firstFaded} button`);
-check('row shows downloading state', await waitFor(id => /downloading|queued/.test(document.getElementById(id)?.textContent || ''), 5000, firstFaded));
+// 3. The queued episodes download without a click
+const firstFaded = await page.$eval('#loaded .row', r => r.id);
 check('row finishes and un-fades', await waitFor(id => { const r = document.getElementById(id); return r && !r.classList.contains('faded') && r.querySelector('a.title'); }, 20000, firstFaded));
 check('manual episode tagged "kept"', (await text(`#${firstFaded}`)).includes('kept'));
 await sleep(7000); // let the main list refresh and the dedupe run
@@ -55,15 +53,14 @@ check('no duplicate episode rows', new Set(ids).size === ids.length, JSON.string
 check('downloaded episode moved to main list', await page.evaluate(id => !!document.querySelector('#episodes #' + id), firstFaded), JSON.stringify({ id: firstFaded, main: await page.$$eval('#episodes .row', rs => rs.map(r => r.id)), loaded: await page.$$eval('#loaded .row', rs => rs.map(r => r.id)) }));
 
 // 4. A failing download surfaces in row and banner
-await page.click('#ep-e2e00000007 button');
 check('failed row shows error + Retry', await waitFor(() => /failed/.test(document.getElementById('ep-e2e00000007')?.textContent || '') , 20000));
 check('retry button present', (await text('#ep-e2e00000007')).includes('Retry'));
 check('banner reports the download failure', await waitFor(() => /Download failed/.test(document.getElementById('status').textContent), 8000));
 await shot('3-failed');
 
-// 5. Load more to the end
+// 5. Download more to the end
 await page.click('#more button');
-await waitFor(() => document.querySelector('#more button')?.getAttribute('hx-get')?.endsWith('offset=12'));
+await waitFor(() => document.querySelector('#more button')?.getAttribute('hx-post')?.endsWith('offset=12'));
 await page.click('#more button');
 check('end of feed reached', await waitFor(() => /end of the feed/.test(document.getElementById('more')?.textContent || ''), 15000));
 check('short (episode 13) hidden by filter', !(await page.content()).includes('Episode 13 of'));

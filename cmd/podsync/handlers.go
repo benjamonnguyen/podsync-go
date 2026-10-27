@@ -156,6 +156,9 @@ func (s *Server) handleOlder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rows := s.makeRows(id, format, detail.Name, detail.Kind == podsync.FeedPlaylist, page.Episodes)
+	if len(rows) > 0 {
+		w.Header().Set("HX-Trigger", "episodes-changed")
+	}
 	s.fragment(w, "older", map[string]any{
 		"FeedID": id, "Format": format, "Rows": rows, "More": page.More, "NextOffset": page.NextOffset, "Empty": len(rows) == 0 && !page.More,
 	})

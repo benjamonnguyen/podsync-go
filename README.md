@@ -21,7 +21,7 @@ Inspired by [mxpv/podsync](https://github.com/mxpv/podsync)
 
 ![Library view](docs/img/library.png)
 
-**Feed** — one channel or playlist's episodes, with Load More to look further back than the newest page:
+**Feed** — one channel or playlist's episodes, with Download more to fetch episodes further back than the newest page:
 
 ![Feed view](docs/img/feed.png)
 

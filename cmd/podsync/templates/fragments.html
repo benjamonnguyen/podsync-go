@@ -86,10 +86,10 @@
 
 {{define "older"}}
 {{- if .Rows}}<div id="loaded" hx-swap-oob="beforeend">{{range .Rows}}{{template "episode_row" .}}{{end}}</div>{{end}}
-{{- if .Err}}<p class="error center">Could not load more: {{.Err}}</p>{{end}}
+{{- if .Err}}<p class="error center">Could not download more: {{.Err}}</p>{{end}}
 {{- if and (not .Rows) .More (not .Err)}}<p class="muted center">Nothing new in that batch (already downloaded or filtered out).</p>{{end}}
 {{- if .Empty}}<p class="muted center" id="more">No more episodes.</p>
-{{- else if .More}}<div id="more" class="center"><button class="btn" hx-get="/feed/{{.FeedID}}/{{.Format}}/older?offset={{.NextOffset}}" hx-target="#more" hx-swap="outerHTML" hx-disabled-elt="this">{{if .Err}}Try again{{else}}Load more{{end}}</button></div>
+{{- else if .More}}<div id="more" class="center"><button class="btn" hx-post="/feed/{{.FeedID}}/{{.Format}}/older?offset={{.NextOffset}}" hx-target="#more" hx-swap="outerHTML" hx-disabled-elt="this">{{if .Err}}Try again{{else}}Download more{{end}}</button></div>
 {{- else}}<p class="muted center" id="more">That's the end of the feed.</p>{{end}}
 {{end}}
 
@@ -113,7 +113,7 @@
     <label>Skip videos shorter than <input type="text" name="min_duration" value="{{.MinDuration}}" placeholder="{{secs .Defaults.MinDuration}}"><small>For example 61s or 2m; 0 downloads everything.</small></label>
     <label>Only download titles matching (regex) <input type="text" name="title_include" value="{{.TitleInclude}}" placeholder="empty = all titles"></label>
     <label>Skip titles matching (regex) <input type="text" name="title_exclude" value="{{.TitleExclude}}" placeholder="empty = skip none"><small>Case-insensitive example: <code>(?i)sponsored|#shorts</code>. These patterns belong to this feed only.</small></label>
-    <label>Episodes checked per update <input type="number" name="page_size" min="1" max="500" value="{{.PageSize}}" placeholder="{{.Defaults.PageSize}}"><small>Only this many of the newest episodes are downloaded at first; older ones can be fetched later from the feed page with “Load more”.</small></label>
+    <label>Episodes checked per update <input type="number" name="page_size" min="1" max="500" value="{{.PageSize}}" placeholder="{{.Defaults.PageSize}}"><small>Only this many of the newest episodes are downloaded at first; older ones can be downloaded later from the feed page with “Download more”.</small></label>
     <label>Keep only the newest N downloaded episodes (0 = keep all) <input type="number" name="cleanup_keep_last" min="0" value="{{.CleanupKeepLast}}" placeholder="{{.Defaults.CleanupKeepLast}}"></label>
     {{if eq .Kind "playlist"}}<label class="check"><input type="checkbox" name="playlist_sort" value="desc"{{if eq .PlaylistSort "desc"}} checked{{end}}> Sort playlist descending<small>Ascending (the default) takes each update's episodes from the top of the playlist. Check this for a playlist ordered oldest first, like a course or series, so updates take its newest additions from the bottom.</small></label>{{end}}
     <label class="check"><input type="checkbox" name="opml_exclude"{{if .OPMLExclude}} checked{{end}}> Exclude from OPML export</label>

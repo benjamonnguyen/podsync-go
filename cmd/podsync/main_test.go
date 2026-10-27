@@ -209,7 +209,7 @@ func TestPullFeedThenBrowseEpisodes(t *testing.T) {
 	h.waitIdle()
 
 	rec := h.get("/feed/UCone/audio")
-	h.mustContain(rec, 200, "Channel One", "Title vid0000000", "Title vid0000002", "http://pod.example:8080/feeds/audio/UCone.xml", `hx-get="/feed/UCone/audio/older?offset=3"`, "Load more")
+	h.mustContain(rec, 200, "Channel One", "Title vid0000000", "Title vid0000002", "http://pod.example:8080/feeds/audio/UCone.xml", `hx-post="/feed/UCone/audio/older?offset=3"`, "Download more")
 	if strings.Contains(rec.Body.String(), "vid0000003") {
 		t.Fatal("only page_size episodes should be downloaded")
 	}
@@ -292,10 +292,10 @@ func TestThumbnailsAndMetadataInUI(t *testing.T) {
 	if !strings.Contains(cleaned, `src="http://pod.example:8080/media/UCone/audio/vid0000002.jpg"`) || !strings.Contains(cleaned, "removed") {
 		t.Fatalf("cleaned row should keep its thumbnail:\n%s", cleaned)
 	}
-	// Load More rows show the remote thumbnail, views and channel metadata; downloading keeps the hint.
-	older := h.get("/feed/UCone/audio/older?offset=3")
-	h.mustContain(older, 200, `src="https://i.ytimg.com/vi/vid0000003/hq.jpg"`, "2.5K views")
+	// Download more rows show the remote thumbnail, views and channel metadata; downloading keeps the hint.
 	gate := h.holdDownloads()
+	older := h.do("POST", "/feed/UCone/audio/older?offset=3", url.Values{})
+	h.mustContain(older, 200, `src="https://i.ytimg.com/vi/vid0000003/hq.jpg"`, "2.5K views")
 	dl := h.do("POST", "/feed/UCone/audio/episodes/vid0000003/download", url.Values{
 		"title": {"Video 3"}, "thumb": {"https://i.ytimg.com/vi/vid0000003/hq.jpg"}, "views": {"2500"}, "channel": {"Remote Chan"},
 	})
@@ -309,39 +309,44 @@ func TestThumbnailsAndMetadataInUI(t *testing.T) {
 	h.releaseDownloads(gate)
 }
 
-func TestLoadMoreShowsFadedRowsAndDownloadWorks(t *testing.T) {
+func TestDownloadMoreQueuesOlderEpisodes(t *testing.T) {
 	h := newHarness(t)
 	h.svc.PullFeed("UCone", "audio")
 
-	rec := h.get("/feed/UCone/audio/older?offset=3")
-	h.mustContain(rec, 200, "faded", "Video 3", "Video 5", "Download</button>", `hx-get="/feed/UCone/audio/older?offset=6"`)
+	gate := h.holdDownloads()
+	rec := h.do("POST", "/feed/UCone/audio/older?offset=3", url.Values{})
+	h.mustContain(rec, 200, "faded", "Video 3", "Video 5", "queued", `hx-trigger="every 2s"`, `hx-post="/feed/UCone/audio/older?offset=6"`, "Download more")
 	if strings.Contains(rec.Body.String(), "Video 0") {
 		t.Fatal("already-downloaded episodes must not be offered")
 	}
-	last := h.get("/feed/UCone/audio/older?offset=6")
-	h.mustContain(last, 200, "Video 6", "Video 7", "the end of the feed")
-	if strings.Contains(last.Body.String(), "Load more") {
-		t.Fatal("no Load more button at the end of the feed")
+	if rec.Header().Get("HX-Trigger") != "episodes-changed" {
+		t.Fatalf("queuing should refresh the episode list, got HX-Trigger %q", rec.Header().Get("HX-Trigger"))
 	}
-
-	gate := h.holdDownloads()
-	dl := h.do("POST", "/feed/UCone/audio/episodes/vid0000004/download", url.Values{"title": {"Video 4"}, "duration": {"60"}})
-	h.mustContain(dl, 200, "Video 4", "faded", "downloading")
 	h.releaseDownloads(gate)
 	row := h.get("/feed/UCone/audio/episodes/vid0000004/row?title=Video+4")
 	h.mustContain(row, 200, "Title vid0000004", `href="http://pod.example:8080/media/UCone/audio/vid0000004.mp4"`, "kept")
 	if strings.Contains(row.Body.String(), "faded") {
 		t.Fatal("downloaded row should not be faded")
 	}
-	// It is now part of the main list and no longer offered by Load More.
-	if strings.Contains(h.get("/feed/UCone/audio/older?offset=3").Body.String(), "Video 4") {
+	// They are now part of the main list and no longer offered.
+	again := h.do("POST", "/feed/UCone/audio/older?offset=3", url.Values{})
+	if strings.Contains(again.Body.String(), "Video 4") {
 		t.Fatal("downloaded episode still offered")
 	}
+	h.mustContain(again, 200, "Nothing new in that batch")
+
+	last := h.do("POST", "/feed/UCone/audio/older?offset=6", url.Values{})
+	h.mustContain(last, 200, "Video 6", "Video 7", "the end of the feed")
+	if strings.Contains(last.Body.String(), "Download more") {
+		t.Fatal("no Download more button at the end of the feed")
+	}
+	h.waitIdle()
+	h.mustContain(h.get("/feed/UCone/audio/older?offset=3"), 405)
 	h.mustContain(h.do("POST", "/feed/UCone/audio/episodes/..%2Fx/download", url.Values{}), 400)
-	h.mustContain(h.get("/feed/UCone/audio/older?offset=abc"), 200)
+	h.mustContain(h.do("POST", "/feed/UCone/audio/older?offset=abc", url.Values{}), 200)
 
 	h.src.With(func(m *mock.Source) { m.ListErr = errors.New("HTTP Error 429") })
-	h.mustContain(h.get("/feed/UCone/audio/older?offset=3"), 200, "Could not load more", "429", "Try again")
+	h.mustContain(h.do("POST", "/feed/UCone/audio/older?offset=3", url.Values{}), 200, "Could not download more", "429", "Try again")
 	h.mustContain(h.get("/status"), 200, "Could not list episodes", "429")
 }
 

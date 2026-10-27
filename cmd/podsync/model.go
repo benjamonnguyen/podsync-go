@@ -101,7 +101,7 @@ type SearchHits struct {
 	Truncated bool
 }
 
-// OlderPage is one Load More window.
+// OlderPage is one Load More window, its episodes already queued for download.
 type OlderPage struct {
 	Episodes   []EpisodeView
 	NextOffset int
@@ -312,8 +312,9 @@ func (s *Server) Episode(ctx context.Context, feedID, format string, hint podsyn
 }
 
 // Older lists the window [offset, offset+page_size) of a feed's source (asking
-// the sync service) and returns the episodes that pass the feed's filters and
-// are not already in the library.
+// the sync service), queues for download the episodes that pass the feed's
+// filters and are not already in the library, and returns them. Members-only
+// episodes are listed but not queued without cookies: they would only fail.
 func (s *Server) Older(ctx context.Context, feedID, format string, offset int) (OlderPage, error) {
 	cfg, f, err := s.feed(feedID, format)
 	if err != nil {
@@ -328,8 +329,8 @@ func (s *Server) Older(ctx context.Context, feedID, format string, offset int) (
 	if err != nil {
 		return OlderPage{}, err
 	}
-	jobs := s.jobs(ctx)
 	page := OlderPage{Episodes: []EpisodeView{}, NextOffset: offset + len(eps), More: len(eps) >= opts.PageSize}
+	var fresh []podsync.EpisodeInfo
 	for _, ep := range eps {
 		if ep.Unavailable || ep.IsLive || !filter.Allows(ep) {
 			continue
@@ -337,6 +338,15 @@ func (s *Server) Older(ctx context.Context, feedID, format string, offset int) (
 		if _, known := s.lib.Episode(feedID, format, ep.ID); known {
 			continue
 		}
+		if !ep.MembersOnly || s.hasCookies() {
+			if err := s.sync.Pull(ctx, podsync.PullRequest{Feed: feedID, Format: format, Episode: &ep}); err != nil {
+				return OlderPage{}, err
+			}
+		}
+		fresh = append(fresh, ep)
+	}
+	jobs := s.jobs(ctx)
+	for _, ep := range fresh {
 		page.Episodes = append(page.Episodes, s.view(feedID, format, episodeFromInfo(ep), jobs))
 	}
 	return page, nil

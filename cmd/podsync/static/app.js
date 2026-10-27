@@ -92,7 +92,7 @@ document.addEventListener("htmx:responseError", function (e) {
   toast(msg ? msg.slice(0, 200) : "Request failed");
 });
 
-// An episode downloaded through "Load more" later appears in the main list
+// An episode downloaded through "Download more" later appears in the main list
 // too (the list refreshes while work is running). Keep the main-list copy.
 document.addEventListener("htmx:afterSettle", function () {
   selectState();

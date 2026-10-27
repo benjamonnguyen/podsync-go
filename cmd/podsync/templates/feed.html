@@ -30,7 +30,7 @@
 {{template "episode_list" .}}
 <div id="loaded" class="rows"></div>
 <div id="more" class="center">
-  <button class="btn" hx-get="/feed/{{.Card.ID}}/{{.Card.Format}}/older?offset={{.Offset}}" hx-target="#more" hx-swap="outerHTML" hx-disabled-elt="this">Load more</button>
-  <p class="muted">Looks further back in this feed for episodes that were not downloaded.</p>
+  <button class="btn" hx-post="/feed/{{.Card.ID}}/{{.Card.Format}}/older?offset={{.Offset}}" hx-target="#more" hx-swap="outerHTML" hx-disabled-elt="this">Download more</button>
+  <p class="muted">Looks further back in this feed and downloads the next batch of episodes that were not downloaded.</p>
 </div>
 {{end}}
