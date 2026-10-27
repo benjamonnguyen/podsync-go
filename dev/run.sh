@@ -4,9 +4,11 @@
 # environment variables here, not in the config file (it holds only feeds and defaults; see
 # config.go). The listen address and config path could be -listen/-config flags instead, but env
 # vars keep this consistent with everything else. Media goes to dev/data (git-ignored). Ctrl-C
-# stops it.
+# stops it. The YouTube API key comes from dev/.env (git-ignored), e.g.
+# PODSYNC_YOUTUBE_API_KEY=AIza...
 set -euo pipefail
 cd "$(dirname "$0")/.."
+if [ -f dev/.env ]; then set -a; . dev/.env; set +a; fi
 mkdir -p bin
 go build -o bin/podsync ./cmd/podsync
 PODSYNC_CONFIG=dev/config.toml \
