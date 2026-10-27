@@ -67,7 +67,6 @@ button.link[disabled] { opacity: .4; cursor: not-allowed; }
 .icon-btn.primary:hover { color: var(--accent-text); }
 .icon-btn[disabled] { opacity: .4; cursor: not-allowed; }
 .icon-btn[aria-pressed=true] { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
-.icon-btn .lbl { display: none; }
 .icon { width: 1.3rem; height: 1.3rem; flex: none; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .htmx-request .icon, .icon-btn.htmx-request .icon { animation: spin .8s linear infinite; }
 .actions { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .75rem; }
@@ -256,7 +255,6 @@ dialog.sheet form { display: flex; flex-direction: column; min-height: 0; flex: 
   .rss .actions > * { flex: 1 1 6.5rem; min-width: 0; }
   .rss .actions .icon-btn { width: 100%; border-color: var(--border); background: var(--panel); color: var(--text); }
   .rss .actions .icon-btn.danger { color: var(--danger); }
-  .icon-btn .lbl { display: inline; white-space: nowrap; }
 
   /* Episode rows: thumbnail beside the text, the action button on its own full-width line. */
   .rows { margin-left: -1rem; margin-right: -1rem; border-radius: 0; border-left: 0; border-right: 0; }
