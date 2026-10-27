@@ -253,10 +253,13 @@ func (s *Service) TriggerAll() error {
 	return nil
 }
 
-// TriggerFeed starts an update of one feed in the background.
-func (s *Service) TriggerFeed(id, format string) error {
-	if _, ok := s.cfg.Get().Feed(id, format); !ok {
-		return podsync.NotFound("no such feed %q", id)
+// TriggerFeeds starts an update of the given feeds in the background.
+func (s *Service) TriggerFeeds(refs []feedRef) error {
+	cfg := s.cfg.Get()
+	for _, ref := range refs {
+		if _, ok := cfg.Feed(ref.id, ref.format); !ok {
+			return podsync.NotFound("no such feed %q", ref.id)
+		}
 	}
 	if !s.pullMu.TryLock() {
 		return podsync.Busy()
@@ -264,7 +267,7 @@ func (s *Service) TriggerFeed(id, format string) error {
 	s.setPulling(true)
 	go func() {
 		defer s.pullMu.Unlock()
-		s.pullFeedsLocked([]feedRef{{id, format}})
+		s.pullFeedsLocked(refs)
 	}()
 	return nil
 }

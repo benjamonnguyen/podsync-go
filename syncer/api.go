@@ -55,10 +55,17 @@ func (s *Service) Pull(ctx context.Context, req podsync.PullRequest) error {
 		_, err := s.RetryMembersOnly(req.Feed, req.Format)
 		return err
 	}
+	if len(req.Feeds) > 0 {
+		refs := make([]feedRef, len(req.Feeds))
+		for i, f := range req.Feeds {
+			refs[i] = feedRef{f.Feed, f.Format}
+		}
+		return s.TriggerFeeds(refs)
+	}
 	if req.Feed == "" {
 		return s.TriggerAll()
 	}
-	return s.TriggerFeed(req.Feed, req.Format)
+	return s.TriggerFeeds([]feedRef{{req.Feed, req.Format}})
 }
 
 // sanitize limits what a client can inject into the library through a

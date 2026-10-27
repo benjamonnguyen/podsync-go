@@ -320,18 +320,46 @@ func pullNotice(err error, started string) string {
 	return err.Error()
 }
 
+// handlePullAll checks the feeds ticked in the library's refresh dialog (each
+// "feed" value is "id/format"), or every feed when none are given or all are.
 func (s *Server) handlePullAll(w http.ResponseWriter, r *http.Request) {
-	err := s.Pull(r.Context(), "", "")
-	s.fragment(w, "status", s.statusView(r, pullNotice(err, "Checking all feeds for new episodes…")))
-}
-
-func (s *Server) handlePullFeed(w http.ResponseWriter, r *http.Request) {
-	id, format := r.PathValue("id"), r.PathValue("format")
-	detail, err := s.Feed(r.Context(), id, format)
-	if err != nil {
+	_ = r.ParseForm()
+	picked := map[string]bool{}
+	var refs []podsync.FeedRef
+	for _, v := range r.Form["feed"] {
+		if id, format, _ := strings.Cut(v, "/"); !picked[v] {
+			picked[v] = true
+			refs = append(refs, podsync.FeedRef{Feed: id, Format: format})
+		}
+	}
+	if pickedAll(s.cfg.Get(), picked) {
+		refs = nil // a full update also re-reads the config and checks tool health
+	}
+	started := "Checking all feeds for new episodes…"
+	if len(refs) == 1 {
+		detail, err := s.Feed(r.Context(), refs[0].Feed, refs[0].Format)
+		if err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		started = "Checking " + detail.Name + " for new episodes…"
+	} else if len(refs) > 1 {
+		started = fmt.Sprintf("Checking %d feeds for new episodes…", len(refs))
+	}
+	err := s.Pull(r.Context(), refs)
+	if errors.Is(err, podsync.ErrNotFound) {
 		s.fail(w, r, err)
 		return
 	}
-	err = s.Pull(r.Context(), id, format)
-	s.fragment(w, "status", s.statusView(r, pullNotice(err, "Checking "+detail.Name+" for new episodes…")))
+	s.fragment(w, "status", s.statusView(r, pullNotice(err, started)))
+}
+
+// pickedAll reports whether every configured feed is in picked ("id/format" keys).
+func pickedAll(cfg podsync.Config, picked map[string]bool) bool {
+	for _, f := range cfg.Feeds {
+		if !picked[f.ID+"/"+f.Effective(cfg.Defaults).Format] {
+			return false
+		}
+	}
+	return true
 }

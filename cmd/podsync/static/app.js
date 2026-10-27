@@ -104,3 +104,48 @@ document.addEventListener("htmx:afterSettle", function () {
     if (!main.contains(r) && seen[r.id]) r.remove();
   });
 });
+
+// Dialogs: data-open-dialog="id" opens one, data-close-dialog (or a tap on the
+// backdrop) closes it.
+document.addEventListener("click", function (e) {
+  var open = e.target.closest("[data-open-dialog]");
+  if (open) {
+    var d = document.getElementById(open.getAttribute("data-open-dialog"));
+    if (d) { pickState(d); d.showModal(); }
+    return;
+  }
+  var close = e.target.closest("[data-close-dialog]");
+  if (close) { close.closest("dialog").close(); return; }
+  if (e.target.tagName === "DIALOG") e.target.close();
+});
+
+// Pick lists (the library's refresh dialog): a "Select all" box that follows
+// the feed boxes, and a submit button that names how many are picked.
+function pickState(root) {
+  var boxes = root.querySelectorAll("input[name=feed]");
+  var n = 0;
+  boxes.forEach(function (cb) { if (cb.checked) n++; });
+  var all = root.querySelector("[data-pick-all]");
+  if (all) {
+    all.checked = n === boxes.length;
+    all.indeterminate = n > 0 && n < boxes.length;
+  }
+  var count = root.querySelector("[data-pick-count]");
+  if (count) count.textContent = n + " of " + boxes.length;
+  var submit = root.querySelector("[data-pick-submit]");
+  if (submit) {
+    submit.disabled = n === 0;
+    submit.textContent = n === boxes.length ? "Check all feeds" : n === 1 ? "Check 1 feed" : "Check " + n + " feeds";
+  }
+}
+document.addEventListener("change", function (e) {
+  var form = e.target.closest("[data-pick-form]");
+  if (!form) return;
+  if (e.target.matches("[data-pick-all]")) {
+    form.querySelectorAll("input[name=feed]").forEach(function (cb) { cb.checked = e.target.checked; });
+  }
+  pickState(form);
+});
+document.addEventListener("htmx:afterRequest", function (e) {
+  if (e.target.matches("[data-pick-form]") && e.detail.successful) e.target.closest("dialog").close();
+});

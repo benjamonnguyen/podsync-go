@@ -1,7 +1,29 @@
 {{define "content"}}
 <div class="toolbar">
   <input type="search" name="q" placeholder="Search feeds and episodes…" autocomplete="off" aria-label="Search" hx-get="/search" hx-trigger="input changed delay:300ms, search" hx-target="#content" hx-swap="innerHTML">
-  <button class="icon-btn" title="Check all feeds now" aria-label="Check all feeds now" hx-post="/pull" hx-target="#status" hx-swap="outerHTML">{{template "icon_refresh"}}</button>
+  {{if .Cards}}<button class="icon-btn boxed" type="button" title="Check feeds for new episodes" aria-label="Check feeds for new episodes" aria-haspopup="dialog" data-open-dialog="pull-dialog">{{template "icon_refresh"}}</button>{{end}}
 </div>
 <div id="content">{{template "library_body" .}}</div>
+{{if .Cards}}
+<dialog id="pull-dialog" class="sheet" aria-labelledby="pull-title">
+  <form hx-post="/pull" hx-target="#status" hx-swap="outerHTML" hx-disabled-elt="find button[type=submit]" data-pick-form>
+    <header class="sheet-head">
+      <h2 id="pull-title">Check for new episodes</h2>
+      <button class="icon-btn" type="button" title="Close" aria-label="Close" data-close-dialog>{{template "icon_close"}}</button>
+    </header>
+    <label class="pick pick-all"><input type="checkbox" data-pick-all checked> <span class="grow">Select all</span> <span class="muted" data-pick-count></span></label>
+    <div class="pick-list">
+      {{range .Cards}}<label class="pick">
+        <input type="checkbox" name="feed" value="{{.ID}}/{{.Format}}" checked>
+        {{if .ImageURL}}<img class="avatar small" src="{{.ImageURL}}" alt="" loading="lazy" referrerpolicy="no-referrer">{{else}}<span class="avatar small placeholder"></span>{{end}}
+        <span class="grow"><span class="pick-name">{{.Name}}</span><span class="muted">{{.Format}} · checked {{ago .LastPull}}</span></span>
+      </label>{{end}}
+    </div>
+    <footer class="sheet-foot">
+      <button class="btn" type="button" data-close-dialog>Cancel</button>
+      <button class="btn primary" type="submit" data-pick-submit>Check feeds</button>
+    </footer>
+  </form>
+</dialog>
+{{end}}
 {{end}}

@@ -179,7 +179,7 @@ func (h *harness) waitIdle() {
 func TestLibraryPageAndSecurityHeaders(t *testing.T) {
 	h := newHarness(t)
 	rec := h.get("/")
-	h.mustContain(rec, 200, "Channel One", `href="/feed/UCone/audio"`, "Check all feeds now", `hx-get="/status?v=`)
+	h.mustContain(rec, 200, "Channel One", `href="/feed/UCone/audio"`, `data-open-dialog="pull-dialog"`, `name="feed" value="UCone/audio" checked`, `hx-get="/status?v=`)
 	if !strings.Contains(rec.Header().Get("Content-Security-Policy"), "default-src 'self'") || rec.Header().Get("X-Frame-Options") != "DENY" {
 		t.Fatalf("missing security headers: %v", rec.Header())
 	}
@@ -205,7 +205,7 @@ func TestCrossSiteWritesAreBlocked(t *testing.T) {
 
 func TestPullFeedThenBrowseEpisodes(t *testing.T) {
 	h := newHarness(t)
-	h.mustContain(h.do("POST", "/feed/UCone/audio/pull", nil), 200)
+	h.mustContain(h.do("POST", "/pull", url.Values{"feed": {"UCone/audio"}}), 200)
 	h.waitIdle()
 
 	rec := h.get("/feed/UCone/audio")
@@ -625,7 +625,7 @@ func TestForcePullNotices(t *testing.T) {
 	h := newHarness(t)
 	h.mustContain(h.do("POST", "/pull", nil), 200, "Checking all feeds")
 	h.waitIdle()
-	h.mustContain(h.do("POST", "/feed/UCnone/audio/pull", nil), 404)
+	h.mustContain(h.do("POST", "/pull", url.Values{"feed": {"UCnone/audio"}}), 404)
 }
 
 // The web UI is for managing the library; feeds and media are published

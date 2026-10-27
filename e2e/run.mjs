@@ -111,7 +111,7 @@ await shot('5-settings-error');
 // 10. Delete the failing feed
 await page.goto(BASE + '/feed/UCe2eFailChannelBBBBBBBB/delete');
 await Promise.all([page.waitForNavigation({ waitUntil: 'domcontentloaded' }), page.click('button.danger')]);
-check('feed deleted (files kept, shown as orphan)', (await text('#content')).includes('Not in config') && !(await text('#content')).match(/E2E Failing Channel[\s\S]*Check now/));
+check('feed deleted (files kept, shown as orphan)', (await text('#content')).includes('Not in config') && /Not in config[\s\S]*E2E Failing Channel/.test(await text('#content')));
 
 // 11. Select episodes and delete their files
 page.on('dialog', d => d.accept());

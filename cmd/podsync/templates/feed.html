@@ -10,16 +10,15 @@
     <div class="rss">
       <input id="rss-url" type="text" aria-label="Podcast feed URL" class="rss-url" readonly data-copy value="{{.Card.RSSURL}}" title="Click to copy">
       <div class="actions">
-        <button class="icon-btn" title="Check now" aria-label="Check now" hx-post="/feed/{{.Card.ID}}/{{.Card.Format}}/pull" hx-target="#status" hx-swap="outerHTML">{{template "icon_refresh"}}</button>
-        <a class="icon-btn" title="Feed settings" aria-label="Feed settings" href="/feed/{{.Card.ID}}/{{.Card.Format}}/settings">{{template "icon_settings"}}</a>
-        <a class="icon-btn danger" title="Delete feed" aria-label="Delete feed" href="/feed/{{.Card.ID}}/{{.Card.Format}}/delete">{{template "icon_trash"}}</a>
+        <a class="icon-btn" title="Feed settings" aria-label="Feed settings" href="/feed/{{.Card.ID}}/{{.Card.Format}}/settings">{{template "icon_settings"}}<span class="lbl">Settings</span></a>
+        <a class="icon-btn danger" title="Delete feed" aria-label="Delete feed" href="/feed/{{.Card.ID}}/{{.Card.Format}}/delete">{{template "icon_trash"}}<span class="lbl">Delete</span></a>
       </div>
     </div>
   </div>
 </div>
 <div class="toolbar">
   <input type="search" name="q" placeholder="Filter episodes…" autocomplete="off" aria-label="Filter episodes" hx-get="/feed/{{.Card.ID}}/{{.Card.Format}}/episodes" hx-trigger="input changed delay:300ms, search" hx-target="#episodes" hx-swap="outerHTML">
-  <button class="icon-btn" type="button" title="Select episodes" aria-label="Select episodes" aria-pressed="false" data-select-toggle>{{template "icon_select"}}</button>
+  <button class="icon-btn boxed" type="button" title="Select episodes" aria-label="Select episodes" aria-pressed="false" data-select-toggle>{{template "icon_select"}}</button>
 </div>
 <form id="bulk-delete" class="select-bar" hidden hx-post="/feed/{{.Card.ID}}/{{.Card.Format}}/episodes/delete" hx-swap="none" hx-confirm="Delete the downloaded files of the selected episodes? They stay in the list and can be downloaded again.">
   <span id="sel-count" aria-live="polite">0 selected</span>

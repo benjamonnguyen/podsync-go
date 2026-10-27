@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="htmx-config" content='{"allowEval":false,"includeIndicatorStyles":false}'>
 <title>{{if .Title}}{{.Title}} · {{end}}podsync-go</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='14' fill='%232563eb'/%3E%3C/svg%3E">
@@ -14,9 +14,9 @@
 <header class="top">
   <a class="brand" href="/">podsync-go</a>
   <nav>
-    <a href="/"{{if eq .Page "library"}} class="active"{{end}}>Library</a>
-    <a href="/add"{{if eq .Page "add"}} class="active"{{end}}>Add feed</a>
-    <a href="/settings"{{if eq .Page "settings"}} class="active"{{end}}>Settings</a>
+    <a href="/"{{if eq .Page "library"}} class="active" aria-current="page"{{end}}>{{template "icon_library"}}<span>Library</span></a>
+    <a href="/add"{{if eq .Page "add"}} class="active" aria-current="page"{{end}}>{{template "icon_plus"}}<span>Add feed</span></a>
+    <a href="/settings"{{if eq .Page "settings"}} class="active" aria-current="page"{{end}}>{{template "icon_settings"}}<span>Settings</span></a>
   </nav>
 </header>
 {{template "status" .Status}}

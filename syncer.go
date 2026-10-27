@@ -39,14 +39,21 @@ type ApplyResult struct {
 }
 
 // PullRequest selects what Pull does. Feed and Format together identify one
-// feed; Feed empty means every feed (Format is then ignored).
+// feed; Feeds lists several; both empty means every feed.
 type PullRequest struct {
-	Feed    string       `json:"feed,omitempty"`    // empty = every feed
+	Feed    string       `json:"feed,omitempty"`    // empty = every feed (unless Feeds is set)
 	Format  string       `json:"format,omitempty"`  // required when Feed is set
+	Feeds   []FeedRef    `json:"feeds,omitempty"`   // update these feeds together
 	Episode *EpisodeInfo `json:"episode,omitempty"` // download this episode of Feed now
 	// RetryMembersOnly re-queues Feed's members-only episodes (normally never
 	// retried), e.g. once the user has added a member's cookies.
 	RetryMembersOnly bool `json:"retry_members_only,omitempty"`
+}
+
+// FeedRef identifies one configured feed.
+type FeedRef struct {
+	Feed   string `json:"feed"`
+	Format string `json:"format"`
 }
 
 // Job is one queued or running download.

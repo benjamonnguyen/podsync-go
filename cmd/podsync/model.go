@@ -581,14 +581,14 @@ func (s *Server) UpdateSettings(ctx context.Context, in Settings) (SettingsResul
 
 // ---- operations ----
 
-// Pull starts an update of one feed, or of all feeds when feedID is empty.
-func (s *Server) Pull(ctx context.Context, feedID, format string) error {
-	if feedID != "" {
-		if _, _, err := s.feed(feedID, format); err != nil {
+// Pull starts an update of the given feeds, or of all feeds when refs is empty.
+func (s *Server) Pull(ctx context.Context, refs []podsync.FeedRef) error {
+	for _, ref := range refs {
+		if _, _, err := s.feed(ref.Feed, ref.Format); err != nil {
 			return err
 		}
 	}
-	return s.sync.Pull(ctx, podsync.PullRequest{Feed: feedID, Format: format})
+	return s.sync.Pull(ctx, podsync.PullRequest{Feeds: refs})
 }
 
 // DownloadEpisode asks the sync service to download one episode now.

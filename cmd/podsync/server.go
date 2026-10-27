@@ -121,7 +121,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /feed/{id}/{format}/stats", s.handleStats)
 	mux.HandleFunc("GET /feed/{id}/{format}/episodes", s.handleEpisodes)
 	mux.HandleFunc("GET /feed/{id}/{format}/older", s.handleOlder)
-	mux.HandleFunc("POST /feed/{id}/{format}/pull", s.handlePullFeed)
 	mux.HandleFunc("POST /feed/{id}/{format}/episodes/{ep}/download", s.handleDownload)
 	mux.HandleFunc("GET /feed/{id}/{format}/episodes/{ep}/row", s.handleRow)
 	mux.HandleFunc("POST /feed/{id}/{format}/episodes/delete", s.handleDeleteMedia)
