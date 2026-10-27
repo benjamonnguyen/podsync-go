@@ -19,19 +19,19 @@ Inspired by [mxpv/podsync](https://github.com/mxpv/podsync)
 
 **Library** — every feed you're subscribed to, with its episode count, size on disk and last check:
 
-![Library view](docs/img/library.png)
+<img src="docs/img/library.png" alt="Library view" width="300">
 
 **Feed** — one channel or playlist's episodes, with Download more to fetch episodes further back than the newest page:
 
-![Feed view](docs/img/feed.png)
+<img src="docs/img/feed.png" alt="Feed view" width="300">
 
 **Add a feed** — search channels by name, or paste a link/`@handle`/playlist URL directly:
 
-![Search view](docs/img/search.png)
+<img src="docs/img/search.png" alt="Search view" width="300">
 
 **Settings** — concurrency, check interval and the per-feed defaults (each feed can override any of them):
 
-![Settings view](docs/img/settings.png)
+<img src="docs/img/settings.png" alt="Settings view" width="300">
 
 ## Quick start (Docker)
 
