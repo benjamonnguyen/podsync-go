@@ -62,7 +62,7 @@ type FeedSettings struct {
 	TitleExclude    string
 	CleanupKeepLast *int
 	PageSize        *int
-	PlaylistSort    string // "" or "oldest"; only meaningful for playlist feeds
+	PlaylistSort    string // "" (asc) or "desc"; only meaningful for playlist feeds
 	OPMLExclude     bool
 }
 

@@ -220,8 +220,8 @@ func feedSettingsFromForm(r *http.Request) (FeedSettings, error) {
 	fs.TitleExclude = strings.TrimSpace(r.FormValue("title_exclude"))
 	fs.CleanupKeepLast = optInt(r, "cleanup_keep_last", &errs)
 	fs.PageSize = optInt(r, "page_size", &errs)
-	if r.FormValue("playlist_sort") == "oldest" {
-		fs.PlaylistSort = podsync.PlaylistSortOldest
+	if r.FormValue("playlist_sort") == podsync.PlaylistSortDesc {
+		fs.PlaylistSort = podsync.PlaylistSortDesc
 	}
 	fs.OPMLExclude = r.FormValue("opml_exclude") == "on"
 	return fs, errors.Join(errs...)

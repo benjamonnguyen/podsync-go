@@ -325,7 +325,7 @@ func TestListEpisodesWindowAndFlags(t *testing.T) {
 }
 
 // TestListEpisodesReverseForOldestFirstPlaylists covers playlist_sort =
-// "oldest": a playlist whose natural order is oldest-first must have
+// "desc": a playlist whose natural order is oldest-first must have
 // --playlist-reverse passed so offset 0 is still its newest addition.
 func TestListEpisodesReverseForOldestFirstPlaylists(t *testing.T) {
 	y, _ := newFake(t)

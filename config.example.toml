@@ -42,6 +42,6 @@ title_exclude = "(?i)sponsored|#shorts"   # matching titles are skipped
 # [[feeds]]
 # id = "some-course"
 # url = "https://www.youtube.com/playlist?list=PLsomeCourseSeriesPlaylistId"
-# playlist_sort = "oldest" # only valid on playlist feeds: set this when the playlist is ordered
-#                           # oldest first (a course/series), so updates pull its newest additions
-#                           # instead of only ever the first page_size episodes ever added to it
+# playlist_sort = "desc" # only valid on playlist feeds; default "asc". Set "desc" when the playlist
+#                         # is ordered oldest first (a course/series), so updates pull its newest additions
+#                         # instead of only ever the first page_size episodes ever added to it

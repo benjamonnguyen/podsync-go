@@ -81,11 +81,11 @@ type Feed struct {
 	TitleInclude string `toml:"title_include,omitempty" json:"title_include,omitempty"` // only matching titles are downloaded
 	TitleExclude string `toml:"title_exclude,omitempty" json:"title_exclude,omitempty"` // matching titles are skipped
 
-	// PlaylistSort only applies to playlist feeds. Empty assumes YouTube's own
-	// playlist order is newest first, so [offset, offset+limit) is taken from
-	// the start. Set to "oldest" for a playlist ordered oldest first (a
-	// course/series): podsync then reverses it before paging, so the newest
-	// addition is still what offset 0 returns.
+	// PlaylistSort only applies to playlist feeds. Empty (or "asc", which
+	// Normalize clears) takes [offset, offset+limit) from the start of the
+	// playlist, which suits YouTube's usual newest-first order. "desc" is for
+	// a playlist ordered oldest first (a course/series): podsync reverses it
+	// before paging, so the newest addition is still what offset 0 returns.
 	PlaylistSort string `toml:"playlist_sort,omitempty" json:"playlist_sort,omitempty"`
 
 	// OPMLExclude leaves the feed out of the OPML export at /opml.xml. Zero
@@ -116,8 +116,11 @@ const (
 	AudioQualityHigh = "high"
 	AudioQualityLow  = "low"
 
-	// PlaylistSortOldest is the only non-empty value of Feed.PlaylistSort.
-	PlaylistSortOldest = "oldest"
+	// Feed.PlaylistSort values. Asc is the default and is stored as "".
+	PlaylistSortAsc  = "asc"
+	PlaylistSortDesc = "desc"
+	// playlistSortOldest is the old spelling of desc, still read from files.
+	playlistSortOldest = "oldest"
 )
 
 var (
@@ -275,6 +278,12 @@ func (c *Config) Normalize() {
 		if kind, err := ParseFeedURL(f.URL); err == nil {
 			f.Kind = kind
 		}
+		switch f.PlaylistSort {
+		case PlaylistSortAsc:
+			f.PlaylistSort = ""
+		case playlistSortOldest:
+			f.PlaylistSort = PlaylistSortDesc
+		}
 	}
 }
 
@@ -318,9 +327,9 @@ func (c Config) Validate() error {
 			}
 			seenURL[urlKey] = true
 		}
-		if f.PlaylistSort != "" {
-			if f.PlaylistSort != PlaylistSortOldest {
-				errs = append(errs, fmt.Errorf("%s: playlist_sort must be empty or %q", where, PlaylistSortOldest))
+		if f.PlaylistSort != "" && f.PlaylistSort != PlaylistSortAsc {
+			if f.PlaylistSort != PlaylistSortDesc {
+				errs = append(errs, fmt.Errorf("%s: playlist_sort must be %q or %q", where, PlaylistSortAsc, PlaylistSortDesc))
 			} else if f.Kind != FeedPlaylist {
 				errs = append(errs, fmt.Errorf("%s: playlist_sort only applies to playlist feeds", where))
 			}

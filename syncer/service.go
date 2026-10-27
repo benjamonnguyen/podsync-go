@@ -359,7 +359,7 @@ func (s *Service) listAndEnqueue(ref feedRef) []*job {
 		s.st.Report(key, podsync.LevelError, fmt.Sprintf("Feed %q has an invalid title filter: %v", f.ID, err))
 		return nil
 	}
-	info := podsync.FeedInfo{Source: f.Source, Kind: f.Kind, ID: f.ID, URL: f.URL, Reverse: f.PlaylistSort == podsync.PlaylistSortOldest}
+	info := podsync.FeedInfo{Source: f.Source, Kind: f.Kind, ID: f.ID, URL: f.URL, Reverse: f.PlaylistSort == podsync.PlaylistSortDesc}
 	eps, err := src.ListEpisodes(s.ctx, info, 0, opts.PageSize)
 	if err != nil {
 		if s.ctx.Err() == nil {

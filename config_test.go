@@ -27,7 +27,7 @@ func TestEffectiveLayersOverridesOverDefaults(t *testing.T) {
 	if !f.HasOverrides() || (Feed{ID: "UC2"}).HasOverrides() || !(Feed{ID: "UC3", TitleExclude: "x"}).HasOverrides() {
 		t.Fatal("HasOverrides")
 	}
-	if !(Feed{ID: "UC4", PlaylistSort: PlaylistSortOldest}).HasOverrides() {
+	if !(Feed{ID: "UC4", PlaylistSort: PlaylistSortDesc}).HasOverrides() {
 		t.Fatal("HasOverrides should count playlist_sort")
 	}
 	if !(Feed{ID: "UC5", AudioQuality: ptr(AudioQualityLow)}).HasOverrides() {
@@ -70,7 +70,7 @@ func TestValidateRejectsBadValues(t *testing.T) {
 		"bad playlist_sort": func(c *Config) { c.Feeds[0].PlaylistSort = "newest" },
 		"playlist_sort on chan": func(c *Config) {
 			c.Feeds[0].Kind = FeedChannel
-			c.Feeds[0].PlaylistSort = PlaylistSortOldest
+			c.Feeds[0].PlaylistSort = PlaylistSortDesc
 		},
 	}
 	if err := validConfig().Validate(); err != nil {
@@ -78,9 +78,9 @@ func TestValidateRejectsBadValues(t *testing.T) {
 	}
 	withPlaylist := validConfig()
 	withPlaylist.Feeds[0].Kind = FeedPlaylist
-	withPlaylist.Feeds[0].PlaylistSort = PlaylistSortOldest
+	withPlaylist.Feeds[0].PlaylistSort = PlaylistSortDesc
 	if err := withPlaylist.Validate(); err != nil {
-		t.Fatalf("playlist_sort=oldest on a playlist feed should be valid: %v", err)
+		t.Fatalf("playlist_sort=desc on a playlist feed should be valid: %v", err)
 	}
 	sameURLDifferentFormat := validConfig()
 	sameURLDifferentFormat.Feeds = append(sameURLDifferentFormat.Feeds, Feed{
@@ -196,5 +196,21 @@ func TestEpisodeFilter(t *testing.T) {
 	plain, _ := (Feed{ID: "UC3"}).Filter(d)
 	if !plain.Allows(EpisodeInfo{Title: "Sponsored: anything", DurationSec: 600}) {
 		t.Fatal("without a feed pattern every title passes")
+	}
+}
+
+func TestNormalizePlaylistSort(t *testing.T) {
+	c := Default()
+	c.Feeds = []Feed{
+		{ID: "a", URL: "https://www.youtube.com/playlist?list=PLaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", PlaylistSort: PlaylistSortAsc},
+		{ID: "b", URL: "https://www.youtube.com/playlist?list=PLbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", PlaylistSort: "oldest"},
+		{ID: "c", URL: "https://www.youtube.com/playlist?list=PLcccccccccccccccccccccccccccccccc", PlaylistSort: PlaylistSortDesc},
+	}
+	c.Normalize()
+	if got := []string{c.Feeds[0].PlaylistSort, c.Feeds[1].PlaylistSort, c.Feeds[2].PlaylistSort}; got[0] != "" || got[1] != PlaylistSortDesc || got[2] != PlaylistSortDesc {
+		t.Fatalf("asc is stored as the empty default and oldest reads as desc: %q", got)
+	}
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
 	}
 }

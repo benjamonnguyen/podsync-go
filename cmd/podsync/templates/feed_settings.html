@@ -18,7 +18,7 @@
     <input type="hidden" name="title_exclude" value="{{.F.TitleExclude}}">
     <input type="hidden" name="cleanup_keep_last" value="{{.F.CleanupKeepLast}}">
     <input type="hidden" name="page_size" value="{{.F.PageSize}}">
-    {{if eq .F.PlaylistSort "oldest"}}<input type="hidden" name="playlist_sort" value="oldest">{{end}}
+    {{if eq .F.PlaylistSort "desc"}}<input type="hidden" name="playlist_sort" value="desc">{{end}}
     {{if .F.OPMLExclude}}<input type="hidden" name="opml_exclude" value="on">{{end}}
     <div class="actions">
       <button class="btn danger" type="submit" name="delete_old_media" value="1">Delete the {{.Confirm.OldFormat}} files now</button>

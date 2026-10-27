@@ -132,7 +132,7 @@ func (s *Service) List(ctx context.Context, feedID, format string, offset, limit
 	if err != nil {
 		return nil, err
 	}
-	info := podsync.FeedInfo{Source: f.Source, Kind: f.Kind, ID: f.ID, URL: f.URL, Reverse: f.PlaylistSort == podsync.PlaylistSortOldest}
+	info := podsync.FeedInfo{Source: f.Source, Kind: f.Kind, ID: f.ID, URL: f.URL, Reverse: f.PlaylistSort == podsync.PlaylistSortDesc}
 	eps, err := src.ListEpisodes(ctx, info, offset, limit)
 	if err != nil {
 		if ctx.Err() == nil {

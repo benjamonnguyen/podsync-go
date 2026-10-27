@@ -111,7 +111,7 @@
     <label>Skip titles matching (regex) <input type="text" name="title_exclude" value="{{.TitleExclude}}" placeholder="empty = skip none"><small>Case-insensitive example: <code>(?i)sponsored|#shorts</code>. These patterns belong to this feed only.</small></label>
     <label>Episodes checked per update <input type="number" name="page_size" min="1" max="500" value="{{.PageSize}}" placeholder="{{.Defaults.PageSize}}"><small>Only this many of the newest episodes are downloaded at first; older ones can be fetched later from the feed page with “Load more”.</small></label>
     <label>Keep only the newest N downloaded episodes (0 = keep all) <input type="number" name="cleanup_keep_last" min="0" value="{{.CleanupKeepLast}}" placeholder="{{.Defaults.CleanupKeepLast}}"></label>
-    {{if eq .Kind "playlist"}}<label class="check"><input type="checkbox" name="playlist_sort" value="oldest"{{if eq .PlaylistSort "oldest"}} checked{{end}}> Playlist is ordered oldest first<small>A course/series playlist: check this so updates pull the newest additions instead of only ever the first {{.PageSize}} episodes ever added.</small></label>{{end}}
+    {{if eq .Kind "playlist"}}<label class="check"><input type="checkbox" name="playlist_sort" value="desc"{{if eq .PlaylistSort "desc"}} checked{{end}}> Sort playlist descending<small>Ascending (the default) takes each update's episodes from the top of the playlist. Check this for a playlist ordered oldest first, like a course or series, so updates take its newest additions from the bottom.</small></label>{{end}}
     <label class="check"><input type="checkbox" name="opml_exclude"{{if .OPMLExclude}} checked{{end}}> Exclude from OPML export</label>
 {{end}}
 

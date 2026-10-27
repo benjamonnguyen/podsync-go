@@ -21,7 +21,7 @@ type FeedInfo struct {
 	// Display extras filled in by lookups (not stored).
 	Handle      string `json:"handle,omitempty"`      // e.g. "@LinusTechTips"
 	Subscribers int64  `json:"subscribers,omitempty"` // when the source reports it
-	// Reverse is set from the feed's playlist_sort = "oldest": the playlist
+	// Reverse is set from the feed's playlist_sort = "desc": the playlist
 	// itself is ordered oldest first, so ListEpisodes must reverse it before
 	// applying offset/limit to still return newest first.
 	Reverse bool `json:"reverse,omitempty"`
