@@ -222,9 +222,9 @@ dialog.sheet form { display: flex; flex-direction: column; min-height: 0; flex: 
 /* Phones: bigger type, one column, sections in a bottom tab bar. */
 @media (max-width: 640px) {
   :root { --tabbar: calc(4rem + env(safe-area-inset-bottom)); }
-  body { font-size: 17px; padding-bottom: var(--tabbar); }
+  body { font-size: 16px; padding-bottom: var(--tabbar); }
   /* 16px+ inputs also stop iOS from zooming in on focus. */
-  input[type=text], input[type=search], input[type=number], input[type=password], select { font-size: 17px; padding: .6rem .8rem; }
+  input[type=text], input[type=search], input[type=number], input[type=password], select { font-size: 16px; padding: .6rem .8rem; }
   main { padding: .75rem 1rem 1.5rem; }
   h1 { font-size: 1.5rem; }
   h2 { font-size: 1.2rem; }
