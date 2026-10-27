@@ -332,19 +332,20 @@ func (s *Server) handlePullAll(w http.ResponseWriter, r *http.Request) {
 			refs = append(refs, podsync.FeedRef{Feed: id, Format: format})
 		}
 	}
-	if pickedAll(s.cfg.Get(), picked) {
-		refs = nil // a full update also re-reads the config and checks tool health
-	}
+	all := pickedAll(s.cfg.Get(), picked)
 	started := "Checking all feeds for new episodes…"
-	if len(refs) == 1 {
+	if len(refs) == 1 { // named even when it's the only feed, e.g. from its own page
 		detail, err := s.Feed(r.Context(), refs[0].Feed, refs[0].Format)
 		if err != nil {
 			s.fail(w, r, err)
 			return
 		}
 		started = "Checking " + detail.Name + " for new episodes…"
-	} else if len(refs) > 1 {
+	} else if len(refs) > 1 && !all {
 		started = fmt.Sprintf("Checking %d feeds for new episodes…", len(refs))
+	}
+	if all {
+		refs = nil // a full update also re-reads the config and checks tool health
 	}
 	err := s.Pull(r.Context(), refs)
 	if errors.Is(err, podsync.ErrNotFound) {

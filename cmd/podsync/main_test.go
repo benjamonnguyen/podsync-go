@@ -205,7 +205,7 @@ func TestCrossSiteWritesAreBlocked(t *testing.T) {
 
 func TestPullFeedThenBrowseEpisodes(t *testing.T) {
 	h := newHarness(t)
-	h.mustContain(h.do("POST", "/pull", url.Values{"feed": {"UCone/audio"}}), 200)
+	h.mustContain(h.do("POST", "/pull", url.Values{"feed": {"UCone/audio"}}), 200, "Checking Channel One for new episodes")
 	h.waitIdle()
 
 	rec := h.get("/feed/UCone/audio")
