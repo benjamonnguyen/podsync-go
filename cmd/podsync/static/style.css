@@ -54,6 +54,7 @@ main { max-width: 1000px; margin: 0 auto; padding: 1rem 1.25rem 2rem; }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
 .btn.danger { color: var(--danger); }
 .btn[disabled] { opacity: .55; cursor: not-allowed; }
+[hidden] { display: none !important; }
 button.link { display: inline-flex; align-items: center; background: none; border: 0; color: var(--accent); cursor: pointer; font: inherit; font-weight: 500; padding: 0; white-space: nowrap; }
 button.link.danger { color: var(--danger); }
 button.link[disabled] { opacity: .4; cursor: not-allowed; }
