@@ -4,12 +4,12 @@ Turn YouTube channels and playlists into podcast feeds.
 
 Manage your library, edit settings, and add new feeds straight from the built-in web UI.
 
-- Add feeds with one box: paste a channel or playlist link, type an `@handle`, or search YouTube channels by name
+- Built in feed search: paste a channel or playlist link, type an `@handle`, or search YouTube channels by name
+- Plain-file storage: no database; uses media sidecar data and one `config.toml`
 - Per-feed options: audio or video, max resolution, minimum video length, etc.
 - Episode filtering using title include/exclude regex
 - Episode cleanup (keep last X)
 - OPML export
-- Plain-file storage: no database; uses media sidecar data and one `config.toml`
 - Automatic yt-dlp self update.
 - mp3 encoding
 
@@ -17,19 +17,19 @@ Inspired by [mxpv/podsync](https://github.com/mxpv/podsync)
 
 ## Web UI
 
-**Library** — every feed you're subscribed to, with its episode count, size on disk and last check:
+**Library**
 
 <img src="docs/img/library.png" alt="Library view" width="300">
 
-**Feed** — one channel or playlist's episodes, with Download more to fetch episodes further back than the newest page:
+**Feed**
 
 <img src="docs/img/feed.png" alt="Feed view" width="300">
 
-**Add a feed** — search channels by name, or paste a link/`@handle`/playlist URL directly:
+**Add a feed**
 
 <img src="docs/img/search.png" alt="Search view" width="300">
 
-**Settings** — concurrency, check interval and the per-feed defaults (each feed can override any of them):
+**Settings**
 
 <img src="docs/img/settings.png" alt="Settings view" width="300">
 
@@ -95,7 +95,7 @@ Everything below is set once per deployment and needs a restart to change; none 
 | `PODSYNC_CONFIG`                | `config.toml`      | The TOML file holding feeds and defaults                                                                                                                                                                                                                                                                                                 |
 | `PODSYNC_LISTEN_ADDR`           | `:8080`            | Where podsync serves feeds, media and (unless disabled) the web UI — one listener for all of it                                                                                                                                                                                                                                          |
 | `PODSYNC_BASE_URL`              | **required**       | Public address of `PODSYNC_LISTEN_ADDR` as podcast apps and your browser reach it; used in feed links, enclosure URLs and to load thumbnails. There is no default — podsync refuses to start without it, since a wrong guess would silently break feed links                                                                             |
-| `PODSYNC_YOUTUBE_API_KEY`       | **required**       | A YouTube Data API v3 key. Feeds are listed and links resolved through the official API (downloads and channel name search still use yt-dlp). See [YouTube API key](#youtube-api-key) below                                                                                                                                             |
+| `PODSYNC_YOUTUBE_API_KEY`       | **required**       | A YouTube Data API v3 key. Feeds are listed and links resolved through the official API (downloads and channel name search still use yt-dlp). See [YouTube API key](#youtube-api-key) below                                                                                                                                              |
 | `PODSYNC_DATA_DIR`              | `./data`           | Where media and metadata are stored (`/data` in the Docker image)                                                                                                                                                                                                                                                                        |
 | `PODSYNC_YTDLP_PATH`            | `yt-dlp` on `PATH` | Run a yt-dlp other than the one on `PATH` — a bare name resolved on `PATH` or an absolute/relative path. If you set this, it's checked at startup with the same logic as running it (podsync refuses to start if it doesn't resolve); leave it unset and a missing default `yt-dlp` is just a status-banner issue, not a startup failure |
 | `PODSYNC_MP3_ENCODING_DISABLED` | `false`            | Audio downloads (`format = "audio"`) are re-encoded to mp3 by default; set this to turn that off and keep the original m4a                                                                                                                                                                                                               |
@@ -114,8 +114,6 @@ podsync lists feeds through the YouTube Data API v3, so it needs a key:
 3. Create an **API key** (_APIs & Services → Credentials_). Restricting it to the YouTube Data API v3 is a good idea.
 4. Set it as `PODSYNC_YOUTUBE_API_KEY` and restart.
 
-The free quota is 10,000 units a day. Checking a feed costs about 2 units per 50 episodes checked (one call for the list, one for durations and live status), so a 30-minute interval uses roughly 100 units per feed per day: about 100 feeds before you run out. A playlist sorted descending costs more, because it is read to its end on every check (1 unit per 50 episodes in it). Adding a feed by link or `@handle` costs 1–2 units. Name search doesn't use the API at all. When the quota runs out, the banner says so and listing resumes after midnight Pacific time; downloads already queued are unaffected.
-
 ## Troubleshooting
 
 Check the banner at the top of the page first; it quotes yt-dlp's error.
@@ -124,14 +122,10 @@ Check the banner at the top of the page first; it quotes yt-dlp's error.
 - **Members-only videos**: videos only a channel's paying members can watch are skipped, shown greyed out with a _members only_ label, and never retried on their own. If you're a member, upload that account's cookies in Settings; the page then asks which channels' members-only videos to try again.
 - **"Unable to extract..." / downloads suddenly fail everywhere**: yt-dlp is out of date. Tick _Keep yt-dlp up to date_ in Settings, or pull a newer image / update the binary. (Self-update only works if the yt-dlp binary is writable by the app, as in the Docker image. It cannot update a yt-dlp installed by a package manager.)
 - **HTTP 429 / rate limited**: YouTube is throttling you. It retries on the next update; lower _Simultaneous downloads_ and raise _Check feeds every_ if it keeps happening.
-- **"Invalid username or password" on the login page**: check `PODSYNC_USERNAME`/`PODSYNC_PASSWORD` in `compose.yaml` match what you're typing. Feed and media URLs never need a login, so podcast apps are unaffected.
-- **Feed links don't work on my phone**, or thumbnails are missing in the web UI: set `PODSYNC_BASE_URL` in `compose.yaml` to the machine's LAN address and port (for example `http://192.168.1.10:8080`) and restart.
-- **"Permission denied" when saving settings or downloading in Docker**: the `config` and `data` folders must be writable by the user the container runs as (the web UI saves the config and deletes feed folders; podsync writes the media).
-- **Settings don't seem to save when `config.toml` is bind-mounted as a single file**: mount the folder instead (see the compose example).
-- **An episode shows as failed**: the banner and the episode row show yt-dlp's reason (private and region-blocked videos can't be downloaded; members-only ones are shown separately, see above). Press **Retry** to try again.
-- **Search returns nothing or errors**: name search scrapes YouTube's search page through yt-dlp and can break when YouTube changes it. Pasting a link or typing an `@handle` goes straight to the feed (through the API) and keeps working.
+- **"Permission denied" when saving settings or downloading in Docker**: the `config` and `data` folders must be writable by the user the container runs as, `PUID`:`PGID` (the web UI saves the config and deletes feed folders; podsync writes the media). At startup the entrypoint chowns only the two folders themselves, not what's inside them, so files you copied in as another user (e.g. with `sudo`), or files left from a run with a different `PUID`/`PGID`, can still be unwritable. Fix them with `sudo chown -R <PUID>:<PGID> config data`.
+- **Can't edit `config.toml` or delete downloads on the host without `sudo`**: files podsync creates are owned by `PUID`:`PGID` (default `1000:1000`), and on the host that may be a different user from you. Set `PUID`/`PGID` in `compose.yaml` to the output of `id -u` and `id -g`, run `sudo chown -R "$(id -u):$(id -g)" config data` once, and restart.
+- **Search returns nothing or errors**: name search scrapes YouTube's search page through yt-dlp and can break when YouTube changes it. Pasting a link or typing an `@handle` goes straight uses the YouTube API.
 - **"daily quota is used up"**: the API key's 10,000 units are spent for today; see [YouTube API key](#youtube-api-key). Raise _Check feeds every_ or lower _Episodes checked per update_ to use less.
-- **"API key is not valid" / "not enabled"**: check `PODSYNC_YOUTUBE_API_KEY`, and that YouTube Data API v3 is enabled in the key's Google Cloud project.
 
 ## Development
 
