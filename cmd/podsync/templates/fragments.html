@@ -44,7 +44,7 @@
 {{- else}}<p class="empty">No downloaded episodes match.</p>{{end}}
 {{end}}
 
-{{define "episode_row"}}<div class="row{{if ne .State "downloaded"}} faded{{end}}" id="ep-{{.ID}}"{{if .OOB}} hx-swap-oob="true"{{end}}{{if or (eq .State "queued") (eq .State "downloading")}} hx-get="/feed/{{.FeedID}}/{{.Format}}/episodes/{{.ID}}/row?title={{.Title | urlquery}}&amp;duration={{.DurationSec}}&amp;thumb={{.Thumb | urlquery}}&amp;channel={{.Channel | urlquery}}&amp;views={{.ViewCount}}" hx-trigger="every 2s" hx-swap="outerHTML"{{end}}>
+{{define "episode_row"}}<div class="row{{if eq .State "members_only"}} ghost{{else if ne .State "downloaded"}} faded{{end}}" id="ep-{{.ID}}"{{if .OOB}} hx-swap-oob="true"{{end}}{{if or (eq .State "queued") (eq .State "downloading")}} hx-get="/feed/{{.FeedID}}/{{.Format}}/episodes/{{.ID}}/row?title={{.Title | urlquery}}&amp;duration={{.DurationSec}}&amp;thumb={{.Thumb | urlquery}}&amp;channel={{.Channel | urlquery}}&amp;views={{.ViewCount}}" hx-trigger="every 2s" hx-swap="outerHTML"{{end}}>
   <input type="hidden" name="title" value="{{.Title}}"><input type="hidden" name="duration" value="{{.DurationSec}}"><input type="hidden" name="thumb" value="{{.Thumb}}"><input type="hidden" name="channel" value="{{.Channel}}"><input type="hidden" name="views" value="{{.ViewCount}}">
   {{if and (eq .State "downloaded") (not .ShowFeed)}}<input type="checkbox" class="sel" form="bulk-delete" name="ep" value="{{.ID}}" aria-label="Select {{.Title}}">{{end}}
   {{if .Thumb}}<img class="thumb" src="{{.Thumb}}" alt="" loading="lazy" referrerpolicy="no-referrer">{{else}}<div class="thumb placeholder"></div>{{end}}
@@ -57,6 +57,8 @@
       {{with dur .DurationSec}}<span>{{.}}</span>{{end}}
       {{if .ViewCount}}<span>{{compact .ViewCount}} views</span>{{end}}
       {{if eq .State "downloaded"}}{{if .Height}}<span>{{.Height}}p</span>{{end}}<span>{{size .Size}}</span>{{if .Manual}}<span class="tag">kept</span>{{end}}{{end}}
+      {{if and .MembersOnly (ne .State "members_only")}}<span class="tag">members</span>{{end}}
+      {{if eq .State "members_only"}}<span class="tip" tabindex="0" aria-describedby="tip-{{.ID}}">members only<span class="tip-body" role="tooltip" id="tip-{{.ID}}">Only the channel's paying members can watch this, so podsync skipped it and won't try again on its own. If you're a member, <a href="/settings#cookies">add your YouTube cookies in Settings</a>, then pick this channel to retry.</span></span>{{end}}
       {{if eq .State "cleaned"}}<span>removed</span>{{end}}
       {{if eq .State "queued"}}<span>queued…</span>{{end}}
       {{if eq .State "downloading"}}<span><span class="spinner" aria-hidden="true"></span> downloading…</span>{{end}}

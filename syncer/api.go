@@ -48,6 +48,13 @@ func (s *Service) Pull(ctx context.Context, req podsync.PullRequest) error {
 		}
 		return s.RequestDownload(req.Feed, req.Format, sanitize(*req.Episode))
 	}
+	if req.RetryMembersOnly {
+		if req.Feed == "" {
+			return podsync.Invalid("feed is required to retry members-only episodes")
+		}
+		_, err := s.RetryMembersOnly(req.Feed, req.Format)
+		return err
+	}
 	if req.Feed == "" {
 		return s.TriggerAll()
 	}

@@ -39,9 +39,8 @@ func (d *Duration) UnmarshalText(b []byte) error {
 
 // Download holds the feed-independent download settings a user can change in
 // the web UI. Everything that a deployment sets once and never edits again
-// (the listen address, the public base URL, the data directory, the yt-dlp
-// cookies file, the web UI toggle and its login) is a flag/environment
-// variable instead, not part of this file: see cmd/podsync's -help.
+// (the listen address, the public base URL, the data directory, the web UI
+// toggle and its login) is a flag/environment variable instead, not part of this file: see cmd/podsync's -help.
 type Download struct {
 	Concurrency    int      `toml:"concurrency" json:"concurrency"`
 	UpdateInterval Duration `toml:"update_interval" json:"update_interval"`
@@ -96,8 +95,8 @@ type Feed struct {
 
 // Config is everything the web UI reads back and rewrites: feed data and the
 // per-feed-overridable defaults. It holds nothing about how the service is
-// deployed (ports, the public URL, the data directory, yt-dlp or its
-// cookies file); those are flags/environment variables on each binary.
+// deployed (ports, the public URL, the data directory, yt-dlp); those are
+// flags/environment variables, and yt-dlp's cookies.txt is its own file.
 type Config struct {
 	Download Download `toml:"download" json:"download"`
 	Defaults Options  `toml:"defaults" json:"defaults"`

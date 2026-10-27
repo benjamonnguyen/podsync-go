@@ -24,8 +24,9 @@ services:
       PODSYNC_BASE_URL: http://<this-host>:8080
       PODSYNC_USERNAME: admin
       PODSYNC_PASSWORD: change-me # required unless PODSYNC_WEBUI_DISABLED is true
-      # Optional: cookies for YouTube sign-in checks (put cookies.txt in ./config):
-      # PODSYNC_COOKIES_FILE: /config/cookies.txt
+      PODSYNC_YOUTUBE_API_KEY: your-key # required: a YouTube Data API v3 key (see the README)
+      # YouTube cookies (for sign-in checks and members-only videos) are uploaded on the web
+      # UI's Settings page and kept in ./config/cookies.txt; there is no variable for them.
       # Optional: use a yt-dlp other than the one baked into the image (must exist in the
       # container, e.g. bind-mounted in):
       # PODSYNC_YTDLP_PATH: /config/yt-dlp
@@ -45,3 +46,5 @@ services:
 # If you add feeds by hand-editing config.toml and never run the UI, add this to environment:
 # above (and drop PODSYNC_USERNAME/PODSYNC_PASSWORD, which are then unused):
 #   PODSYNC_WEBUI_DISABLED: "true"
+# YouTube cookies then go in by hand: put a Netscape-format cookies.txt in ./config next
+# to config.toml.

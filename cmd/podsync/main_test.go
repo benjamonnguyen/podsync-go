@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -108,7 +110,7 @@ func newHarness(t *testing.T) *harness {
 	cfg.OnChange(svc.ConfigChanged)
 	svc.Reconcile()
 	_ = lib.UpdateMeta("UCone", "audio", func(m *podsync.FeedMeta) { m.Name = "Channel One" })
-	ui, err := newServer(options{Config: cfg, Library: lib, Syncer: svc, BaseURL: "http://pod.example:8080"})
+	ui, err := newServer(options{Config: cfg, Library: lib, Syncer: svc, BaseURL: "http://pod.example:8080", CookiesFile: filepath.Join(dir, "cookies.txt")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -511,8 +513,8 @@ func TestSettingsSaveValidationAndApply(t *testing.T) {
 }
 
 // Deployment settings (the listen address, the public address, the data
-// directory, the cookies file) are environment variables, not part of this
-// file at all, so there is nothing for the settings page or a forged post to touch.
+// directory) are environment variables, not part of this file at all, so
+// there is nothing for the settings page or a forged post to touch.
 func TestSettingsPageDoesNotEditOperatorSettings(t *testing.T) {
 	h := newHarness(t)
 	page := h.get("/settings").Body.String()
@@ -841,7 +843,7 @@ func TestWebUIDisabledOnlyServesFeedsAndMedia(t *testing.T) {
 }
 
 func TestConfigValidate(t *testing.T) {
-	ok := config{baseURL: "http://localhost:8080", username: "a", password: "b"}
+	ok := config{baseURL: "http://localhost:8080", username: "a", password: "b", youtubeAPIKey: "k"}
 	if err := ok.validate(); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -860,24 +862,14 @@ func TestConfigValidate(t *testing.T) {
 	if err := bad.validate(); err == nil {
 		t.Fatal("expected an error for a missing web UI password when enabled")
 	}
-	noUI := config{baseURL: "http://localhost:8080", webuiDisabled: true}
+	bad = ok
+	bad.youtubeAPIKey = ""
+	if err := bad.validate(); err == nil || !strings.Contains(err.Error(), "PODSYNC_YOUTUBE_API_KEY") {
+		t.Fatalf("expected an error for a missing YouTube API key: %v", err)
+	}
+	noUI := config{baseURL: "http://localhost:8080", webuiDisabled: true, youtubeAPIKey: "k"}
 	if err := noUI.validate(); err != nil {
 		t.Fatalf("no credentials required when the web UI is disabled: %v", err)
-	}
-
-	bad = ok
-	bad.cookies = filepath.Join(t.TempDir(), "does-not-exist.txt")
-	if err := bad.validate(); err == nil {
-		t.Fatal("expected an error for a cookies file that does not exist")
-	}
-	cookiesFile := filepath.Join(t.TempDir(), "cookies.txt")
-	if err := os.WriteFile(cookiesFile, nil, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	good := ok
-	good.cookies = cookiesFile
-	if err := good.validate(); err != nil {
-		t.Fatalf("an existing cookies file must pass: %v", err)
 	}
 
 	bad = ok
@@ -911,7 +903,7 @@ func TestConfigValidate(t *testing.T) {
 	if err := bad.validate(); err == nil {
 		t.Fatal("expected an error when the key file does not exist")
 	}
-	good = ok
+	good := ok
 	good.tlsCertFile = bad.tlsCertFile
 	good.tlsKeyFile = filepath.Join(tlsDir, "key.pem")
 	if err := os.WriteFile(good.tlsKeyFile, nil, 0o644); err != nil {
@@ -941,5 +933,117 @@ func TestProbeHTTPAndHTTPS(t *testing.T) {
 	}
 	if err := probe(secure.Listener.Addr().String(), false); err == nil {
 		t.Fatal("speaking plain http to a TLS listener should fail")
+	}
+}
+
+func (h *harness) uploadCookies(content string) *httptest.ResponseRecorder {
+	h.t.Helper()
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	fw, _ := mw.CreateFormFile("cookies", "cookies.txt")
+	_, _ = fw.Write([]byte(content))
+	_ = mw.Close()
+	req := httptest.NewRequest("POST", "/settings/cookies", &body)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	rec := httptest.NewRecorder()
+	h.h.ServeHTTP(rec, req)
+	return rec
+}
+
+func TestMembersOnlyRowsCookiesAndRetryPrompt(t *testing.T) {
+	h := newHarness(t)
+	h.src.With(func(m *mock.Source) {
+		m.Episodes[0].MembersOnly = true
+		m.DownloadErr["vid0000000"] = fmt.Errorf("%w: join this channel", podsync.ErrMembersOnly)
+	})
+	if err := h.svc.PullFeed("UCone", "audio"); err != nil {
+		t.Fatal(err)
+	}
+	if ep, _ := h.lib.Episode("UCone", "audio", "vid0000000"); !ep.BlockedMembersOnly() {
+		t.Fatalf("not flagged: %+v", ep)
+	}
+	// Ghosted, explained, linked to settings, and no Retry button.
+	rec := h.get("/feed/UCone/audio")
+	h.mustContain(rec, 200, `class="row ghost" id="ep-vid0000000"`, "members only", `href="/settings#cookies"`)
+	row := rec.Body.String()
+	row = row[strings.Index(row, `id="ep-vid0000000"`):]
+	if next := strings.Index(row, `id="ep-vid0000001"`); next > 0 {
+		row = row[:next]
+	}
+	if strings.Contains(row, "Retry") {
+		t.Fatal("a members-only row must not offer a retry")
+	}
+	// Without cookies the settings page names the feed but offers no retry.
+	rec = h.get("/settings")
+	h.mustContain(rec, 200, "No cookies added", "Members-only videos", "Channel One (1 video)")
+	if strings.Contains(rec.Body.String(), "Retry selected") {
+		t.Fatal("no retry without cookies")
+	}
+
+	// Bad uploads are refused and nothing is stored.
+	h.mustContain(h.uploadCookies(`[{"domain": ".youtube.com"}]`), 200, "Not saved", "Netscape")
+	h.mustContain(h.uploadCookies(".example.com\tTRUE\t/\tFALSE\t0\tSID\tx\n"), 200, "no youtube.com cookies")
+	if _, err := os.Stat(filepath.Join(filepath.Dir(h.cfgPath), "cookies.txt")); err == nil {
+		t.Fatal("a rejected upload must not be stored")
+	}
+
+	// A good upload is stored (header added, CRLF fixed, private) and leads to the retry prompt.
+	rec = h.uploadCookies(".youtube.com\tTRUE\t/\tTRUE\t0\tSID\tabc\r\n#HttpOnly_.youtube.com\tTRUE\t/\tTRUE\t0\tHSID\tdef\r\n")
+	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/settings?cookies=saved#members" {
+		t.Fatalf("%d %s", rec.Code, rec.Header().Get("Location"))
+	}
+	path := filepath.Join(filepath.Dir(h.cfgPath), "cookies.txt")
+	raw, err := os.ReadFile(path)
+	if err != nil || !strings.HasPrefix(string(raw), "# Netscape HTTP Cookie File\n") || strings.Contains(string(raw), "\r") {
+		t.Fatalf("stored cookies: %v %q", err, raw)
+	}
+	if st, _ := os.Stat(path); st.Mode().Perm() != 0o600 {
+		t.Fatalf("cookies must be private, got %v", st.Mode().Perm())
+	}
+	h.mustContain(h.get("/settings?cookies=saved"), 200, "Cookies saved", "Choose below", `name="feed" value="UCone/audio"`, "Retry selected")
+
+	// Retrying needs a choice; the chosen feed's members-only videos are tried again.
+	h.mustContain(h.do("POST", "/settings/members-retry", url.Values{}), 200, "Tick at least one channel")
+	h.src.With(func(m *mock.Source) { delete(m.DownloadErr, "vid0000000") })
+	rec = h.do("POST", "/settings/members-retry", url.Values{"feed": {"UCone/audio"}})
+	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/settings?retried=1#members" {
+		t.Fatalf("%d %s", rec.Code, rec.Header().Get("Location"))
+	}
+	h.waitIdle()
+	if ep, _ := h.lib.Episode("UCone", "audio", "vid0000000"); ep.Status != podsync.StatusDownloaded || !ep.MembersOnly || ep.Manual {
+		t.Fatalf("retried: %+v", ep)
+	}
+	rec = h.get("/settings?retried=1")
+	h.mustContain(rec, 200, "Retrying 1 members-only video.")
+	if strings.Contains(rec.Body.String(), `id="members"`) {
+		t.Fatal("nothing left to retry, so no prompt")
+	}
+
+	// Removing the cookies.
+	rec = h.do("POST", "/settings/cookies/delete", url.Values{})
+	if rec.Code != http.StatusSeeOther {
+		t.Fatal(rec.Code)
+	}
+	if _, err := os.Stat(path); err == nil {
+		t.Fatal("cookies not removed")
+	}
+}
+
+func TestFlagMembersOnlyMigratesOldFailures(t *testing.T) {
+	h := newHarness(t)
+	old := podsync.Episode{ID: "jcQek2Sg4WQ", Title: "Grey Rewatch", Status: podsync.StatusFailed, Attempts: 3,
+		LastError: "[youtube] jcQek2Sg4WQ: This video is available to this channel's members on level: Bonus Videos! (or any higher level). Join this channel to get access to members-only content and other exclusive perks."}
+	other := podsync.Episode{ID: "abcdEFGhij3", Title: "Gone", Status: podsync.StatusFailed, Attempts: 3, LastError: "[youtube] Video unavailable"}
+	for _, ep := range []podsync.Episode{old, other} {
+		if err := h.lib.PutEpisode("UCone", "audio", ep); err != nil {
+			t.Fatal(err)
+		}
+	}
+	flagMembersOnly(h.lib)
+	if ep, _ := h.lib.Episode("UCone", "audio", old.ID); !ep.BlockedMembersOnly() {
+		t.Fatalf("old members-only failure not flagged: %+v", ep)
+	}
+	if ep, _ := h.lib.Episode("UCone", "audio", other.ID); ep.MembersOnly {
+		t.Fatalf("other failures must be left alone: %+v", ep)
 	}
 }

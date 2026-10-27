@@ -28,6 +28,8 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -65,7 +67,8 @@ type config struct {
 	listenAddr          string
 	baseURL             string
 	dataDir             string
-	cookies             string
+	youtubeAPIKey       string
+	youtubeAPIBase      string
 	ytdlpPath           string
 	mp3EncodingDisabled bool
 	webuiDisabled       bool
@@ -84,7 +87,8 @@ func configFromEnv() config {
 		listenAddr:          *listen,
 		baseURL:             os.Getenv("PODSYNC_BASE_URL"),
 		dataDir:             envOr("PODSYNC_DATA_DIR", "./data"),
-		cookies:             envOr("PODSYNC_COOKIES_FILE", ""),
+		youtubeAPIKey:       strings.TrimSpace(os.Getenv("PODSYNC_YOUTUBE_API_KEY")),
+		youtubeAPIBase:      os.Getenv("PODSYNC_YOUTUBE_API_BASE"), // tests and proxies; empty = Google's endpoint
 		ytdlpPath:           envOr("PODSYNC_YTDLP_PATH", ""),
 		mp3EncodingDisabled: envBool("PODSYNC_MP3_ENCODING_DISABLED", false),
 		webuiDisabled:       envBool("PODSYNC_WEBUI_DISABLED", false),
@@ -97,6 +101,34 @@ func configFromEnv() config {
 
 func (c config) tlsEnabled() bool { return c.tlsCertFile != "" }
 
+// cookiesPath is where the cookies.txt added on the settings page is kept:
+// next to the config file, so it lives on the same (backed-up) volume.
+func (c config) cookiesPath() string { return filepath.Join(filepath.Dir(c.path), "cookies.txt") }
+
+// existingFile returns path if it is a regular file, else "".
+func existingFile(path string) string {
+	if st, err := os.Stat(path); err == nil && st.Mode().IsRegular() {
+		return path
+	}
+	return ""
+}
+
+// flagMembersOnly marks failed episodes recorded before members-only videos
+// were flagged (their stored error is yt-dlp's members-only refusal), so they
+// show as members-only and are offered for a retry like newer ones.
+func flagMembersOnly(lib podsync.Library) {
+	for _, lf := range lib.Feeds() {
+		for _, ep := range lib.Episodes(lf.ID, lf.Format) {
+			if ep.Status == podsync.StatusFailed && !ep.MembersOnly && youtube.IsMembersOnlyMessage(ep.LastError) {
+				ep.MembersOnly = true
+				if err := lib.PutEpisode(lf.ID, lf.Format, ep); err != nil {
+					log.Printf("flag members-only %s/%s/%s: %v", lf.ID, lf.Format, ep.ID, err)
+				}
+			}
+		}
+	}
+}
+
 // validate checks the deployment settings that Config.Validate used to check
 // before they moved out of the file, and fails fast naming what's missing or
 // invalid, before anything is listened on or downloaded.
@@ -107,13 +139,11 @@ func (c config) validate() error {
 	if u, err := url.Parse(c.baseURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		return fmt.Errorf("PODSYNC_BASE_URL must be an absolute http(s) URL, got %q", c.baseURL)
 	}
+	if c.youtubeAPIKey == "" {
+		return errors.New("PODSYNC_YOUTUBE_API_KEY is required: a YouTube Data API v3 key, used to list feeds (see the README)")
+	}
 	if !c.webuiDisabled && (c.username == "" || c.password == "") {
 		return errors.New("PODSYNC_USERNAME and PODSYNC_PASSWORD are required unless PODSYNC_WEBUI_DISABLED is set")
-	}
-	if c.cookies != "" {
-		if _, err := os.Stat(c.cookies); err != nil {
-			return fmt.Errorf("PODSYNC_COOKIES_FILE: %w", err)
-		}
 	}
 	// The default ("yt-dlp" on PATH) is intentionally not checked here: a missing
 	// yt-dlp is reported on the status banner at runtime (podsync still serves
@@ -196,7 +226,7 @@ func newHandler(c config, cfg podsync.ConfigStore, lib podsync.Library, svc pods
 
 	webuiNote := "web UI off"
 	if !c.webuiDisabled {
-		ui, err := newServer(options{Config: cfg, Library: lib, Syncer: svc, BaseURL: c.baseURL, MP3Encoding: !c.mp3EncodingDisabled})
+		ui, err := newServer(options{Config: cfg, Library: lib, Syncer: svc, BaseURL: c.baseURL, MP3Encoding: !c.mp3EncodingDisabled, CookiesFile: c.cookiesPath()})
 		if err != nil {
 			return nil, "", err
 		}
@@ -226,12 +256,16 @@ func run(c config) error {
 	if err := lib.CleanTemp(); err != nil { // leftovers of an interrupted download; only this program stages downloads
 		log.Printf("could not clean staging directory: %v", err)
 	}
+	flagMembersOnly(lib)
+	if os.Getenv("PODSYNC_COOKIES_FILE") != "" {
+		log.Printf("PODSYNC_COOKIES_FILE is no longer used: add cookies.txt on the web UI's Settings page instead (it is stored at %s)", c.cookiesPath())
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	yt := youtube.New(func() youtube.Settings {
-		return youtube.Settings{CookiesFile: c.cookies, BinPath: c.ytdlpPath, MP3Encoding: !c.mp3EncodingDisabled}
+		return youtube.Settings{APIKey: c.youtubeAPIKey, APIBase: c.youtubeAPIBase, CookiesFile: existingFile(c.cookiesPath()), BinPath: c.ytdlpPath, MP3Encoding: !c.mp3EncodingDisabled}
 	})
 	svc := syncer.New(ctx, cfg, lib, podsync.NewRegistry(yt), status.New())
 	cfg.OnChange(svc.ConfigChanged)

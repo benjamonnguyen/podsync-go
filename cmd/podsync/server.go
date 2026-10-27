@@ -39,6 +39,7 @@ type options struct {
 	Syncer      podsync.Syncer      // the sync service, called in-process
 	BaseURL     string              // the public address, for the links and thumbnails the UI shows
 	MP3Encoding bool                // PODSYNC_MP3_ENCODING_DISABLED, inverted; just for the "audio" format label
+	CookiesFile string              // where the settings page stores cookies.txt for yt-dlp (may not exist yet)
 }
 
 type Server struct {
@@ -47,6 +48,7 @@ type Server struct {
 	sync        podsync.Syncer
 	baseURL     string
 	mp3Encoding bool
+	cookiesFile string
 	now         func() time.Time
 
 	pages map[string]*template.Template
@@ -69,7 +71,7 @@ var pageNames = []string{"library", "feed", "add", "settings", "feed_settings", 
 
 func newServer(o options) (*Server, error) {
 	s := &Server{
-		cfg: o.Config, lib: o.Library, sync: o.Syncer, baseURL: o.BaseURL, mp3Encoding: o.MP3Encoding, now: time.Now,
+		cfg: o.Config, lib: o.Library, sync: o.Syncer, baseURL: o.BaseURL, mp3Encoding: o.MP3Encoding, cookiesFile: o.CookiesFile, now: time.Now,
 		previews: map[string]preview{}, dismissed: map[string]time.Time{},
 	}
 	funcs := template.FuncMap{
@@ -135,6 +137,9 @@ func (s *Server) Handler() http.Handler {
 
 	mux.HandleFunc("GET /settings", s.handleSettings)
 	mux.HandleFunc("POST /settings", s.handleSettingsSave)
+	mux.HandleFunc("POST /settings/cookies", s.handleCookiesUpload)
+	mux.HandleFunc("POST /settings/cookies/delete", s.handleCookiesDelete)
+	mux.HandleFunc("POST /settings/members-retry", s.handleMembersRetry)
 
 	mux.HandleFunc("GET /status", s.handleStatus)
 	mux.HandleFunc("POST /status/dismiss", s.handleDismiss)

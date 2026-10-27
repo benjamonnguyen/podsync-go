@@ -17,7 +17,7 @@ a:hover { text-decoration: underline; }
 h1 { font-size: 1.5rem; margin: .4rem 0 .6rem; }
 h2 { font-size: 1.1rem; margin: 1.4rem 0 .5rem; }
 h3 { margin: 0; font-size: 1.05rem; }
-code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .9em; }
+code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .9em; overflow-wrap: anywhere; }
 pre { white-space: pre-wrap; margin: .3rem 0 0; }
 main { max-width: 980px; margin: 0 auto; padding: 1rem; }
 .top { display: flex; align-items: center; gap: 1.5rem; padding: .7rem 1rem; background: var(--panel); border-bottom: 1px solid var(--border); }
@@ -82,6 +82,13 @@ input[type=text], input[type=search], input[type=number], input[type=password], 
 .rows:empty { display: none; }
 .row.faded { opacity: .55; }
 .row.faded:hover { opacity: .9; }
+/* Members-only videos that can't be downloaded: dimmed piecewise (not the whole row) so the tooltip stays readable. */
+.row.ghost .thumb { opacity: .35; filter: grayscale(1); }
+.row.ghost .title, .row.ghost .meta > span:not(.tip) { opacity: .55; }
+.tip { position: relative; border-bottom: 1px dotted currentColor; cursor: help; }
+.tip-body { display: none; position: absolute; left: 0; top: 100%; margin-top: .4rem; z-index: 10; width: max-content; max-width: min(22rem, 80vw); padding: .5rem .7rem; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); color: var(--text); font-size: .85rem; line-height: 1.4; box-shadow: 0 4px 14px rgb(0 0 0 / .18); cursor: auto; white-space: normal; }
+.tip-body::before { content: ""; position: absolute; left: 0; right: 0; top: -.4rem; height: .4rem; } /* bridges the gap so the pointer can reach the link */
+.tip:hover .tip-body, .tip:focus-within .tip-body { display: block; }
 .thumb { width: 128px; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 4px; flex: none; background: var(--border); }
 .details { margin-top: .3rem; font-size: .85rem; }
 .details summary { cursor: pointer; color: var(--muted); }
@@ -90,7 +97,10 @@ input[type=text], input[type=search], input[type=number], input[type=password], 
 .row .title { display: block; font-weight: 500; overflow-wrap: anywhere; }
 .row .feedname { font-size: .85rem; color: var(--muted); display: block; }
 .row .meta { display: flex; flex-wrap: wrap; gap: .2rem 0; color: var(--muted); font-size: .85rem; }
-.row .meta > span:not(:first-child):not(.tag)::before { content: "\00B7"; margin: 0 .45rem; }
+.row .meta > span { white-space: nowrap; }
+.row .meta > span.error { white-space: normal; overflow-wrap: anywhere; }
+/* The separator trails each item, so a wrapped line never starts with a stray dot. */
+.row .meta > span:not(:last-child):not(.tag):not(:has(+ .tag))::after { content: "\00B7"; margin: 0 .45rem; }
 .tag { border: 1px solid var(--border); border-radius: 4px; padding: 0 .35rem; font-size: .75rem; margin-left: .45rem; }
 #more { margin: 1rem 0; }
 .sel { display: none; width: 1.2rem; height: 1.2rem; flex: none; cursor: pointer; }
@@ -105,8 +115,11 @@ body.selecting .sel { display: block; }
 .inline-form input[type=number] { width: 7rem; }
 .inline-form label { display: flex; align-items: center; gap: .4rem; }
 .inline-form .full-line { flex-basis: 100%; }
-.radio, .check { display: flex; align-items: center; gap: .4rem; }
-.check input, .radio input { width: auto; }
+.radio { display: flex; align-items: center; gap: .4rem; }
+.radio input { width: auto; }
+/* The box sits in a gutter so the label's own content (code, small, spans) wraps as ordinary text. */
+label.check { display: block; position: relative; padding-left: 1.8rem; }
+label.check > input[type=checkbox] { position: absolute; left: 0; top: .2em; width: 1.15rem; height: 1.15rem; margin: 0; }
 .results { list-style: none; margin: .8rem 0 0; padding: 0; }
 .results li { display: flex; gap: .8rem; align-items: center; padding: .5rem 0; border-bottom: 1px solid var(--border); }
 .results li form { margin: 0; }
@@ -114,10 +127,13 @@ body.selecting .sel { display: block; }
 
 .settings fieldset { border: 1px solid var(--border); border-radius: 8px; background: var(--panel); margin: 0 0 1rem; padding: .5rem 1rem 1rem; }
 .settings legend { font-weight: 600; padding: 0 .4rem; }
+.settings { margin-bottom: 1.5rem; }
 .settings label { display: block; margin-top: .8rem; }
-.settings label.check { display: flex; }
+.settings label > input:not([type=checkbox]), .settings label > select { display: block; margin-top: .3rem; }
 .settings small { display: block; color: var(--muted); }
 .settings input[type=number] { max-width: 10rem; }
+.settings input[type=file] { max-width: 100%; font: inherit; }
+.settings input[type=file]::file-selector-button { margin-right: .6rem; padding: .4rem .8rem; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); color: var(--text); font: inherit; cursor: pointer; }
 .notice { padding: .6rem .9rem; border-radius: 6px; border: 1px solid; margin: .6rem 0; }
 .notice.ok { background: var(--ok-bg); border-color: var(--ok-border); }
 .notice.err { background: var(--err-bg); border-color: var(--err-border); }
@@ -132,11 +148,80 @@ body.selecting .sel { display: block; }
 .banner .spinner, .row .spinner, .htmx-request .indicator, .htmx-request.indicator { display: inline-block; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
+/* Touch screens: every control at least 44px tall/wide so it can be hit with a thumb. */
+@media (pointer: coarse), (max-width: 600px) {
+  .top nav a, .top .brand { display: inline-flex; align-items: center; min-height: 44px; }
+  .icon-btn { width: 44px; height: 44px; }
+  .icon { width: 1.35rem; height: 1.35rem; }
+  .btn { min-height: 44px; padding: .55rem 1rem; }
+  button.link { min-height: 44px; padding: 0 .35rem; }
+  .banner form button.link { padding: 0 .5rem; margin-right: -.5rem; }
+  .details summary { padding: .6rem 0; }
+  a.back, .feed-head .yt-link { display: inline-flex; align-items: center; min-height: 44px; }
+  .details a { display: inline-block; padding: .4rem 0; }
+  label.check { padding: .55rem 0 .55rem 2.2rem; }
+  label.check > input[type=checkbox] { width: 1.4rem; height: 1.4rem; top: .55rem; }
+  .sel { width: 1.75rem; height: 1.75rem; }
+  .tip { display: inline-block; padding: .3rem 0; }
+  .settings input[type=file]::file-selector-button { min-height: 44px; }
+}
+
+/* No hover to bring a faded row back, so only its picture and text are dimmed, never its button. */
+@media (hover: none) {
+  .row.faded, .row.faded:hover { opacity: 1; }
+  .row.faded .thumb, .row.faded .row-main { opacity: .6; }
+}
+
+/* Phones: one readable column. */
 @media (max-width: 600px) {
-  .row { flex-direction: column; align-items: stretch; }
-  .thumb { width: 100%; }
-  .row > .sel { align-self: flex-start; }
-  .feed-head { flex-direction: column; }
+  body { font-size: 16px; }
+  /* 16px inputs stop iOS from zooming in on focus. */
+  input[type=text], input[type=search], input[type=number], input[type=password], select { font-size: 16px; padding: .6rem .7rem; }
+  main { padding: .75rem; }
+  h1 { font-size: 1.3rem; }
+  .top { gap: .75rem; padding: 0 .75rem; }
+  .top nav { gap: .25rem; }
+  .top nav a { padding: 0 .45rem; }
+  .banner { padding: .4rem .75rem; font-size: .9rem; }
+
+  .card-body { padding-right: 2.6rem; }
+  .card > .icon-btn { top: .2rem; right: .2rem; }
+
+  /* Feed header: avatar beside the title, everything else full width below. */
+  .feed-head { display: block; }
+  .feed-head .avatar.large { float: left; width: 56px; height: 56px; margin: 0 .75rem .5rem 0; }
+  .feed-head h1 { min-height: 56px; display: flex; align-items: center; margin: 0 0 .5rem; overflow-wrap: anywhere; }
+  .feed-head .grow > :not(h1) { clear: left; }
+
+  /* Episode rows: small thumbnail beside the text, the action button on its own full-width line. */
+  .row { flex-wrap: wrap; align-items: flex-start; gap: .55rem .75rem; padding: .75rem; }
+  .thumb { width: 112px; }
+  .row > .sel { align-self: center; }
+  .row .title { font-size: 1rem; line-height: 1.35; }
+  .row .meta { font-size: .875rem; margin-top: .15rem; }
+  .row-actions { flex-basis: 100%; }
+  .row-actions:not(:has(button)) { display: none; }
+  .row-actions .btn { width: 100%; }
+  #more .btn { min-width: 60%; }
+
+  /* The tooltip opens as a sheet along the bottom edge rather than overflowing beside the label. */
+  .tip-body { position: fixed; left: .75rem; right: .75rem; bottom: .75rem; top: auto; width: auto; max-width: none; margin: 0; padding: .9rem 1rem; font-size: .95rem; z-index: 20; }
+  .tip-body::before { display: none; }
+  .tip-body a { display: inline-block; padding: .25rem 0; }
+
+  /* Forms: full-width submit buttons, no nested boxes eating the width. */
+  .settings fieldset { padding: .4rem .8rem .9rem; }
+  .settings small { font-size: .85rem; }
+  .settings .actions .btn { flex: 1 1 auto; }
+  .card.preview { display: block; }
+  .card.preview .avatar { float: left; width: 48px; height: 48px; margin: 0 .75rem .5rem 0; }
+  .card.preview .card-body { padding-right: 0; }
+  .card.preview .card-body > :not(h3) { clear: left; }
+  .card.preview h3 { min-height: 48px; display: flex; align-items: center; }
+  .preview .settings fieldset { border: 0; padding: 0; background: none; margin-bottom: .5rem; }
+  .inline-form input[type=text], .inline-form input[type=search] { min-width: 0; }
+  .results li .btn { min-width: 5rem; }
+  .select-bar { margin-top: 0; padding: .1rem .6rem; }
 }
 
 

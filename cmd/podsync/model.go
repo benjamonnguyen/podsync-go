@@ -1,14 +1,17 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"time"
 
 	"podsync"
+	"podsync/fs"
 )
 
 // The web UI shares the config file and the data directory with the sync
@@ -74,6 +77,9 @@ const (
 	StateDownloaded  = string(podsync.StatusDownloaded)
 	StateCleaned     = string(podsync.StatusCleaned)
 	StateFailed      = string(podsync.StatusFailed)
+	// StateMembersOnly is a members-only video that cannot be downloaded: it
+	// failed as members-only, or (with no cookies) the listing says it is one.
+	StateMembersOnly = "members_only"
 )
 
 // EpisodeView is an episode together with its live state.
@@ -110,8 +116,9 @@ type AddFeedRequest struct {
 // Settings is the configuration as the settings page shows it. Only some of it
 // is editable there: the concurrency, update interval, self-update switch and
 // the feed defaults. Everything belonging to the deployment (the listen
-// address, the public address, the data directory, the yt-dlp cookies file)
-// is an environment variable, not shown or edited here.
+// address, the public address, the data directory) is an environment
+// variable, not shown or edited here. The yt-dlp cookies file is managed on
+// the settings page too, but is its own file (see SaveCookies), not config.
 type Settings struct {
 	Download   podsync.Download
 	Defaults   podsync.Options
@@ -229,7 +236,7 @@ func episodeFromInfo(ep podsync.EpisodeInfo) podsync.Episode {
 	return podsync.Episode{
 		ID: ep.ID, Title: ep.Title, Description: ep.Description, URL: ep.URL, Thumbnail: ep.Thumbnail,
 		Published: ep.Published, DurationSec: ep.DurationSec, Channel: ep.Channel, ViewCount: ep.ViewCount,
-		Height: ep.Height,
+		Height: ep.Height, MembersOnly: ep.MembersOnly,
 	}
 }
 
@@ -254,6 +261,9 @@ func (s *Server) view(feedID, format string, hint podsync.Episode, jobs jobState
 			v.DurationSec = hint.DurationSec
 		}
 		v.State = string(ep.Status)
+	}
+	if v.MembersOnly && (v.State == StateFailed || (v.State == StateAvailable && !s.hasCookies())) {
+		v.State = StateMembersOnly
 	}
 	if js := jobs[jobKey(feedID, format, hint.ID)]; js != "" {
 		v.State = js
@@ -587,4 +597,121 @@ func (s *Server) DownloadEpisode(ctx context.Context, feedID, format string, ep 
 		return err
 	}
 	return s.sync.Pull(ctx, podsync.PullRequest{Feed: feedID, Format: format, Episode: &ep})
+}
+
+// ---- cookies and members-only videos ----
+
+// maxCookiesSize bounds an uploaded cookies.txt; real ones are a few KB.
+const maxCookiesSize = 1 << 20
+
+// CookiesStatus is what the settings page shows about cookies.txt.
+type CookiesStatus struct {
+	Set bool
+	At  time.Time // when it was added
+}
+
+func (s *Server) hasCookies() bool { return s.Cookies().Set }
+
+func (s *Server) Cookies() CookiesStatus {
+	if s.cookiesFile == "" {
+		return CookiesStatus{}
+	}
+	st, err := os.Stat(s.cookiesFile)
+	if err != nil || !st.Mode().IsRegular() {
+		return CookiesStatus{}
+	}
+	return CookiesStatus{Set: true, At: st.ModTime()}
+}
+
+const cookiesHeader = "# Netscape HTTP Cookie File"
+
+// checkCookies accepts a Netscape-format cookies.txt (what browser
+// extensions and yt-dlp export) holding at least one youtube.com cookie, and
+// returns it normalized for yt-dlp: LF line endings and the header line.
+func checkCookies(data []byte) ([]byte, error) {
+	if len(data) > maxCookiesSize {
+		return nil, podsync.Invalid("that file is too large to be a cookies.txt")
+	}
+	data = bytes.ReplaceAll(data, []byte("\r\n"), []byte("\n"))
+	cookies, youtube := 0, false
+	for i, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimPrefix(line, "#HttpOnly_")
+		if strings.TrimSpace(line) == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		f := strings.Split(line, "\t")
+		if len(f) != 7 {
+			return nil, podsync.Invalid("line %d is not a cookie in Netscape cookies.txt format (7 tab-separated fields); export the file as cookies.txt, not JSON", i+1)
+		}
+		cookies++
+		youtube = youtube || strings.HasSuffix("."+strings.TrimPrefix(f[0], "."), ".youtube.com")
+	}
+	if cookies == 0 {
+		return nil, podsync.Invalid("no cookies found in that file")
+	}
+	if !youtube {
+		return nil, podsync.Invalid("that file has no youtube.com cookies; export it from a browser tab signed in to YouTube")
+	}
+	if !bytes.HasPrefix(data, []byte(cookiesHeader)) && !bytes.HasPrefix(data, []byte("# HTTP Cookie File")) {
+		data = append([]byte(cookiesHeader+"\n"), data...)
+	}
+	return data, nil
+}
+
+// SaveCookies checks and stores an uploaded cookies.txt. yt-dlp picks it up
+// on its next run; nothing needs restarting.
+func (s *Server) SaveCookies(data []byte) error {
+	data, err := checkCookies(data)
+	if err != nil {
+		return err
+	}
+	if err := fs.WriteFileAtomic(s.cookiesFile, data, 0o600); err != nil {
+		return fmt.Errorf("save cookies: %w", err)
+	}
+	return nil
+}
+
+func (s *Server) DeleteCookies() error {
+	if err := os.Remove(s.cookiesFile); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
+// MembersOnlyFeed is a configured feed with members-only videos that were
+// skipped, for the settings page's retry prompt.
+type MembersOnlyFeed struct {
+	ID, Format, Name string
+	Count            int
+}
+
+func (s *Server) MembersOnlyFeeds() []MembersOnlyFeed {
+	cfg := s.cfg.Get()
+	var out []MembersOnlyFeed
+	for _, f := range cfg.Feeds {
+		format := f.Effective(cfg.Defaults).Format
+		n := 0
+		for _, ep := range s.lib.Episodes(f.ID, format) {
+			if ep.BlockedMembersOnly() {
+				n++
+			}
+		}
+		if n > 0 {
+			out = append(out, MembersOnlyFeed{ID: f.ID, Format: format, Name: s.summary(cfg, f).Name, Count: n})
+		}
+	}
+	return out
+}
+
+// RetryMembersOnly asks the sync service to try the members-only videos of
+// the given feeds again and returns how many videos that is.
+func (s *Server) RetryMembersOnly(ctx context.Context, feeds []MembersOnlyFeed) (int, error) {
+	n := 0
+	for _, f := range feeds {
+		if err := s.sync.Pull(ctx, podsync.PullRequest{Feed: f.ID, Format: f.Format, RetryMembersOnly: true}); err != nil {
+			return n, err
+		}
+		n += f.Count
+	}
+	return n, nil
 }

@@ -16,7 +16,8 @@ type Syncer interface {
 	Apply(ctx context.Context) (ApplyResult, error)
 
 	// Pull starts an update of one feed, or of every feed when req.Feed is
-	// empty; or, when req.Episode is set, downloads that one episode now.
+	// empty; or, when req.Episode is set, downloads that one episode now; or,
+	// with req.RetryMembersOnly, retries that feed's members-only episodes.
 	// It returns once the work is queued. ErrBusy means an update is running.
 	Pull(ctx context.Context, req PullRequest) error
 
@@ -43,6 +44,9 @@ type PullRequest struct {
 	Feed    string       `json:"feed,omitempty"`    // empty = every feed
 	Format  string       `json:"format,omitempty"`  // required when Feed is set
 	Episode *EpisodeInfo `json:"episode,omitempty"` // download this episode of Feed now
+	// RetryMembersOnly re-queues Feed's members-only episodes (normally never
+	// retried), e.g. once the user has added a member's cookies.
+	RetryMembersOnly bool `json:"retry_members_only,omitempty"`
 }
 
 // Job is one queued or running download.

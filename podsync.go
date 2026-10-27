@@ -20,6 +20,9 @@ const (
 	KindNotFound ErrorKind = "not_found"
 	KindInvalid  ErrorKind = "invalid"
 	KindBusy     ErrorKind = "busy"
+	// KindMembersOnly is a download refused because the video is only for
+	// the channel's paying members (and the cookies, if any, are not one's).
+	KindMembersOnly ErrorKind = "members_only"
 )
 
 // Error is an application error with a kind. Match with errors.Is against
@@ -41,6 +44,8 @@ var (
 	ErrNotFound = &Error{KindNotFound, "not found"}
 	ErrInvalid  = &Error{KindInvalid, "invalid"}
 	ErrBusy     = &Error{KindBusy, "an update is already running"}
+	// ErrMembersOnly matches download errors of kind KindMembersOnly.
+	ErrMembersOnly = &Error{KindMembersOnly, "members-only video"}
 )
 
 func NotFound(format string, args ...any) error {
@@ -65,7 +70,7 @@ func Busy() error { return &Error{KindBusy, ErrBusy.Msg} }
 // ErrorFromKind rebuilds an application error received over the wire.
 func ErrorFromKind(kind ErrorKind, msg string) error {
 	switch kind {
-	case KindNotFound, KindInvalid, KindBusy:
+	case KindNotFound, KindInvalid, KindBusy, KindMembersOnly:
 		return &Error{kind, msg}
 	}
 	return errors.New(msg)

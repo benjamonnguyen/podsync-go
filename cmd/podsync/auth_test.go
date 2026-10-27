@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -29,7 +30,12 @@ func TestSessionSignAndVerify(t *testing.T) {
 	}
 	// Tampering with the expiry (without resigning) must not verify.
 	exp := time.Now().Add(time.Hour).Unix()
-	tampered := a.sign(exp)[:len(a.sign(exp))-1] + "0"
+	sig := a.sign(exp)
+	last := "0"
+	if strings.HasSuffix(sig, "0") {
+		last = "1" // replacing a "0" with "0" would tamper with nothing
+	}
+	tampered := sig[:len(sig)-1] + last
 	if a.valid(tampered) {
 		t.Fatal("a tampered signature must not verify")
 	}

@@ -37,7 +37,15 @@ type Episode struct {
 	Manual       bool          `json:"manual,omitempty"` // downloaded on request; exempt from cleanup
 	Attempts     int           `json:"attempts,omitempty"`
 	LastError    string        `json:"last_error,omitempty"`
+	// MembersOnly marks a video only the channel's paying members can watch.
+	// A failed one is never retried by the scheduler; only the user can
+	// (after adding a member's cookies, from the settings page).
+	MembersOnly bool `json:"members_only,omitempty"`
 }
+
+// BlockedMembersOnly reports whether the episode failed because it is
+// members-only, which the scheduler leaves alone.
+func (e Episode) BlockedMembersOnly() bool { return e.Status == StatusFailed && e.MembersOnly }
 
 // FeedMeta is cache-only information about a feed; losing it is harmless.
 type FeedMeta struct {

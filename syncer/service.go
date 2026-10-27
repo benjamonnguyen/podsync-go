@@ -409,7 +409,7 @@ func (s *Service) listAndEnqueue(ref feedRef) []*job {
 			continue
 		}
 		if known, ok := s.lib.Episode(ref.id, ref.format, ep.ID); ok {
-			retry := known.Status == podsync.StatusFailed && known.Attempts < MaxAttempts
+			retry := known.Status == podsync.StatusFailed && !known.MembersOnly && known.Attempts < MaxAttempts
 			if !retry {
 				continue
 			}
@@ -463,6 +463,29 @@ func (s *Service) RequestDownload(feedID, format string, ep podsync.EpisodeInfo)
 	}
 	s.enqueue(feedRef{feedID, format}, ep, true)
 	return nil
+}
+
+// RetryMembersOnly queues every members-only episode of a feed that failed
+// (the scheduler never retries those), as if never tried: the user has added
+// cookies that may belong to a member. It returns how many it queued.
+func (s *Service) RetryMembersOnly(feedID, format string) (int, error) {
+	if _, ok := s.cfg.Get().Feed(feedID, format); !ok {
+		return 0, podsync.NotFound("no such feed %q", feedID)
+	}
+	n := 0
+	for _, ep := range s.lib.Episodes(feedID, format) {
+		if !ep.BlockedMembersOnly() {
+			continue
+		}
+		ep.Attempts = 0
+		_ = s.lib.PutEpisode(feedID, format, ep)
+		s.enqueue(feedRef{feedID, format}, podsync.EpisodeInfo{
+			ID: ep.ID, Title: ep.Title, URL: ep.URL, Thumbnail: ep.Thumbnail, Published: ep.Published,
+			DurationSec: ep.DurationSec, Channel: ep.Channel, ViewCount: ep.ViewCount, MembersOnly: true,
+		}, false)
+		n++
+	}
+	return n, nil
 }
 
 func (s *Service) enqueue(ref feedRef, ep podsync.EpisodeInfo, manual bool) *job {
@@ -558,13 +581,14 @@ func (s *Service) download(j *job) {
 		Published: res.Episode.Published, DurationSec: res.Episode.DurationSec,
 		Channel: firstNonEmpty(res.Episode.Channel, j.ep.Channel), ViewCount: maxInt64(res.Episode.ViewCount, j.ep.ViewCount), Height: res.Episode.Height,
 		Status: podsync.StatusDownloaded, File: res.File, Size: res.Size,
-		DownloadedAt: &now, Manual: manual,
+		DownloadedAt: &now, Manual: manual, MembersOnly: j.ep.MembersOnly,
 	}
 	if ep.Published.IsZero() {
 		ep.Published = now
 	}
-	if prev, ok := s.lib.Episode(j.feedID, j.format, j.ep.ID); ok && prev.Manual {
-		ep.Manual = true
+	if prev, ok := s.lib.Episode(j.feedID, j.format, j.ep.ID); ok {
+		ep.Manual = ep.Manual || prev.Manual
+		ep.MembersOnly = ep.MembersOnly || prev.MembersOnly
 	}
 	if err := s.lib.PutEpisode(j.feedID, j.format, ep); err != nil {
 		s.recordFailure(j, f, err)
@@ -583,12 +607,19 @@ func (s *Service) recordFailure(j *job, f podsync.Feed, err error) {
 		attempts = 1
 	}
 	title := firstNonEmpty(prev.Title, j.ep.Title, j.ep.ID)
+	membersOnly := errors.Is(err, podsync.ErrMembersOnly)
 	_ = s.lib.PutEpisode(j.feedID, j.format, podsync.Episode{
 		ID: j.ep.ID, Title: title, URL: firstNonEmpty(prev.URL, j.ep.URL), Thumbnail: firstNonEmpty(prev.Thumbnail, j.ep.Thumbnail),
 		Channel: firstNonEmpty(prev.Channel, j.ep.Channel), ViewCount: maxInt64(prev.ViewCount, j.ep.ViewCount),
-		Published: prev.Published, DurationSec: maxInt(prev.DurationSec, j.ep.DurationSec),
+		Published: firstNonZero(prev.Published, j.ep.Published), DurationSec: maxInt(prev.DurationSec, j.ep.DurationSec),
 		Status: podsync.StatusFailed, Attempts: attempts, LastError: err.Error(), Manual: j.manual || prev.Manual,
+		MembersOnly: membersOnly,
 	})
+	if membersOnly {
+		// Expected, not a problem to report: the row shows it, and it is not retried.
+		s.clearFailure(j.feedID, j.format, j.ep.ID)
+		return
+	}
 	key := refKey(j.feedID, j.format)
 	s.mu.Lock()
 	if s.failures[key] == nil {
@@ -690,6 +721,15 @@ func firstNonEmpty(ss ...string) string {
 		}
 	}
 	return ""
+}
+
+func firstNonZero(ts ...time.Time) time.Time {
+	for _, t := range ts {
+		if !t.IsZero() {
+			return t
+		}
+	}
+	return time.Time{}
 }
 
 func maxInt64(a, b int64) int64 {

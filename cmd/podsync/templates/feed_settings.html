@@ -1,5 +1,5 @@
 {{define "content"}}
-<p><a href="/feed/{{.F.ID}}/{{.F.CurrentFormat}}">← {{.F.Name}}</a></p>
+<p><a class="back" href="/feed/{{.F.ID}}/{{.F.CurrentFormat}}">← {{.F.Name}}</a></p>
 <h1>Feed settings</h1>
 {{if .Flash}}<div class="notice ok">{{.Flash}}</div>{{end}}
 {{if .Err}}<div class="notice err"><strong>Not saved.</strong><pre>{{.Err}}</pre></div>{{end}}

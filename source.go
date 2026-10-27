@@ -40,9 +40,10 @@ type EpisodeInfo struct {
 	DurationSec int       `json:"duration_sec,omitempty"`
 	Channel     string    `json:"channel,omitempty"` // uploader; useful for playlists that mix channels
 	ViewCount   int64     `json:"view_count,omitempty"`
-	Height      int       `json:"height,omitempty"`      // video height once downloaded; 0 for audio/unknown
-	IsLive      bool      `json:"is_live,omitempty"`     // live or upcoming stream; cannot be downloaded yet
-	Unavailable bool      `json:"unavailable,omitempty"` // private/deleted placeholder entries
+	Height      int       `json:"height,omitempty"`       // video height once downloaded; 0 for audio/unknown
+	IsLive      bool      `json:"is_live,omitempty"`      // live or upcoming stream; cannot be downloaded yet
+	Unavailable bool      `json:"unavailable,omitempty"`  // private/deleted placeholder entries
+	MembersOnly bool      `json:"members_only,omitempty"` // only the channel's paying members can watch it
 }
 
 type DownloadOptions struct {

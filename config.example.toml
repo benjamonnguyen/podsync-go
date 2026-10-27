@@ -4,8 +4,8 @@
 # comments, so keep this example file for reference instead of annotating your live one.
 #
 # Everything about how the service is deployed (ports, the public address, the data
-# directory, the yt-dlp cookies file) is a flag or environment variable instead, not
-# part of this file. See compose.example.yaml for the full list, or run `podsync -help`.
+# directory) is a flag or environment variable instead, not part of this file. YouTube
+# cookies are uploaded on the Settings page and kept in cookies.txt next to this file. See compose.example.yaml for the full list, or run `podsync -help`.
 
 [download]
 # Maximum simultaneous downloads (1-16).

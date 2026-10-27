@@ -229,6 +229,40 @@ func TestFailureRetryBannerAndManualReset(t *testing.T) {
 	}
 }
 
+func TestMembersOnlyFlaggedNotRetriedUntilAsked(t *testing.T) {
+	eps := mock.Episodes(2)
+	eps[0].MembersOnly = true
+	e := setup(t, eps, nil)
+	e.src.DownloadErr["ep00"] = fmt.Errorf("%w: join this channel", podsync.ErrMembersOnly)
+	e.svc.PullFeed("UC1", "audio")
+	ep, _ := e.lib.Episode("UC1", "audio", "ep00")
+	if !ep.BlockedMembersOnly() || ep.Title != "Episode 0" {
+		t.Fatalf("members-only failure must be flagged in the sidecar: %+v", ep)
+	}
+	if iss := e.st.Active(); len(iss) != 0 {
+		t.Fatalf("a members-only video is not a problem to report: %+v", iss)
+	}
+	e.svc.PullFeed("UC1", "audio")
+	if n := e.src.DownloadCount("ep00"); n != 1 {
+		t.Fatalf("members-only episodes must not be retried by the scheduler, tried %d times", n)
+	}
+
+	// The user adds a member's cookies and asks for a retry: it is tried once
+	// more, as a scheduled (not manual) download, and keeps the flag.
+	delete(e.src.DownloadErr, "ep00")
+	if err := e.svc.Pull(context.Background(), podsync.PullRequest{Feed: "UC1", Format: "audio", RetryMembersOnly: true}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		ep, _ := e.lib.Episode("UC1", "audio", "ep00")
+		return e.svc.JobState("UC1", "audio", "ep00") == "" && ep.Status == podsync.StatusDownloaded
+	})
+	ep, _ = e.lib.Episode("UC1", "audio", "ep00")
+	if ep.Manual || !ep.MembersOnly || ep.BlockedMembersOnly() {
+		t.Fatalf("retried members-only download: %+v", ep)
+	}
+}
+
 func TestListFailureReportedThenCleared(t *testing.T) {
 	e := setup(t, mock.Episodes(2), nil)
 	e.src.ListErr = errors.New("HTTP Error 429")

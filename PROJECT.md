@@ -144,14 +144,15 @@ stay thin.
 
 ### 4.2 YouTube adapter
 
-- Wraps `yt-dlp` as a subprocess (JSON output via `--dump-json` /
-  `--flat-playlist` for listing, normal invocation for download), rather than
-  reimplementing extraction. Avoids an official API key entirely.
-- Playlist/channel listing uses `--flat-playlist --dump-single-json` with
-  `--playlist-start`/`--playlist-end` derived from the `offset`/`limit` passed
-  to `ListEpisodes`, so each call only touches the requested window; full
-  metadata fetch happens lazily per-episode when first downloaded (upload
-  date, description, resolution). The flat listing already carries `duration`.
+- Listing and resolving go through the official YouTube Data API v3
+  (`youtube/api.go`, a key in `PODSYNC_YOUTUBE_API_KEY`); downloading and
+  channel name search wrap `yt-dlp` as a subprocess.
+- A channel is listed from its uploads playlist (`UU` + the channel ID's tail,
+  so a configured channel ID costs no lookup; a handle is looked up once and
+  cached). `ListEpisodes` pages `playlistItems` (50 per call) up to
+  `offset+limit` and adds one `videos` call per 50 episodes for duration, live
+  status, views and publish date. A reversed (oldest-first) playlist is read to
+  its end and turned around. Every call is 1 quota unit.
 - Shorts have no special handling: the `min_duration` filter (default 61s)
   skips anything shorter, using the listing's duration.
 - Resolution cap enforced via yt-dlp format selector
@@ -252,7 +253,7 @@ data_dir/
   episode library state (download status, manual flag) is
   deliberately *not* here — see §4.3. Shape (illustrative):
 
-Deployment settings (the listen address, `base_url`, `data_dir`, the yt-dlp cookies file, the web
+Deployment settings (the listen address, `base_url`, `data_dir`, the web
 UI toggle and its login) are environment variables, not in this file (there are no command-line
 flags). config.toml holds only feeds and what the web UI edits:
 
@@ -388,7 +389,7 @@ no separate backfill mode.
   validates and writes config.toml, then applies it to the running sync loop directly (an
   in-process call, not a network request). Everything that belongs to whoever runs the
   service — the public address (`base_url`), the listen address, the data directory, the
-  cookies file, the yt-dlp binary to use and the web UI's login — is an environment variable
+  yt-dlp binary to use and the web UI's login — is an environment variable
   (`-listen`/`-config` also accept a flag), not in config.toml at all, so the page doesn't show it
   and a forged form post has nothing to repoint. Per-feed overrides are edited on the feed's own
   settings page and written to that feed's entry in `[[feeds]]`.
@@ -411,11 +412,12 @@ Playlists are never searched for; a playlist is added by pasting its link, becau
 name search cannot tell playlists apart reliably. A bare word is a name, not a handle:
 `@` is the hint that makes it one.
 
-- **Resolving** passes the reference to `yt-dlp --flat-playlist -J` and reads the
-  canonical `channel_id` (so a handle is stored as a stable `UC…` ID, since handles can
-  change) plus name, avatar, handle and subscriber count. No API key. A reference that
-  does not resolve is reported to the user as invalid input and does not raise a status
-  banner.
+- **Resolving** looks the reference up through the YouTube Data API (`channels.list` by
+  ID, handle or username; `playlists.list`; `videos.list` for a video link's channel) and
+  stores the canonical `UC…` ID (handles can change) plus name, avatar, handle and
+  subscriber count. Legacy `/c/` custom URLs have no API lookup and are turned into a
+  channel ID with yt-dlp first. A reference that does not resolve is reported to the
+  user as invalid input and does not raise a status banner.
 - **Searching** feeds YouTube's own search-results URL with the *channel* type filter
   (`https://www.youtube.com/results?search_query=<term>&sp=EgIQAg%253D%253D`) to
   yt-dlp, which returns channel entries (id, name, handle, subscriber count, avatar). The

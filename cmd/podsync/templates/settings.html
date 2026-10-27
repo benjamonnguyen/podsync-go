@@ -29,6 +29,29 @@
   </fieldset>
   <div class="actions"><button class="btn primary" type="submit">Save and apply</button></div>
 </form>
+<form method="post" action="/settings/cookies" enctype="multipart/form-data" class="settings" id="cookies">
+  <fieldset>
+    <legend>YouTube cookies</legend>
+    <p class="muted">yt-dlp signs in to YouTube with these. They're needed for members-only videos (use the cookies of an account that's a member) and when YouTube asks to “confirm you're not a bot”. Export them as a Netscape-format <code>cookies.txt</code> from a browser signed in to YouTube (<a href="https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp" target="_blank" rel="noopener noreferrer">how</a>). They give access to that account, so a separate account is safer.</p>
+    {{if .Cookies.Set}}<p>cookies.txt added {{ago .Cookies.At}}.</p>{{else}}<p class="muted">No cookies added.</p>{{end}}
+    <label>{{if .Cookies.Set}}Replace with another cookies.txt{{else}}cookies.txt{{end}} <input type="file" name="cookies" accept=".txt,text/plain" required></label>
+  </fieldset>
+  <div class="actions"><button class="btn primary" type="submit">Upload cookies</button>{{if .Cookies.Set}} <button class="btn danger" type="submit" formaction="/settings/cookies/delete" formenctype="application/x-www-form-urlencoded" formnovalidate>Remove cookies</button>{{end}}</div>
+</form>
+{{with .MembersFeeds}}
+<form method="post" action="/settings/members-retry" class="settings" id="members">
+  <fieldset>
+    <legend>Members-only videos</legend>
+    {{if $.Cookies.Set}}
+    <p class="muted">These feeds have members-only videos that were skipped. Tick the channels whose membership the cookies' account has, to try their videos again. Any that still can't be downloaded stay skipped.</p>
+    {{range .}}<label class="check"><input type="checkbox" name="feed" value="{{.ID}}/{{.Format}}"> {{.Name}} <span class="muted">({{.Format}} · {{count .Count "video" "videos"}})</span></label>{{end}}
+    {{else}}
+    <p class="muted">Skipped because only the channel's members can watch them: {{range $i, $f := .}}{{if $i}}, {{end}}{{$f.Name}} ({{count $f.Count "video" "videos"}}){{end}}. If you're a member, add your cookies above to try them again.</p>
+    {{end}}
+  </fieldset>
+  {{if $.Cookies.Set}}<div class="actions"><button class="btn primary" type="submit">Retry selected</button></div>{{end}}
+</form>
+{{end}}
 <p class="muted">Config file: <code>{{.ConfigPath}}</code></p>
 <p class="muted">OPML export of all subscriptions: <a href="/opml.xml">/opml.xml</a> (served without login, like feeds and media; each feed can opt out on its own settings page)</p>
 {{end}}

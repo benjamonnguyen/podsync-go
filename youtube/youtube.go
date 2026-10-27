@@ -1,4 +1,6 @@
-// Package youtube implements podsync.Source by shelling out to yt-dlp.
+// Package youtube implements podsync.Source: feeds are resolved and listed
+// through the YouTube Data API v3 (api.go); downloads and channel name search
+// shell out to yt-dlp.
 package youtube
 
 import (
@@ -7,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
@@ -29,10 +32,16 @@ var (
 
 // Settings are read on every call so UI changes apply without a restart.
 type Settings struct {
+	// CookiesFile is a Netscape-format cookies.txt passed to yt-dlp; empty
+	// when the user has not added one.
 	CookiesFile string
 	// BinPath is the yt-dlp executable to run: a bare name resolved on PATH
 	// (the default, "yt-dlp") or an absolute/relative path. Empty means the default.
 	BinPath string
+	// APIKey is the YouTube Data API v3 key used for listing and resolving.
+	APIKey string
+	// APIBase overrides DefaultAPIBase (tests). Empty means the default.
+	APIBase string
 	// MP3Encoding re-encodes audio downloads to mp3 instead of m4a. On by
 	// default at the cmd/podsync level (PODSYNC_MP3_ENCODING_DISABLED turns it
 	// off); this field itself has no default, the caller always sets it.
@@ -45,8 +54,10 @@ const DefaultBinPath = "yt-dlp"
 
 type YouTube struct {
 	settings func() Settings
+	http     *http.Client
 
 	mu         sync.Mutex
+	uploads    map[string]string // channel lookup -> uploads playlist ID
 	cache      map[string]cachedSearch
 	searchHold time.Time
 	now        func() time.Time
@@ -58,7 +69,7 @@ type cachedSearch struct {
 }
 
 func New(settings func() Settings) *YouTube {
-	return &YouTube{settings: settings, cache: map[string]cachedSearch{}, now: time.Now}
+	return &YouTube{settings: settings, http: &http.Client{}, uploads: map[string]string{}, cache: map[string]cachedSearch{}, now: time.Now}
 }
 
 func (y *YouTube) Kind() string { return Kind }
@@ -110,12 +121,22 @@ func (y *YouTube) run(ctx context.Context, timeout time.Duration, args ...string
 		if ctx.Err() != nil {
 			return nil, &ytdlpError{Message: "yt-dlp timed out or was cancelled", Err: ctx.Err()}
 		}
+		if IsMembersOnlyMessage(stderr.String()) {
+			err = fmt.Errorf("%w: %w", podsync.ErrMembersOnly, err)
+		}
 		return nil, &ytdlpError{Message: friendlyError(stderr.String(), err), Err: err}
 	}
 	return stdout.Bytes(), nil
 }
 
 var errLine = regexp.MustCompile(`(?m)^ERROR:\s*(.+)$`)
+
+// IsMembersOnlyMessage reports whether yt-dlp output (or an error message
+// stored from it) says the video is for the channel's members only.
+func IsMembersOnlyMessage(s string) bool {
+	low := strings.ToLower(s)
+	return strings.Contains(low, "available to this channel's members") || strings.Contains(low, "members-only content")
+}
 
 // friendlyError reduces yt-dlp's stderr to one useful line plus a hint.
 func friendlyError(stderr string, err error) string {
@@ -135,7 +156,7 @@ func friendlyError(stderr string, err error) string {
 	low := strings.ToLower(msg)
 	switch {
 	case strings.Contains(low, "sign in to confirm") || strings.Contains(low, "not a bot"):
-		msg += " — YouTube is asking for a login; set PODSYNC_COOKIES_FILE to a cookies.txt exported from a signed-in browser"
+		msg += " — YouTube is asking for a login; add a cookies.txt exported from a signed-in browser on the Settings page"
 	case strings.Contains(low, "http error 429") || strings.Contains(low, "too many requests"):
 		msg += " — rate limited by YouTube; it will be retried on the next update"
 	case strings.Contains(low, "unable to extract") || strings.Contains(low, "please report this issue"):
@@ -281,14 +302,9 @@ func isDirectReference(q string) bool {
 func channelURL(id string) string  { return "https://www.youtube.com/channel/" + id + "/videos" }
 func playlistURL(id string) string { return "https://www.youtube.com/playlist?list=" + id }
 
-// feedURL is what gets passed to yt-dlp: a configured feed's stored URL when
-// it has one, else reconstructed from its ID and Kind (Resolve's own results,
-// and callers that never had a URL to begin with). A channel URL is forced
-// onto its "/videos" tab even if the stored URL lacks it (e.g. a bare
-// youtube.com/channel/<id> or youtube.com/@handle pasted by hand): without
-// that tab, --flat-playlist lists the channel's own playlists/tabs instead of
-// its uploads, so every entry is filtered out as not a video id and the feed
-// silently never finds anything to download.
+// feedURL is a feed's link: a configured feed's stored URL when it has one,
+// else reconstructed from its ID and Kind. ListEpisodes finds the channel in
+// it; a channel URL is normalized onto its "/videos" tab.
 func feedURL(f podsync.FeedInfo) string {
 	if f.URL == "" {
 		if f.Kind == podsync.FeedPlaylist {
@@ -369,26 +385,29 @@ func (t thumbs) avatar() string {
 }
 
 type ytEntry struct {
-	ID          string    `json:"id"`
-	Title       string    `json:"title"`
-	URL         string    `json:"url"`
-	Description string    `json:"description"`
-	Duration    float64   `json:"duration"`
-	ViewCount   float64   `json:"view_count"`
-	Height      float64   `json:"height"`
-	LiveStatus  string    `json:"live_status"`
-	Timestamp   float64   `json:"timestamp"`
-	UploadDate  string    `json:"upload_date"`
-	Channel     string    `json:"channel"`
-	ChannelID   string    `json:"channel_id"`
-	Uploader    string    `json:"uploader"`
-	UploaderID  string    `json:"uploader_id"`
-	Followers   float64   `json:"channel_follower_count"`
-	Thumbnail   string    `json:"thumbnail"`
-	Thumbnails  thumbs    `json:"thumbnails"`
-	WebpageURL  string    `json:"webpage_url"`
-	Type        string    `json:"_type"`
-	Entries     []ytEntry `json:"entries"`
+	ID          string  `json:"id"`
+	Title       string  `json:"title"`
+	URL         string  `json:"url"`
+	Description string  `json:"description"`
+	Duration    float64 `json:"duration"`
+	ViewCount   float64 `json:"view_count"`
+	Height      float64 `json:"height"`
+	LiveStatus  string  `json:"live_status"`
+	Timestamp   float64 `json:"timestamp"`
+	UploadDate  string  `json:"upload_date"`
+	Channel     string  `json:"channel"`
+	ChannelID   string  `json:"channel_id"`
+	Uploader    string  `json:"uploader"`
+	UploaderID  string  `json:"uploader_id"`
+	Followers   float64 `json:"channel_follower_count"`
+	Thumbnail   string  `json:"thumbnail"`
+	Thumbnails  thumbs  `json:"thumbnails"`
+	// Availability is set on flat listing entries too: "subscriber_only"
+	// marks a members-only video.
+	Availability string    `json:"availability"`
+	WebpageURL   string    `json:"webpage_url"`
+	Type         string    `json:"_type"`
+	Entries      []ytEntry `json:"entries"`
 }
 
 func parseJSON(out []byte, v any) error {
@@ -412,116 +431,117 @@ func publishedOf(e ytEntry) time.Time {
 
 // ---- Resolve ----
 
+// Resolve looks a channel, playlist or video link (the video's channel) up
+// through the YouTube Data API.
 func (y *YouTube) Resolve(ctx context.Context, ref string) (podsync.FeedInfo, error) {
 	u, kind, err := parseRef(ref)
 	if err != nil {
 		return podsync.FeedInfo{}, err
 	}
-	if kind == refVideo {
-		out, err := y.run(ctx, resolveTimeout, append(y.baseArgs(), "-J", "--no-playlist", "--skip-download", "--", u)...)
+	switch kind {
+	case refPlaylist:
+		pu, _ := url.Parse(u)
+		var r apiList[apiPlaylist]
+		if err := y.apiGet(ctx, "playlists", url.Values{"part": {"snippet"}, "id": {pu.Query().Get("list")}}, &r); err != nil {
+			return podsync.FeedInfo{}, err
+		}
+		if len(r.Items) == 0 {
+			return podsync.FeedInfo{}, podsync.NotFound("no YouTube playlist found for that link (it may be private)")
+		}
+		return playlistInfo(r.Items[0]), nil
+	case refVideo:
+		vu, _ := url.Parse(u)
+		vids, err := y.videos(ctx, []string{vu.Query().Get("v")})
 		if err != nil {
 			return podsync.FeedInfo{}, err
 		}
-		var v ytEntry
-		if err := parseJSON(out, &v); err != nil {
-			return podsync.FeedInfo{}, err
+		for _, v := range vids {
+			if channelIDRe.MatchString(v.Snippet.ChannelID) {
+				u = channelURL(v.Snippet.ChannelID)
+			}
 		}
-		if !channelIDRe.MatchString(v.ChannelID) {
+		if len(vids) == 0 || u == vu.String() {
 			return podsync.FeedInfo{}, errors.New("could not determine the channel of that video")
 		}
-		u = channelURL(v.ChannelID)
 	}
-	out, err := y.run(ctx, resolveTimeout, append(y.baseArgs(), "-J", "--flat-playlist", "--playlist-end", "1", "--", u)...)
+	l, err := y.channelLookupOf(ctx, u)
 	if err != nil {
 		return podsync.FeedInfo{}, err
 	}
-	var p ytEntry
-	if err := parseJSON(out, &p); err != nil {
+	ch, err := y.channel(ctx, l)
+	if err != nil {
 		return podsync.FeedInfo{}, err
 	}
-	if p.ID == "" {
-		return podsync.FeedInfo{}, errors.New("yt-dlp returned no feed id")
-	}
-	info := podsync.FeedInfo{Source: Kind, ID: p.ID, Description: strings.TrimSpace(p.Description), ImageURL: p.Thumbnails.avatar()}
-	if channelIDRe.MatchString(p.ID) {
-		info.Kind = podsync.FeedChannel
-		info.URL = channelURL(p.ID)
-		info.Subscribers = int64(p.Followers)
-		if strings.HasPrefix(p.UploaderID, "@") {
-			info.Handle = p.UploaderID
-		}
-		info.Name = firstNonEmpty(p.Channel, p.Uploader, strings.TrimSuffix(p.Title, " - Videos"), p.ID)
-	} else {
-		info.Kind = podsync.FeedPlaylist
-		info.URL = playlistURL(p.ID)
-		info.Name = firstNonEmpty(p.Title, p.ID)
-	}
-	return info, nil
-}
-
-func firstNonEmpty(ss ...string) string {
-	for _, s := range ss {
-		if strings.TrimSpace(s) != "" {
-			return strings.TrimSpace(s)
-		}
-	}
-	return ""
+	return channelInfo(ch), nil
 }
 
 // ---- ListEpisodes ----
 
+// ListEpisodes returns the window [offset, offset+limit) of a feed, newest
+// first, from the YouTube Data API: a channel's uploads playlist or the
+// playlist itself, plus one videos call per 50 episodes for durations, live
+// status and view counts. A reversed (oldest-first) playlist is read to its
+// end and turned around, so offset 0 is still its newest addition.
 func (y *YouTube) ListEpisodes(ctx context.Context, feed podsync.FeedInfo, offset, limit int) ([]podsync.EpisodeInfo, error) {
 	if limit < 1 {
 		return nil, nil
 	}
-	if offset < 0 {
-		offset = 0
-	}
-	args := append(y.baseArgs(), "-J", "--flat-playlist")
-	if feed.Reverse {
-		// feed.Reverse means the playlist's native order is oldest-first (a
-		// course/series), and we want newest-first. --playlist-start/-end index
-		// from that native order, so combining them with --playlist-reverse would
-		// just reverse the display order of the OLDEST window, not select the
-		// newest one. A negative --playlist-items slice indexes from the end
-		// instead, which is exactly "newest first" here; yt-dlp clamps it like a
-		// Python slice when the window runs past either end of the playlist.
-		args = append(args, "--playlist-reverse", fmt.Sprintf("--playlist-items=%d:%d", -(offset+limit), -(offset+1)))
-	} else {
-		args = append(args, "--playlist-start", fmt.Sprint(offset+1), "--playlist-end", fmt.Sprint(offset+limit))
-	}
-	args = append(args, "--", feedURL(feed))
-	out, err := y.run(ctx, listTimeout, args...)
+	offset = max(offset, 0)
+	playlistID, err := y.listPlaylistID(ctx, feed)
 	if err != nil {
 		return nil, err
 	}
-	var p ytEntry
-	if err := parseJSON(out, &p); err != nil {
+	want := offset + limit
+	if feed.Reverse {
+		want = -1
+	}
+	items, err := y.playlistItems(ctx, playlistID, want)
+	if err != nil {
 		return nil, err
 	}
-	eps := make([]podsync.EpisodeInfo, 0, len(p.Entries))
-	for _, e := range p.Entries {
-		if e.ID == "" || !videoIDRe.MatchString(e.ID) {
+	if feed.Reverse {
+		for i, j := 0, len(items)-1; i < j; i, j = i+1, j-1 {
+			items[i], items[j] = items[j], items[i]
+		}
+	}
+	if offset >= len(items) {
+		return []podsync.EpisodeInfo{}, nil
+	}
+	items = items[offset:min(offset+limit, len(items))]
+	ids := make([]string, 0, len(items))
+	for _, it := range items {
+		if videoIDRe.MatchString(it.ContentDetails.VideoID) {
+			ids = append(ids, it.ContentDetails.VideoID)
+		}
+	}
+	details, err := y.videos(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	eps := make([]podsync.EpisodeInfo, 0, len(items))
+	for _, it := range items {
+		if !videoIDRe.MatchString(it.ContentDetails.VideoID) {
 			continue
 		}
-		ep := podsync.EpisodeInfo{
-			ID:          e.ID,
-			Title:       strings.TrimSpace(e.Title),
-			URL:         "https://www.youtube.com/watch?v=" + e.ID,
-			Published:   publishedOf(e),
-			DurationSec: int(e.Duration),
-			Description: e.Description,
-			Channel:     firstNonEmpty(e.Channel, e.Uploader),
-			ViewCount:   int64(e.ViewCount),
-			IsLive:      e.LiveStatus == "is_live" || e.LiveStatus == "is_upcoming" || e.LiveStatus == "post_live",
-			Unavailable: e.Title == "[Private video]" || e.Title == "[Deleted video]",
-		}
-		if n := len(e.Thumbnails); n > 0 {
-			ep.Thumbnail = absURL(e.Thumbnails[n-1].URL)
-		}
-		eps = append(eps, ep)
+		v, ok := details[it.ContentDetails.VideoID]
+		ok = ok && it.Status.PrivacyStatus != "private"
+		eps = append(eps, episodeInfo(it, v, ok))
 	}
 	return eps, nil
+}
+
+// listPlaylistID is the playlist a feed's episodes are read from.
+func (y *YouTube) listPlaylistID(ctx context.Context, feed podsync.FeedInfo) (string, error) {
+	if feed.Kind == podsync.FeedPlaylist {
+		if playlistIDRe.MatchString(feed.ID) {
+			return feed.ID, nil
+		}
+		if pu, err := url.Parse(feed.URL); err == nil && playlistIDRe.MatchString(pu.Query().Get("list")) {
+			return pu.Query().Get("list"), nil
+		}
+		return "", podsync.Invalid("no playlist ID in %q", feed.URL)
+	}
+	return y.uploadsPlaylist(ctx, feedURL(feed))
 }
 
 // ---- Find and search ----
@@ -537,6 +557,9 @@ func (y *YouTube) Find(ctx context.Context, query string) ([]podsync.FeedInfo, e
 	}
 	if isDirectReference(query) {
 		info, err := y.Resolve(ctx, query)
+		if errors.Is(err, podsync.ErrNotFound) {
+			return nil, podsync.Invalid("%s", err.Error()) // a link that leads nowhere is the user's input
+		}
 		if err != nil {
 			return nil, podsync.InvalidErr(err)
 		}
@@ -656,6 +679,10 @@ func (y *YouTube) Download(ctx context.Context, ep podsync.EpisodeInfo, opts pod
 	if !videoIDRe.MatchString(ep.ID) {
 		return podsync.DownloadResult{}, fmt.Errorf("invalid video id %q", ep.ID)
 	}
+	if ep.MembersOnly && y.settings().CookiesFile == "" {
+		// Without a member's cookies this cannot succeed; don't ask YouTube.
+		return podsync.DownloadResult{}, fmt.Errorf("%w: only the channel's members can watch this; add a member's cookies.txt on the Settings page to download it", podsync.ErrMembersOnly)
+	}
 	if err := os.MkdirAll(destDir, 0o755); err != nil {
 		return podsync.DownloadResult{}, err
 	}
@@ -756,4 +783,13 @@ func cleanupPartials(dir, id string) {
 	for _, m := range matches {
 		_ = os.Remove(m)
 	}
+}
+
+func firstNonEmpty(ss ...string) string {
+	for _, s := range ss {
+		if strings.TrimSpace(s) != "" {
+			return strings.TrimSpace(s)
+		}
+	}
+	return ""
 }

@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -64,7 +63,7 @@ func TestThumbsAndAvatar(t *testing.T) {
 
 func TestFriendlyError(t *testing.T) {
 	msg := friendlyError("WARNING: x\nERROR: [youtube] abc: Sign in to confirm you’re not a bot\n", fmt.Errorf("exit 1"))
-	if !strings.Contains(msg, "PODSYNC_COOKIES_FILE") {
+	if !strings.Contains(msg, "cookies.txt") || !strings.Contains(msg, "Settings") {
 		t.Fatalf("expected cookies hint: %s", msg)
 	}
 	if got := friendlyError("", fmt.Errorf("exit status 2")); got != "exit status 2" {
@@ -103,24 +102,6 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-func fakeEntries(n int) []map[string]any {
-	var es []map[string]any
-	for i := 1; i <= n; i++ {
-		id := fmt.Sprintf("vid%08d", i)
-		e := map[string]any{"id": id, "title": "Episode " + strconv.Itoa(i), "url": "https://www.youtube.com/watch?v=" + id, "duration": 600, "channel": "Some Channel", "view_count": 1000 + i}
-		switch i {
-		case 2:
-			e["duration"] = 30
-		case 3:
-			e["live_status"] = "is_upcoming"
-		case 4:
-			e["title"] = "[Private video]"
-		}
-		es = append(es, e)
-	}
-	return es
-}
-
 func fakeYtDlp(args []string) int {
 	has := func(s string) bool {
 		for _, a := range args {
@@ -134,22 +115,6 @@ func fakeYtDlp(args []string) int {
 		for i, a := range args {
 			if a == flag && i+1 < len(args) {
 				return args[i+1]
-			}
-		}
-		return ""
-	}
-	hasPrefix := func(prefix string) bool {
-		for _, a := range args {
-			if strings.HasPrefix(a, prefix) {
-				return true
-			}
-		}
-		return false
-	}
-	valPrefix := func(prefix string) string {
-		for _, a := range args {
-			if strings.HasPrefix(a, prefix) {
-				return strings.TrimPrefix(a, prefix)
 			}
 		}
 		return ""
@@ -169,67 +134,19 @@ func fakeYtDlp(args []string) int {
 			{"id": "UCXuqSBlHAE6Xw-yeJA0Tunw", "title": "dupe"},
 			{"id": "dQw4w9WgXcQ", "title": "a video, not a channel"},
 		}})
-	case has("--skip-download"):
-		json.NewEncoder(os.Stdout).Encode(map[string]any{"id": "jNQXAC9IVRw", "channel_id": "UCXuqSBlHAE6Xw-yeJA0Tunw"})
-	case has("--flat-playlist") && strings.Contains(last, "list=BAD"):
-		fmt.Fprintln(os.Stderr, "ERROR: [youtube:tab] The playlist does not exist.")
-		return 1
-	case has("--flat-playlist") && has("--playlist-start"):
-		// The non-reverse path: --playlist-start/-end index the playlist's native
-		// order directly (1-indexed, inclusive), same as real yt-dlp.
-		start, _ := strconv.Atoi(val("--playlist-start"))
-		end, _ := strconv.Atoi(val("--playlist-end"))
-		all := fakeEntries(12)
-		if end > len(all) {
-			end = len(all)
-		}
-		var page []map[string]any
-		if start <= end {
-			page = all[start-1 : end]
-		}
-		json.NewEncoder(os.Stdout).Encode(map[string]any{"id": "UCXuqSBlHAE6Xw-yeJA0Tunw", "entries": page})
-	case has("--flat-playlist") && hasPrefix("--playlist-items="):
-		// The reverse path: a negative --playlist-items slice indexes from the end
-		// of the playlist's native order (Python-slice-like, clamped at either
-		// end); --playlist-reverse then only reverses the *selected* page's
-		// display order, same as real yt-dlp (verified against the real binary —
-		// it does NOT reverse the whole list before applying the slice).
-		items := valPrefix("--playlist-items=")
-		a, b, _ := strings.Cut(items, ":")
-		all := fakeEntries(12)
-		n := len(all)
-		toIdx := func(s string) int {
-			k, _ := strconv.Atoi(s)
-			if k < 0 {
-				return n + k
-			}
-			return k - 1
-		}
-		start, end := toIdx(a), toIdx(b)+1
-		if start < 0 {
-			start = 0
-		}
-		if end > n {
-			end = n
-		}
-		var page []map[string]any
-		if start < end {
-			page = append([]map[string]any(nil), all[start:end]...)
-		}
-		if has("--playlist-reverse") {
-			for i, j := 0, len(page)-1; i < j; i, j = i+1, j-1 {
-				page[i], page[j] = page[j], page[i]
-			}
-		}
-		json.NewEncoder(os.Stdout).Encode(map[string]any{"id": "UCXuqSBlHAE6Xw-yeJA0Tunw", "entries": page})
-	case has("--flat-playlist"):
+	case has("--flat-playlist"): // a /c/ custom URL being turned into a channel ID
 		json.NewEncoder(os.Stdout).Encode(map[string]any{
-			"id": "UCXuqSBlHAE6Xw-yeJA0Tunw", "channel": "Linus Tech Tips", "title": "Linus Tech Tips - Videos",
+			"id": "UCXuqSBlHAE6Xw-yeJA0Tunw", "channel_id": "UCXuqSBlHAE6Xw-yeJA0Tunw", "channel": "Linus Tech Tips", "title": "Linus Tech Tips - Videos",
 			"thumbnails": []map[string]any{{"url": "av", "id": "avatar_uncropped"}},
 		})
 	case has("--write-info-json"):
 		dir := val("-P")
 		id := strings.TrimPrefix(strings.SplitN(val("-o"), ".", 2)[0], "")
+		if os.Getenv("FAKE_FAIL") == "members" {
+			_ = os.WriteFile(os.Getenv("FAKE_COUNT_FILE"), []byte("x"), 0o644)
+			fmt.Fprintln(os.Stderr, "ERROR: [youtube] "+id+": This video is available to this channel's members on level: Bonus Videos! (or any higher level). Join this channel to get access to members-only content and other exclusive perks.")
+			return 1
+		}
 		if os.Getenv("FAKE_FAIL") == "1" {
 			_ = os.WriteFile(filepath.Join(dir, id+".mp4.part"), []byte("partial"), 0o644)
 			fmt.Fprintln(os.Stderr, "ERROR: [youtube] Video unavailable")
@@ -257,6 +174,12 @@ func fakeYtDlp(args []string) int {
 // can find the sentinel files it writes.
 func newFake(t *testing.T, env ...string) (*YouTube, string) {
 	t.Helper()
+	y, dir, _ := newFakeWithAPI(t, env...)
+	return y, dir
+}
+
+func newFakeWithAPI(t *testing.T, env ...string) (*YouTube, string, *fakeAPI) {
+	t.Helper()
 	dir := t.TempDir()
 	script := filepath.Join(dir, "yt-dlp")
 	body := "#!/bin/sh\nexport FAKE_YTDLP=1 FAKE_COUNT_FILE=" + filepath.Join(dir, "count") + "\n"
@@ -268,7 +191,8 @@ func newFake(t *testing.T, env ...string) (*YouTube, string) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	return New(func() Settings { return Settings{} }), dir
+	api := newFakeAPI(t)
+	return New(func() Settings { return Settings{APIKey: fakeKey, APIBase: api.srv.URL} }), dir, api
 }
 
 var feed = podsync.FeedInfo{Source: Kind, Kind: "channel", ID: "UCXuqSBlHAE6Xw-yeJA0Tunw"}
@@ -287,80 +211,137 @@ func TestCheckVersionAndMissingBinary(t *testing.T) {
 }
 
 func TestResolve(t *testing.T) {
+	ctx := context.Background()
 	y, _ := newFake(t)
-	info, err := y.Resolve(context.Background(), "@LinusTechTips")
-	if err != nil {
-		t.Fatal(err)
+	for _, ref := range []string{"@LinusTechTips", "UCXuqSBlHAE6Xw-yeJA0Tunw", "https://www.youtube.com/user/linustechtips", "https://www.youtube.com/c/LinusTechTips", "https://youtu.be/jNQXAC9IVRw"} {
+		info, err := y.Resolve(ctx, ref)
+		if err != nil {
+			t.Fatalf("%s: %v", ref, err)
+		}
+		if info.ID != "UCXuqSBlHAE6Xw-yeJA0Tunw" || info.Kind != "channel" || info.Name != "Linus Tech Tips" || info.ImageURL != "https://yt3/high.jpg" ||
+			info.Handle != "@LinusTechTips" || info.Subscribers != 16900000 || info.URL != "https://www.youtube.com/channel/UCXuqSBlHAE6Xw-yeJA0Tunw/videos" {
+			t.Fatalf("%s: %+v", ref, info)
+		}
 	}
-	if info.ID != "UCXuqSBlHAE6Xw-yeJA0Tunw" || info.Kind != "channel" || info.Name != "Linus Tech Tips" || info.ImageURL != "av" {
-		t.Fatalf("%+v", info)
+	pl, err := y.Resolve(ctx, "https://www.youtube.com/playlist?list=PLabcdefghijk")
+	if err != nil || pl.Kind != "playlist" || pl.ID != "PLabcdefghijk" || pl.Name != "A Course" || pl.URL != "https://www.youtube.com/playlist?list=PLabcdefghijk" {
+		t.Fatalf("playlist: %v %+v", err, pl)
 	}
-	if _, err := y.Resolve(context.Background(), "https://example.com/x"); err == nil {
+	if _, err := y.Resolve(ctx, "https://example.com/x"); err == nil {
 		t.Fatal("non-youtube host must be rejected")
 	}
 }
 
 func TestListEpisodesWindowAndFlags(t *testing.T) {
-	y, _ := newFake(t)
-	eps, err := y.ListEpisodes(context.Background(), feed, 0, 5)
+	ctx := context.Background()
+	y, _, api := newFakeWithAPI(t)
+	eps, err := y.ListEpisodes(ctx, feed, 0, 5)
 	if err != nil || len(eps) != 5 {
 		t.Fatalf("%v %d", err, len(eps))
+	}
+	if ids(eps) != "vid00000001,vid00000002,vid00000003,vid00000004,vid00000005" {
+		t.Fatalf("uploads are listed newest first: %s", ids(eps))
 	}
 	if eps[1].DurationSec != 30 || eps[0].DurationSec != 600 {
 		t.Fatalf("durations come from the listing (the minimum-duration filter uses them): %+v %+v", eps[0], eps[1])
 	}
-	if eps[0].Channel != "Some Channel" || eps[0].ViewCount != 1001 {
+	if eps[0].Channel != "Some Channel" || eps[0].ViewCount != 1001 || eps[0].Title != "Episode 1" || eps[0].Thumbnail != "https://i.ytimg.com/vi/vid00000001/maxres.jpg" ||
+		!eps[0].Published.Equal(time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)) {
 		t.Fatalf("listing metadata: %+v", eps[0])
 	}
-	if !eps[2].IsLive || !eps[3].Unavailable {
+	if !eps[2].IsLive || !eps[3].Unavailable || eps[0].IsLive || eps[0].Unavailable {
 		t.Fatalf("live/unavailable flags: %+v %+v", eps[2], eps[3])
 	}
-	next, _ := y.ListEpisodes(context.Background(), feed, 10, 5)
-	if len(next) != 2 || next[0].ID != "vid00000011" {
-		t.Fatalf("offset window: %+v", next)
+	if got := api.count("channels"); got != 0 {
+		t.Fatalf("a channel ID needs no lookup (uploads = UU + ID), made %d channels calls", got)
 	}
-	if past, err := y.ListEpisodes(context.Background(), feed, 50, 5); err != nil || len(past) != 0 {
+	// Pages are 5 long in the fake: offset 10 needs three pages and one videos call.
+	api.reset()
+	next, err := y.ListEpisodes(ctx, feed, 10, 5)
+	if err != nil || ids(next) != "vid00000011,vid00000012" {
+		t.Fatalf("offset window: %v %s", err, ids(next))
+	}
+	if api.count("playlistItems") != 3 || api.count("videos") != 1 {
+		t.Fatalf("calls: %v", api.calls)
+	}
+	if past, err := y.ListEpisodes(ctx, feed, 50, 5); err != nil || len(past) != 0 {
 		t.Fatalf("past end: %v %d", err, len(past))
+	}
+
+	// A handle is looked up once, then its uploads playlist is remembered.
+	api.reset()
+	byHandle := podsync.FeedInfo{Source: Kind, Kind: "channel", ID: "ltt", URL: "https://www.youtube.com/@LinusTechTips"}
+	for i := 0; i < 2; i++ {
+		if eps, err := y.ListEpisodes(ctx, byHandle, 0, 3); err != nil || len(eps) != 3 {
+			t.Fatalf("handle listing: %v %d", err, len(eps))
+		}
+	}
+	if api.count("channels") != 1 {
+		t.Fatalf("handle lookups: %v", api.calls)
 	}
 }
 
 // TestListEpisodesReverseForOldestFirstPlaylists covers playlist_sort =
-// "desc": a playlist whose natural order is oldest-first must have
-// --playlist-reverse passed so offset 0 is still its newest addition.
+// "desc": a playlist ordered oldest first is read to its end so offset 0 is
+// still its newest addition, and later pages keep going back in time.
 func TestListEpisodesReverseForOldestFirstPlaylists(t *testing.T) {
-	y, _ := newFake(t)
-	oldestFirst := podsync.FeedInfo{Source: Kind, Kind: podsync.FeedPlaylist, ID: "PLsomething", Reverse: true}
-	eps, err := y.ListEpisodes(context.Background(), oldestFirst, 0, 5)
-	if err != nil || len(eps) != 5 {
-		t.Fatalf("%v %d", err, len(eps))
+	ctx := context.Background()
+	y, _, api := newFakeWithAPI(t)
+	oldestFirst := podsync.FeedInfo{Source: Kind, Kind: podsync.FeedPlaylist, ID: "PLsomethingCourse", Reverse: true}
+	eps, err := y.ListEpisodes(ctx, oldestFirst, 0, 5)
+	if err != nil || ids(eps) != "vid00000012,vid00000011,vid00000010,vid00000009,vid00000008" {
+		t.Fatalf("Reverse should list the newest 5, newest first: %v %s", err, ids(eps))
 	}
-	if ids(eps) != "vid00000012,vid00000011,vid00000010,vid00000009,vid00000008" {
-		t.Fatalf("Reverse should list the newest 5, newest first, got %s", ids(eps))
+	if api.count("playlistItems") != 3 {
+		t.Fatalf("a reversed playlist is read to the end: %v", api.calls)
 	}
-	unreversed, _ := y.ListEpisodes(context.Background(), feed, 0, 5)
-	if unreversed[0].ID != "vid00000001" {
-		t.Fatalf("without Reverse the natural order should stand, got %+v", unreversed[0])
+	next, err := y.ListEpisodes(ctx, oldestFirst, 5, 5)
+	if err != nil || ids(next) != "vid00000007,vid00000006,vid00000005,vid00000004,vid00000003" {
+		t.Fatalf("second page should continue backwards: %v %s", err, ids(next))
 	}
-
-	// A later page (offset > 0) must keep paging backwards in time from where the
-	// first page left off (the 6th-newest, 7th-newest, ...), not just re-show the
-	// same newest window in a different display order: --playlist-start/-end
-	// index the playlist's native (oldest-first) order, so naively combining
-	// them with --playlist-reverse selects the OLDEST page_size window every
-	// time and only reverses its display — the actual bug this test catches.
-	next, err := y.ListEpisodes(context.Background(), oldestFirst, 5, 5)
-	if err != nil || len(next) != 5 {
-		t.Fatalf("%v %d", err, len(next))
-	}
-	if ids(next) != "vid00000007,vid00000006,vid00000005,vid00000004,vid00000003" {
-		t.Fatalf("second page should continue backwards from the newest 5, got %s", ids(next))
-	}
-
-	// Near the oldest end, the window is clamped (like a Python slice) rather
-	// than erroring or wrapping.
-	tail, err := y.ListEpisodes(context.Background(), oldestFirst, 10, 5)
+	tail, err := y.ListEpisodes(ctx, oldestFirst, 10, 5)
 	if err != nil || ids(tail) != "vid00000002,vid00000001" {
 		t.Fatalf("clamped tail page: %v %s", err, ids(tail))
+	}
+	plain, _ := y.ListEpisodes(ctx, podsync.FeedInfo{Source: Kind, Kind: podsync.FeedPlaylist, ID: "PLsomethingCourse"}, 0, 2)
+	if ids(plain) != "vid00000001,vid00000002" {
+		t.Fatalf("without Reverse the playlist order stands: %s", ids(plain))
+	}
+}
+
+func TestAPIErrors(t *testing.T) {
+	ctx := context.Background()
+	y, _ := newFake(t)
+	_, err := y.ListEpisodes(ctx, podsync.FeedInfo{Source: Kind, Kind: podsync.FeedPlaylist, ID: "PLquotaquotaquota"}, 0, 5)
+	if err == nil || !strings.Contains(err.Error(), "daily quota") {
+		t.Fatalf("quota: %v", err)
+	}
+	_, err = y.ListEpisodes(ctx, podsync.FeedInfo{Source: Kind, Kind: podsync.FeedPlaylist, ID: "PLmissingmissing"}, 0, 5)
+	if !errors.Is(err, podsync.ErrNotFound) {
+		t.Fatalf("missing playlist: %v", err)
+	}
+	api := newFakeAPI(t)
+	badKey := New(func() Settings { return Settings{APIKey: "wrong-secret", APIBase: api.srv.URL} })
+	_, err = badKey.ListEpisodes(ctx, feed, 0, 5)
+	if err == nil || !strings.Contains(err.Error(), "not valid") || strings.Contains(err.Error(), "wrong-secret") {
+		t.Fatalf("bad key: %v", err)
+	}
+	down := New(func() Settings { return Settings{APIKey: "secret-key-123", APIBase: "http://127.0.0.1:1"} })
+	_, err = down.ListEpisodes(ctx, feed, 0, 5)
+	if err == nil || strings.Contains(err.Error(), "secret-key-123") {
+		t.Fatalf("transport errors must not leak the key: %v", err)
+	}
+	none := New(func() Settings { return Settings{} })
+	if _, err := none.ListEpisodes(ctx, feed, 0, 5); err == nil || !strings.Contains(err.Error(), "PODSYNC_YOUTUBE_API_KEY") {
+		t.Fatalf("no key: %v", err)
+	}
+}
+
+func TestParseISODuration(t *testing.T) {
+	for in, want := range map[string]int{"PT30S": 30, "PT10M": 600, "PT1H2M3S": 3723, "P1DT2H": 93600, "P0D": 0, "": 0, "garbage": 0} {
+		if got := parseISODuration(in); got != want {
+			t.Errorf("parseISODuration(%q) = %d, want %d", in, got, want)
+		}
 	}
 }
 
@@ -382,7 +363,7 @@ func TestFindUsesHintsToChooseResolveOrSearch(t *testing.T) {
 	for _, direct := range []string{
 		"@LinusTechTips", "https://www.youtube.com/@LinusTechTips", "youtube.com/@LinusTechTips/videos",
 		"https://www.youtube.com/channel/UCXuqSBlHAE6Xw-yeJA0Tunw", "UCXuqSBlHAE6Xw-yeJA0Tunw",
-		"https://www.youtube.com/playlist?list=PLabcdefghijk", "https://youtu.be/jNQXAC9IVRw",
+		"https://youtu.be/jNQXAC9IVRw",
 	} {
 		y, dir := newFake(t)
 		res, err := y.Find(ctx, "  "+direct+"  ")
@@ -440,7 +421,10 @@ func TestFindErrorsAndSearchBehavior(t *testing.T) {
 	if _, err := bad.Find(ctx, "z w"); err == nil || strings.Contains(err.Error(), "paused") {
 		t.Fatalf("backoff should have expired, got %v", err)
 	}
-	if _, err := y.Find(ctx, "https://www.youtube.com/playlist?list=BADLISTxxxxx"); !errors.Is(err, podsync.ErrInvalid) {
+	if res, err := y.Find(ctx, "https://www.youtube.com/playlist?list=PLabcdefghijk"); err != nil || len(res) != 1 || res[0].Kind != "playlist" {
+		t.Fatalf("a playlist link resolves to that playlist: %v %+v", err, res)
+	}
+	if _, err := y.Find(ctx, "https://www.youtube.com/playlist?list=PLmissingmissing"); !errors.Is(err, podsync.ErrInvalid) {
 		t.Fatalf("a link that does not resolve is invalid input: %v", err)
 	}
 }
@@ -485,16 +469,46 @@ func TestDownloadSuccessAndFailure(t *testing.T) {
 	}
 }
 
+func TestDownloadMembersOnly(t *testing.T) {
+	ctx := context.Background()
+	members, dir := newFake(t, "FAKE_FAIL=members")
+	// Flagged by the listing and no cookies: refused without running yt-dlp.
+	_, err := members.Download(ctx, podsync.EpisodeInfo{ID: "abcdEFGhij3", MembersOnly: true}, podsync.DownloadOptions{}, t.TempDir())
+	if !errors.Is(err, podsync.ErrMembersOnly) {
+		t.Fatalf("want ErrMembersOnly, got %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "count")); statErr == nil {
+		t.Fatal("yt-dlp must not run for a members-only video without cookies")
+	}
+	// Not flagged (or cookies present): yt-dlp's members-only error is recognised.
+	_, err = members.Download(ctx, podsync.EpisodeInfo{ID: "abcdEFGhij3"}, podsync.DownloadOptions{}, t.TempDir())
+	if !errors.Is(err, podsync.ErrMembersOnly) || errors.Is(err, podsync.ErrInvalid) {
+		t.Fatalf("want ErrMembersOnly from the yt-dlp message, got %v", err)
+	}
+	withCookies := New(func() Settings { return Settings{CookiesFile: filepath.Join(dir, "cookies.txt")} })
+	_, err = withCookies.Download(ctx, podsync.EpisodeInfo{ID: "abcdEFGhij3", MembersOnly: true}, podsync.DownloadOptions{}, t.TempDir())
+	if !errors.Is(err, podsync.ErrMembersOnly) {
+		t.Fatalf("with cookies yt-dlp runs and its refusal is still recognised: %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "count")); statErr != nil {
+		t.Fatal("with cookies, yt-dlp must be tried")
+	}
+}
+
 // Live tests hit real YouTube through the installed yt-dlp.
-// Run with: PODSYNC_LIVE=1 go test ./internal/source/youtube -run Live -v
+// Run with: PODSYNC_LIVE=1 PODSYNC_YOUTUBE_API_KEY=... go test ./youtube -run Live -v
 func TestLive(t *testing.T) {
 	if os.Getenv("PODSYNC_LIVE") != "1" {
 		t.Skip("set PODSYNC_LIVE=1 to run against real YouTube")
 	}
+	key := os.Getenv("PODSYNC_YOUTUBE_API_KEY")
+	if key == "" {
+		t.Skip("set PODSYNC_YOUTUBE_API_KEY")
+	}
 	if _, err := exec.LookPath("yt-dlp"); err != nil {
 		t.Skip("yt-dlp not installed")
 	}
-	y := New(func() Settings { return Settings{} })
+	y := New(func() Settings { return Settings{APIKey: key} })
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 

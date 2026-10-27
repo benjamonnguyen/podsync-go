@@ -2,6 +2,8 @@ package main
 
 import (
 	"errors"
+	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"strconv"
@@ -69,11 +71,87 @@ func applySettingsForm(s *Settings, r *http.Request) error {
 func (s *Server) renderSettings(w http.ResponseWriter, r *http.Request, cur Settings, flash, errText string) {
 	s.render(w, r, "settings", map[string]any{
 		"Title": "Settings", "Cfg": cur, "ConfigPath": cur.ConfigPath, "AudioExt": s.audioExt(), "Flash": flash, "Err": errText,
+		"Cookies": s.Cookies(), "MembersFeeds": s.MembersOnlyFeeds(),
 	})
 }
 
 func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
-	s.renderSettings(w, r, s.Settings(r.Context()), "", "")
+	flash := ""
+	q := r.URL.Query()
+	switch q.Get("cookies") {
+	case "saved":
+		flash = "Cookies saved. yt-dlp uses them from its next run."
+		if len(s.MembersOnlyFeeds()) > 0 {
+			flash += " Choose below which channels' members-only videos to try again."
+		}
+	case "removed":
+		flash = "Cookies removed."
+	}
+	if n, err := strconv.Atoi(q.Get("retried")); err == nil {
+		flash = fmt.Sprintf("Retrying %d members-only %s. Any that still can't be downloaded stay skipped.", n, plural(n, "video", "videos"))
+	}
+	s.renderSettings(w, r, s.Settings(r.Context()), flash, "")
+}
+
+// handleCookiesUpload stores the cookies.txt picked on the settings page,
+// then (via the redirect) offers to retry skipped members-only videos.
+func (s *Server) handleCookiesUpload(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxCookiesSize+64<<10)
+	fail := func(msg string) { s.renderSettings(w, r, s.Settings(r.Context()), "", msg) }
+	file, _, err := r.FormFile("cookies")
+	if err != nil {
+		fail("Choose a cookies.txt file to upload (at most 1 MB).")
+		return
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, maxCookiesSize+1))
+	if err != nil {
+		fail("Could not read the upload: " + err.Error())
+		return
+	}
+	if err := s.SaveCookies(data); err != nil {
+		fail(err.Error())
+		return
+	}
+	target := "/settings?cookies=saved#cookies"
+	if len(s.MembersOnlyFeeds()) > 0 {
+		target = "/settings?cookies=saved#members"
+	}
+	http.Redirect(w, r, target, http.StatusSeeOther)
+}
+
+func (s *Server) handleCookiesDelete(w http.ResponseWriter, r *http.Request) {
+	if err := s.DeleteCookies(); err != nil {
+		s.renderSettings(w, r, s.Settings(r.Context()), "", "Could not remove cookies: "+err.Error())
+		return
+	}
+	http.Redirect(w, r, "/settings?cookies=removed#cookies", http.StatusSeeOther)
+}
+
+// handleMembersRetry retries the members-only videos of the feeds ticked in
+// the settings page's prompt (each "feed" value is "id/format").
+func (s *Server) handleMembersRetry(w http.ResponseWriter, r *http.Request) {
+	_ = r.ParseForm()
+	picked := map[string]bool{}
+	for _, v := range r.Form["feed"] {
+		picked[v] = true
+	}
+	var feeds []MembersOnlyFeed
+	for _, f := range s.MembersOnlyFeeds() {
+		if picked[f.ID+"/"+f.Format] {
+			feeds = append(feeds, f)
+		}
+	}
+	if len(feeds) == 0 {
+		s.renderSettings(w, r, s.Settings(r.Context()), "", "Tick at least one channel to retry.")
+		return
+	}
+	n, err := s.RetryMembersOnly(r.Context(), feeds)
+	if err != nil {
+		s.renderSettings(w, r, s.Settings(r.Context()), "", "Could not queue the retry: "+err.Error())
+		return
+	}
+	http.Redirect(w, r, fmt.Sprintf("/settings?retried=%d#members", n), http.StatusSeeOther)
 }
 
 func (s *Server) handleSettingsSave(w http.ResponseWriter, r *http.Request) {
