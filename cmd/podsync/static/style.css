@@ -13,7 +13,7 @@
 }
 * { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
-body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; overflow-wrap: break-word; }
+body { margin: 0; touch-action: manipulation; background: var(--bg); color: var(--text); font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; overflow-wrap: break-word; }
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
 h1 { font-size: 1.6rem; line-height: 1.25; margin: .4rem 0 .75rem; overflow-wrap: anywhere; }
@@ -101,6 +101,7 @@ input::placeholder { color: var(--muted); opacity: .8; }
 .rss { margin-top: .75rem; display: flex; gap: .5rem; align-items: center; }
 .rss-url { flex: 1; min-width: 0; font-family: ui-monospace, monospace; font-size: .875rem; cursor: copy; }
 .rss .actions { margin-top: 0; flex-wrap: nowrap; flex: none; gap: .25rem; }
+.rss .actions form { display: flex; margin: 0; }
 a.back { display: inline-flex; align-items: center; min-height: var(--tap); font-weight: 500; }
 main > p:has(> a.back) { margin: 0 0 .25rem; }
 
@@ -199,73 +200,79 @@ dialog.sheet form { display: flex; flex-direction: column; min-height: 0; flex: 
 
 .toast { position: fixed; left: 50%; bottom: calc(1.5rem + var(--tabbar)); transform: translateX(-50%); max-width: calc(100vw - 2rem); padding: .7rem 1.1rem; border-radius: 8px; background: var(--text); color: var(--bg); box-shadow: 0 4px 14px rgba(0,0,0,.25); z-index: 30; }
 
-/* Touch screens: every control at least 48px so it can be hit with a thumb. */
-@media (pointer: coarse), (max-width: 640px) {
-  :root { --tap: 3rem; }
-  .details summary { padding: .5rem 0; }
-  .details a { display: inline-block; padding: .5rem 0; }
-  label.check { padding: .7rem 0 .7rem 2.4rem; }
-  label.check > input[type=checkbox] { width: 1.5rem; height: 1.5rem; top: .75rem; }
-  .sel { width: 1.75rem; height: 1.75rem; }
-  .tip { display: inline-block; padding: .3rem 0; }
-  .banner form button.link { min-height: var(--tap); padding: 0 .5rem; margin-right: -.5rem; }
-}
-
 /* No hover to bring a faded row back, so only its picture and text are dimmed, never its button. */
 @media (hover: none) {
   .row.faded, .row.faded:hover { opacity: 1; }
   .row.faded .thumb, .row.faded .row-main { opacity: .6; }
 }
 
-/* Phones: bigger type, one column, sections in a bottom tab bar. */
-@media (max-width: 640px) {
-  :root { --tabbar: calc(4rem + env(safe-area-inset-bottom)); }
-  body { font-size: 17px; padding-bottom: var(--tabbar); }
+/* Phones and small touch screens (also a phone browser in desktop-site mode, which lays the page out
+   about 980px wide): big type, 56px controls, two columns of tiles, sections in a bottom tab bar. */
+@media (max-width: 640px), (pointer: coarse) and (max-width: 1100px) {
+  :root { --tap: 3.5rem; --tabbar: calc(4.75rem + env(safe-area-inset-bottom)); }
+  body { font-size: 18px; padding-bottom: var(--tabbar); }
   /* 16px+ inputs also stop iOS from zooming in on focus. */
-  input[type=text], input[type=search], input[type=number], input[type=password], select { font-size: 17px; padding: .6rem .8rem; }
-  main { padding: .75rem 1rem 1.5rem; }
-  h1 { font-size: 1.5rem; }
-  h2 { font-size: 1.2rem; }
+  input[type=text], input[type=search], input[type=number], input[type=password], select { font-size: 18px; padding: .75rem 1rem; border-radius: 12px; }
+  main { padding: 1rem 1rem 2rem; }
+  h1 { font-size: 1.65rem; }
+  h2 { font-size: 1.3rem; }
+  .btn, .icon-btn { border-radius: 12px; }
+  .btn { padding: .6rem 1.2rem; }
+  .icon { width: 1.5rem; height: 1.5rem; }
 
-  .top { position: sticky; top: 0; z-index: 15; min-height: 3.25rem; padding: 0 1rem; }
-  .top .brand { font-size: 1.15rem; }
+  .top { position: sticky; top: 0; z-index: 15; min-height: 4rem; padding: 0 1.25rem; }
+  .top .brand { font-size: 1.3rem; }
   .top nav { position: fixed; left: 0; right: 0; bottom: 0; z-index: 15; height: var(--tabbar); padding-bottom: env(safe-area-inset-bottom); gap: 0; background: var(--panel); border-top: 1px solid var(--border); }
-  .top nav a { flex: 1; flex-direction: column; justify-content: center; gap: .15rem; padding: 0; border-radius: 0; font-size: .8rem; }
+  .top nav a { flex: 1; flex-direction: column; justify-content: center; gap: .25rem; padding: 0; border-radius: 0; font-size: .85rem; }
   .top nav a.active { background: none; }
-  .top nav .icon { width: 1.5rem; height: 1.5rem; }
-  .banner { padding: .55rem 1rem; }
+  .top nav .icon { width: 1.75rem; height: 1.75rem; }
+  .banner { padding: .75rem 1.25rem; }
 
-  .toolbar { gap: .5rem; }
+  .toolbar { gap: .6rem; margin: .25rem 0 1rem; }
+  .icon-btn.boxed { min-width: var(--tap); }
 
-  .card { padding: 1rem; }
-  .card h3 { font-size: 1.15rem; }
-  .card p { font-size: .95rem; }
+  /* Library: two columns of tiles, avatar on top. */
+  .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .75rem; }
+  .card { flex-direction: column; justify-content: center; gap: .7rem; min-height: 13rem; padding: 1.25rem .85rem; text-align: center; border-radius: 16px; }
+  .card .avatar { width: 80px; height: 80px; }
+  .card h3 { font-size: 1.1rem; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .card p { font-size: .9rem; }
+  .card.orphan .card-body { padding-right: 0; }
   .card > .icon-btn { top: .25rem; right: .25rem; }
+  .card.preview { display: block; text-align: left; min-height: 0; }
 
   /* Feed header: avatar beside the title, everything else full width below. */
   .feed-head { display: block; }
-  .feed-head .avatar.large { float: left; width: 64px; height: 64px; margin: 0 .85rem .5rem 0; }
-  .feed-head h1 { min-height: 64px; display: flex; align-items: center; margin: 0 0 .5rem; }
+  .feed-head .avatar.large { float: left; width: 72px; height: 72px; margin: 0 1rem .5rem 0; }
+  .feed-head h1 { min-height: 72px; display: flex; align-items: center; margin: 0 0 .5rem; }
   .feed-head .grow > :not(h1) { clear: left; }
   .feed-head .yt-link { min-height: var(--tap); }
-  .rss { flex-wrap: wrap; }
-  .rss-url { flex-basis: 100%; font-size: 15px; }
-  .rss .actions { flex: 1; }
-  .rss .actions .icon-btn { flex: 1; border-color: var(--border); background: var(--panel); color: var(--text); }
+  .rss { flex-wrap: wrap; gap: .6rem; }
+  .rss-url { flex-basis: 100%; font-size: 16px; }
+  .rss .actions { flex: 1; flex-wrap: wrap; gap: .6rem; }
+  .rss .actions > * { flex: 1 1 6.5rem; min-width: 0; }
+  .rss .actions .icon-btn { width: 100%; padding: 0 .5rem; border-color: var(--border); background: var(--panel); color: var(--text); }
   .rss .actions .icon-btn.danger { color: var(--danger); }
-  .icon-btn .lbl { display: inline; }
+  .icon-btn .lbl { display: inline; white-space: nowrap; }
 
   /* Episode rows: thumbnail beside the text, the action button on its own full-width line. */
   .rows { margin-left: -1rem; margin-right: -1rem; border-radius: 0; border-left: 0; border-right: 0; }
-  .row { flex-wrap: wrap; align-items: flex-start; gap: .6rem .85rem; padding: .9rem 1rem; }
-  .thumb { width: 120px; }
+  .row { flex-wrap: wrap; align-items: flex-start; gap: .7rem 1rem; padding: 1rem; }
+  .thumb { width: 132px; border-radius: 8px; }
   .row > .sel { align-self: center; }
-  .row .title { font-size: 1.05rem; }
-  .row .meta { font-size: .925rem; }
+  .row .title { font-size: 1.1rem; }
+  .row .meta { font-size: .95rem; }
   .row-actions { flex-basis: 100%; }
   .row-actions:not(:has(button)) { display: none; }
   .row-actions .btn { width: 100%; }
   #more .btn { width: 100%; }
+  .details summary { padding: .6rem 0; }
+  .details a { display: inline-block; padding: .6rem 0; }
+  label.check { padding: .9rem 0 .9rem 2.6rem; }
+  label.check > input[type=checkbox] { width: 1.6rem; height: 1.6rem; top: .95rem; }
+  .sel { width: 1.9rem; height: 1.9rem; }
+  .tip { display: inline-block; padding: .3rem 0; }
+  .banner form button.link { min-height: var(--tap); padding: 0 .5rem; margin-right: -.5rem; }
 
   /* The tooltip opens as a sheet along the bottom edge rather than overflowing beside the label. */
   .tip-body { position: fixed; left: .75rem; right: .75rem; bottom: calc(.75rem + var(--tabbar)); top: auto; width: auto; max-width: none; margin: 0; padding: 1rem 1.1rem; font-size: 1rem; z-index: 20; }
@@ -273,21 +280,26 @@ dialog.sheet form { display: flex; flex-direction: column; min-height: 0; flex: 
   .tip-body a { display: inline-block; padding: .3rem 0; }
 
   /* Forms: full-width submit buttons, no nested boxes eating the width. */
-  .settings fieldset { padding: .4rem .9rem 1rem; }
+  .settings fieldset { padding: .5rem 1rem 1.1rem; border-radius: 16px; }
+  .settings label { margin-top: 1.1rem; }
   .settings small { font-size: .9rem; }
+  .settings input[type=number] { max-width: none; }
   .settings .actions .btn { flex: 1 1 auto; }
-  .card.preview { display: block; }
-  .card.preview .avatar { float: left; width: 52px; height: 52px; margin: 0 .85rem .5rem 0; }
+  .card.preview .avatar { float: left; width: 56px; height: 56px; margin: 0 1rem .5rem 0; }
   .card.preview .card-body > :not(h3) { clear: left; }
-  .card.preview h3 { min-height: 52px; display: flex; align-items: center; }
+  .card.preview h3 { min-height: 56px; display: flex; align-items: center; -webkit-line-clamp: unset; }
   .preview .settings fieldset { border: 0; padding: 0; background: none; margin-bottom: .5rem; }
   .inline-form input[type=text], .inline-form input[type=search] { min-width: 0; }
-  .results li .btn { min-width: 5.5rem; }
-  .select-bar { top: 3.25rem; margin: 0 -1rem 0; border-radius: 0; border-left: 0; border-right: 0; border-bottom: 0; }
-  .select-bar + .rows, .select-bar + #episodes { border-top: 1px solid var(--border); }
+  .results li { padding: .8rem 0; }
+  .results li .btn { min-width: 6rem; }
+  .select-bar { top: 4rem; margin: 0 -1rem 0; border-radius: 0; border-left: 0; border-right: 0; border-bottom: 0; }
 
-  dialog.sheet { width: 100vw; max-width: none; max-height: 85dvh; margin: auto 0 0; border-radius: 16px 16px 0 0; border-bottom: 0; }
-  .sheet-foot { padding-bottom: calc(.75rem + env(safe-area-inset-bottom)); }
+  dialog.sheet { width: 100vw; max-width: none; max-height: 85dvh; margin: auto 0 0; border-radius: 20px 20px 0 0; border-bottom: 0; }
+  .sheet-head { padding: .75rem .75rem .75rem 1.25rem; }
+  .sheet-head h2 { font-size: 1.25rem; }
+  .sheet-foot { padding: 1rem 1.25rem calc(1rem + env(safe-area-inset-bottom)); }
   .sheet-foot .btn { flex: 1; }
-  .pick { min-height: 4rem; padding: .5rem 1rem; }
+  .pick { min-height: 4.5rem; padding: .6rem 1.25rem; gap: 1rem; }
+  .pick input { width: 1.6rem; height: 1.6rem; }
+  .pick .avatar.small { width: 48px; height: 48px; }
 }

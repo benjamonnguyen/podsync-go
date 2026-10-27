@@ -10,6 +10,7 @@
     <div class="rss">
       <input id="rss-url" type="text" aria-label="Podcast feed URL" class="rss-url" readonly data-copy value="{{.Card.RSSURL}}" title="Click to copy">
       <div class="actions">
+        <form hx-post="/pull" hx-target="#status" hx-swap="outerHTML"><input type="hidden" name="feed" value="{{.Card.ID}}/{{.Card.Format}}"><button class="icon-btn" type="submit" title="Check for new episodes" aria-label="Check for new episodes">{{template "icon_refresh"}}<span class="lbl">Refresh</span></button></form>
         <a class="icon-btn" title="Feed settings" aria-label="Feed settings" href="/feed/{{.Card.ID}}/{{.Card.Format}}/settings">{{template "icon_settings"}}<span class="lbl">Settings</span></a>
         <a class="icon-btn danger" title="Delete feed" aria-label="Delete feed" href="/feed/{{.Card.ID}}/{{.Card.Format}}/delete">{{template "icon_trash"}}<span class="lbl">Delete</span></a>
       </div>
