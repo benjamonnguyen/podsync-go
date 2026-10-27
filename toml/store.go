@@ -115,7 +115,18 @@ func (s *Store) OnChange(fn func(old, new podsync.Config)) {
 
 func (s *Store) Update(fn func(*podsync.Config) error) error {
 	s.mu.Lock()
-	next := clone(s.cfg)
+	base := s.cfg
+	if s.path != "" {
+		// Build on the file as it is now, not on the last copy we read: a valid
+		// hand edit since the last Reload would otherwise be overwritten. A
+		// broken one is replaced, as before, so a UI save can repair the file.
+		if data, err := os.ReadFile(s.path); err == nil && !bytes.Equal(data, s.raw) {
+			if cfg, err := Parse(data); err == nil {
+				base = cfg
+			}
+		}
+	}
+	next := clone(base)
 	if err := fn(&next); err != nil {
 		s.mu.Unlock()
 		return err
@@ -156,11 +167,14 @@ func (s *Store) Reload() (bool, error) {
 	if s.path == "" {
 		return false, nil
 	}
+	// Read under the lock: a copy read just before a concurrent Update wrote
+	// the file is stale, and swapping it in would drop that Update's change.
+	s.mu.Lock()
 	data, err := os.ReadFile(s.path)
 	if err != nil {
+		s.mu.Unlock()
 		return false, err
 	}
-	s.mu.Lock()
 	if bytes.Equal(data, s.raw) {
 		s.mu.Unlock()
 		return false, nil
