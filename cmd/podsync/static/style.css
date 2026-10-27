@@ -98,7 +98,7 @@ input::placeholder { color: var(--muted); opacity: .8; }
 .feed-head { display: flex; gap: 1rem; align-items: flex-start; margin-bottom: 1rem; }
 .feed-head h1 { margin-top: 0; }
 .feed-head p { margin: .25rem 0; }
-.feed-head .yt-link { display: inline-flex; align-items: center; min-height: 2rem; }
+.feed-head .yt-link, .feed-head [data-toggle-clip] { display: flex; width: fit-content; align-items: center; min-height: 2rem; }
 .rss { margin-top: .75rem; display: flex; gap: .5rem; align-items: center; }
 .rss-url { flex: 1; min-width: 0; font-family: ui-monospace, monospace; font-size: .875rem; cursor: copy; }
 .rss .actions { margin-top: 0; flex-wrap: nowrap; flex: none; gap: .25rem; }
@@ -249,7 +249,7 @@ dialog.sheet form { display: flex; flex-direction: column; min-height: 0; flex: 
   .feed-head .avatar.large { float: left; width: 64px; height: 64px; margin: 0 .85rem .5rem 0; }
   .feed-head h1 { min-height: 64px; display: flex; align-items: center; margin: 0 0 .5rem; }
   .feed-head .grow > :not(h1) { clear: left; }
-  .feed-head .yt-link { min-height: var(--tap); }
+  .feed-head .yt-link, .feed-head [data-toggle-clip] { min-height: var(--tap); }
   .rss { flex-wrap: wrap; }
   .rss-url { flex-basis: 100%; font-size: 15px; }
   .rss .actions { flex: 1; flex-wrap: wrap; }
